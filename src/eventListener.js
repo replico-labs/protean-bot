@@ -106,6 +106,15 @@ function short(address) {
  * skipped, so it can't take down the whole polling loop for every
  * other DAO.
  */
+// Monad testnet's eth_getLogs enforces a hard 100-block range per call
+// (confirmed directly from a real RPC error: "eth_getLogs is limited to
+// a 100 range") - both the initial lookback window and any gap between
+// polls (a bot restart, a slow cycle, anything) must respect this, or
+// every single request in that range fails identically, forever, since
+// a thrown error here means lastProcessedBlock never advances and the
+// same oversized range gets recomputed on the next poll too.
+const MAX_BLOCK_RANGE = 90n; // kept safely under the 100 limit, not flush against it
+
 async function checkDao(bot, dao, currentBlock, state) {
   const abiName = modelToAbiName(dao.model);
   if (!abiName) return;
@@ -122,31 +131,45 @@ async function checkDao(bot, dao, currentBlock, state) {
   // First time seeing this DAO: start from a recent window rather than
   // scanning the contract's entire history - avoids a flood of
   // long-past notifications the first time the listener ever runs
-  // against it.
-  const fromBlock = lastProcessed !== undefined ? BigInt(lastProcessed) + 1n : currentBlock - 500n > 0n ? currentBlock - 500n : 0n;
+  // against it. Deliberately sized to MAX_BLOCK_RANGE itself, not some
+  // larger number, since anything larger just becomes the first chunk
+  // to process below anyway.
+  const fromBlock = lastProcessed !== undefined ? BigInt(lastProcessed) + 1n : currentBlock - MAX_BLOCK_RANGE > 0n ? currentBlock - MAX_BLOCK_RANGE : 0n;
 
   if (fromBlock > currentBlock) return;
 
-  try {
-    const logs = await publicClient.getLogs({
-      address: dao.governanceAddress,
-      events: watchableEvents,
-      fromBlock,
-      toBlock: currentBlock,
-    });
+  // Walk the full range in <=MAX_BLOCK_RANGE chunks, saving progress
+  // after each one succeeds - if a later chunk fails (a transient RPC
+  // issue, say), everything already fetched stays saved, and the next
+  // poll resumes from there rather than redoing the whole backlog.
+  let chunkStart = fromBlock;
+  while (chunkStart <= currentBlock) {
+    const chunkEnd = chunkStart + MAX_BLOCK_RANGE - 1n > currentBlock ? currentBlock : chunkStart + MAX_BLOCK_RANGE - 1n;
 
-    for (const log of logs) {
-      const message = formatEvent(log.eventName, log.args ?? {});
-      try {
-        await bot.api.sendMessage(dao.chatId, message, { parse_mode: "Markdown" });
-      } catch (sendErr) {
-        console.error(`Event listener: couldn't notify chat ${dao.chatId}:`, sendErr.message);
+    try {
+      const logs = await publicClient.getLogs({
+        address: dao.governanceAddress,
+        events: watchableEvents,
+        fromBlock: chunkStart,
+        toBlock: chunkEnd,
+      });
+
+      for (const log of logs) {
+        const message = formatEvent(log.eventName, log.args ?? {});
+        try {
+          await bot.api.sendMessage(dao.chatId, message, { parse_mode: "Markdown" });
+        } catch (sendErr) {
+          console.error(`Event listener: couldn't notify chat ${dao.chatId}:`, sendErr.message);
+        }
       }
+
+      state[stateKey] = { lastProcessedBlock: chunkEnd.toString() };
+    } catch (err) {
+      console.error(`Event listener: couldn't check DAO ${dao.governanceAddress} (${dao.model}), blocks ${chunkStart}-${chunkEnd}:`, err.message);
+      return; // stop here for this poll - already-saved chunks stay saved, resume from here next time
     }
 
-    state[stateKey] = { lastProcessedBlock: currentBlock.toString() };
-  } catch (err) {
-    console.error(`Event listener: couldn't check DAO ${dao.governanceAddress} (${dao.model}):`, err.message);
+    chunkStart = chunkEnd + 1n;
   }
 }
 
