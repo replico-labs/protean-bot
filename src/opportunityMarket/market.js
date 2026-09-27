@@ -28,6 +28,12 @@ function factoryContract(address) {
   return { address: getAddress(address), abi: factoryAbi };
 }
 
+/** Whether `marketAddress` was created by this factory - a matching ABI alone proves nothing, since anyone can deploy their own OpportunityMarket (or a lookalike) outside it. */
+export async function isFactoryMarket(factoryAddress, marketAddress) {
+  const factory = factoryContract(factoryAddress);
+  return opportunityPublicClient.readContract({ ...factory, functionName: "isMarket", args: [getAddress(marketAddress)] });
+}
+
 /**
  * Non-encrypted actions for OpportunityMarket. Two things genuinely
  * live elsewhere, not here: back() (placing a confidential bet) is in

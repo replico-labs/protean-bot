@@ -4206,6 +4206,26 @@ bot.command("registermarket", async (ctx) => {
     await ctx.reply("Usage: `/registermarket 0xYourMarketAddress`", { parse_mode: "Markdown" });
     return;
   }
+  const factoryAddress = process.env.OPPORTUNITY_MARKET_FACTORY_ADDRESS;
+  if (!factoryAddress) {
+    await ctx.reply("No OpportunityMarketFactory configured on this bot - ask an admin to set OPPORTUNITY_MARKET_FACTORY_ADDRESS.");
+    return;
+  }
+
+  // Only link markets the configured factory itself created - anyone can
+  // deploy a contract that answers the same read calls outside it.
+  let fromFactory;
+  try {
+    fromFactory = await opportunityMarket.isFactoryMarket(factoryAddress, address);
+  } catch (err) {
+    console.error(err);
+    await ctx.reply("Couldn't check that address against the market factory - try again in a moment.");
+    return;
+  }
+  if (!fromFactory) {
+    await ctx.reply("That address wasn't created by this bot's OpportunityMarket factory, so it can't be linked. Use /createmarket to deploy one.");
+    return;
+  }
 
   try {
     await opportunityMarket.marketContract(address);
