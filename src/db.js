@@ -73,6 +73,29 @@ export function registerChat(chatId, governanceAddress, model = "tokenWeighted",
   writeDb(db);
 }
 
+/**
+ * Every chat currently linked to a governance contract - used by the
+ * event listener to know which DAOs to watch and which chat each one's
+ * events should be posted back to. Returns only entries that actually
+ * have a governanceAddress set (skips chats only linked to a market or
+ * wrapper, with no DAO at all).
+ */
+export function getAllRegisteredDaos() {
+  const db = readDb();
+  const daos = [];
+  for (const [k, entry] of Object.entries(db)) {
+    if (!entry?.governanceAddress) continue;
+    const [platform, ...rest] = k.split(":");
+    daos.push({
+      chatId: rest.join(":"),
+      platform,
+      governanceAddress: entry.governanceAddress,
+      model: entry.model ?? "tokenWeighted",
+    });
+  }
+  return daos;
+}
+
 /** Which network this chat's DAO lives on - "monad" for every DAO registered so far. */
 export function getChatNetwork(chatId, platform = "telegram") {
   const db = readDb();
@@ -163,6 +186,20 @@ export function registerNftWrapper(chatId, wrapperAddress, platform = "telegram"
 export function getChatNftWrapper(chatId, platform = "telegram") {
   const db = readDb();
   return db[key(chatId, platform)]?.wrapperAddress ?? null;
+}
+
+/** Link a chat's GuardWrapper address (optional - a DAO may never adopt one). */
+export function registerGuardWrapper(chatId, guardWrapperAddress, platform = "telegram") {
+  const db = readDb();
+  const k = key(chatId, platform);
+  db[k] = { ...db[k], guardWrapperAddress, platform };
+  writeDb(db);
+}
+
+/** Get the GuardWrapper address linked to a chat, or null if unset. */
+export function getChatGuardWrapper(chatId, platform = "telegram") {
+  const db = readDb();
+  return db[key(chatId, platform)]?.guardWrapperAddress ?? null;
 }
 
 export function unregisterChat(chatId, platform = "telegram") {

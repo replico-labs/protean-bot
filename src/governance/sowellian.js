@@ -200,13 +200,22 @@ export async function proposeWithCriteria(
 /** `support`: VoteType - 0 = Against, 1 = For, 2 = Abstain. */
 export async function castApprovalVote(client, governanceAddress, proposalId, support) {
   const gov = contractFor(governanceAddress);
-  const hash = await writeWithGasBuffer(client, {
+  const args = [BigInt(proposalId), support];
+
+  // castApprovalVote returns the actual weight cast - see
+  // tokenWeighted.js for the full reasoning behind capturing this via
+  // simulateContract rather than assuming a successful tx meant a real,
+  // non-zero vote.
+  const { result: weight } = await publicClient.simulateContract({
     ...gov,
     functionName: "castApprovalVote",
-    args: [BigInt(proposalId), support],
+    args,
+    account: client.account,
   });
+
+  const hash = await writeWithGasBuffer(client, { ...gov, functionName: "castApprovalVote", args });
   await publicClient.waitForTransactionReceipt({ hash });
-  return { hash };
+  return { hash, weight };
 }
 
 /** Finalizes the approval vote once its window has closed. */
@@ -290,13 +299,20 @@ export async function finalizeUnchallenged(client, governanceAddress, proposalId
  */
 export async function castAdjudicationVote(client, governanceAddress, proposalId, outcome) {
   const gov = contractFor(governanceAddress);
-  const hash = await writeWithGasBuffer(client, {
+  const args = [BigInt(proposalId), outcome];
+
+  // castAdjudicationVote returns the actual weight cast - same
+  // reasoning as castApprovalVote above.
+  const { result: weight } = await publicClient.simulateContract({
     ...gov,
     functionName: "castAdjudicationVote",
-    args: [BigInt(proposalId), outcome],
+    args,
+    account: client.account,
   });
+
+  const hash = await writeWithGasBuffer(client, { ...gov, functionName: "castAdjudicationVote", args });
   await publicClient.waitForTransactionReceipt({ hash });
-  return { hash };
+  return { hash, weight };
 }
 
 /** Finalizes adjudication once its voting window closes - determines the true outcome and settles bonds. */

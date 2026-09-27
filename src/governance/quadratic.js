@@ -48,14 +48,23 @@ export async function vote(client, governanceAddress, proposalId, support, _reas
   // point, so a caller-supplied reason is silently dropped rather than
   // causing an error, matching the shared-interface design decision.
   const gov = contractFor(governanceAddress);
+  const args = [BigInt(proposalId), support];
 
-  const hash = await writeWithGasBuffer(client, {
+  // castVote returns the actual weight cast - simulating right before
+  // the real write gives that value directly. A zero-weight vote is a
+  // real, silent risk otherwise: it succeeds on-chain exactly like a
+  // real vote, with no error, if the voter's tokens were staked after
+  // the proposal's snapshot block.
+  const { result: weight } = await publicClient.simulateContract({
     ...gov,
     functionName: "castVote",
-    args: [BigInt(proposalId), support],
+    args,
+    account: client.account,
   });
+
+  const hash = await writeWithGasBuffer(client, { ...gov, functionName: "castVote", args });
   await publicClient.waitForTransactionReceipt({ hash });
-  return { hash };
+  return { hash, weight };
 }
 
 export async function queue(client, governanceAddress, proposalId) {

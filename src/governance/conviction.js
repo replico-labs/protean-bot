@@ -158,11 +158,35 @@ export async function getProposal(governanceAddress, proposalId) {
  * backing, if anything - see the module-level note on why this is not
  * exposed through the shared vote() interface.
  */
+const ERC20_BALANCE_ABI = [
+  { type: "function", name: "balanceOf", stateMutability: "view", inputs: [{ type: "address" }], outputs: [{ type: "uint256" }] },
+];
+
+/**
+ * Conviction's support() commits the caller's CURRENT staked balance as
+ * their weight (a plain, live balanceOf read inside the contract, not a
+ * snapshot) - if that balance is genuinely zero at call time, the
+ * transaction still succeeds, silently recording zero weight and
+ * marking the caller as "supporting" this proposal with no real effect.
+ * Unlike a snapshot-based vote, this value is fully knowable before
+ * submitting, so it's checked here first rather than simulated after -
+ * letting the bot warn (and the caller decide) before spending any gas
+ * on a transaction that's a guaranteed no-op.
+ */
 export async function support(client, governanceAddress, proposalId) {
   const gov = contractFor(governanceAddress);
+
+  const governanceTokenAddress = await publicClient.readContract({ ...gov, functionName: "governanceToken" });
+  const weight = await publicClient.readContract({
+    address: governanceTokenAddress,
+    abi: ERC20_BALANCE_ABI,
+    functionName: "balanceOf",
+    args: [client.account.address],
+  });
+
   const hash = await writeWithGasBuffer(client, { ...gov, functionName: "support", args: [BigInt(proposalId)] });
   await publicClient.waitForTransactionReceipt({ hash });
-  return { hash };
+  return { hash, weight };
 }
 
 /**

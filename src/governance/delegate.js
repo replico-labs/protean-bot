@@ -167,15 +167,40 @@ export async function declareCandidacy(client, governanceAddress, electionId) {
  * real token-weighted voting power (getPastVotes at the election's own
  * snapshot block - different snapshot from any council proposal's).
  */
+const VOTES_TOKEN_ABI = [
+  { type: "function", name: "getPastVotes", stateMutability: "view", inputs: [{ type: "address" }, { type: "uint256" }], outputs: [{ type: "uint256" }] },
+];
+
+/**
+ * voteInElection uses the identical snapshot-based getPastVotes pattern
+ * as tokenWeighted's castVote - if the caller's tokens were staked
+ * after the election's own snapshotBlock, the transaction still
+ * succeeds, marks _hasVotedInElection permanently true (blocking any
+ * retry), and adds zero to every selected candidate's tally. Since the
+ * election's snapshotBlock is already fixed and public the moment the
+ * election opens, this is fully checkable in advance - read here first
+ * so the bot can warn before spending gas on a vote that would count
+ * for nothing.
+ */
 export async function voteInElection(client, governanceAddress, electionId, candidateAddresses) {
   const gov = contractFor(governanceAddress);
+
+  const election = await getElection(governanceAddress, electionId);
+  const governanceTokenAddress = await publicClient.readContract({ ...gov, functionName: "governanceToken" });
+  const weight = await publicClient.readContract({
+    address: governanceTokenAddress,
+    abi: VOTES_TOKEN_ABI,
+    functionName: "getPastVotes",
+    args: [client.account.address, election.snapshotBlock],
+  });
+
   const hash = await writeWithGasBuffer(client, {
     ...gov,
     functionName: "voteInElection",
     args: [BigInt(electionId), candidateAddresses.map((s) => getAddress(s.toLowerCase()))],
   });
   await publicClient.waitForTransactionReceipt({ hash });
-  return { hash };
+  return { hash, weight };
 }
 
 /** Finalizes a closed election - top vote-getters become the new council. */

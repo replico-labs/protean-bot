@@ -48,14 +48,20 @@ export async function vote(client, governanceAddress, proposalId, support, _reas
   // _reason intentionally unused - no equivalent entry point, matching
   // quadratic.js's handling of the same situation.
   const gov = contractFor(governanceAddress);
+  const args = [BigInt(proposalId), support];
 
-  const hash = await writeWithGasBuffer(client, {
+  // castVote returns the actual weight cast - see quadratic.js for the
+  // full reasoning behind capturing this via simulateContract.
+  const { result: weight } = await publicClient.simulateContract({
     ...gov,
     functionName: "castVote",
-    args: [BigInt(proposalId), support],
+    args,
+    account: client.account,
   });
+
+  const hash = await writeWithGasBuffer(client, { ...gov, functionName: "castVote", args });
   await publicClient.waitForTransactionReceipt({ hash });
-  return { hash };
+  return { hash, weight };
 }
 
 export async function queue(client, governanceAddress, proposalId) {

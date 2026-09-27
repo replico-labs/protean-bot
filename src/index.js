@@ -1,6 +1,6 @@
 import { Bot } from "grammy";
 import { run, sequentialize } from "@grammyjs/runner";
-import { isAddress, getAddress, parseEther, formatUnits } from "viem";
+import { isAddress, getAddress, parseEther, formatUnits, encodeFunctionData } from "viem";
 import { BOT_TOKEN, monadTestnet, publicClient, SORTITION_RANDOMNESS_SOURCE, SWITCHBOARD_ORACLE_ADAPTER, walletClient } from "./config.js";
 import {
   registerChat,
@@ -15,6 +15,8 @@ import {
   getChatDistributor,
   registerNftWrapper,
   getChatNftWrapper,
+  registerGuardWrapper,
+  getChatGuardWrapper,
   registerMarket,
   getChatMarket,
   unregisterMarket,
@@ -63,6 +65,9 @@ import { getOrCreateUserAccount, getUserAddress } from "./walletResolver.js";
 import { findWalletRecord, createWalletRecord, isWalletStoreConfigured } from "./walletStore.js";
 import { opportunityWalletClientFor, isOpportunityMarketConfigured } from "./opportunityMarket/config.js";
 import * as opportunityMarket from "./opportunityMarket/market.js";
+import * as guardWrapper from "./wrapper.js";
+import { listActionsForModel, getAction, encodeAction } from "./actionLibrary.js";
+import { startEventListener } from "./eventListener.js";
 import { back as opportunityBack } from "./opportunityMarket/encryptedBet.js";
 import { getBalance as opportunityGetBalance, getBet as opportunityGetBet, getAllBets as opportunityGetAllBets, getMarketAnalytics as opportunityGetAnalytics } from "./opportunityMarket/decrypt.js";
 import { revealAndCompleteWinningTotal, revealAndCompleteWithdrawal } from "./opportunityMarket/publicReveal.js";
@@ -200,6 +205,18 @@ async function requireMarket(ctx) {
   if (!address) {
     await ctx.reply(
       "This group isn't linked to an Opportunity Market yet. An admin can run:\n`/registermarket 0xYourMarketAddress`\n\nOr create a new one with `/createmarket 0xUnderlyingToken`.",
+      { parse_mode: "Markdown" }
+    );
+    return null;
+  }
+  return address;
+}
+
+async function requireGuardWrapper(ctx) {
+  const address = getChatGuardWrapper(ctx.chat.id);
+  if (!address) {
+    await ctx.reply(
+      "This group isn't linked to a guard wrapper yet. The DAO's creator can deploy one with `/deployguardwrapper`, or link an existing one with `/registerguardwrapper 0xYourWrapperAddress`.",
       { parse_mode: "Markdown" }
     );
     return null;
@@ -399,6 +416,25 @@ bot.command("help", async (ctx) => {
     lines.push(
       "",
       "_No Opportunity Market linked - /registermarket `<address>` or /createmarket `<underlyingToken>` to link one, /unregistermarket to unlink (deployer only)._"
+    );
+  }
+
+  const guardWrapperAddress = getChatGuardWrapper(ctx.chat.id);
+  if (guardWrapperAddress) {
+    lines.push(
+      "",
+      "*Guard Wrapper* (linked to this group)",
+      "/guardwrapper — current signers, required confirmations, and tenure status",
+      "/instruction `<id>` — full detail on one instruction, including its raw calldata",
+      "/confirminstruction `<id>` — signers only: confirm a pending instruction, executes automatically once enough do",
+      "/rejectinstruction `<id>` — signers only: permanently cancel an instruction once enough signers agree",
+      "/revokeconfirmation `<id>` — withdraw your own earlier confirmation before execution",
+      "/handovertowrapper `<wrapperAddress>` — creator only: computes the proposals that hand Treasury and token-minting control to a wrapper, sent to you privately"
+    );
+  } else {
+    lines.push(
+      "",
+      "_No guard wrapper linked - /deployguardwrapper `<requiredApprovals> <tenureLengthSeconds> <signer...>` to deploy one, or /registerguardwrapper `<address>` to link an existing one (creator only)._"
     );
   }
 
@@ -743,6 +779,340 @@ bot.command("deploynftwrapper", async (ctx) => {
   } catch (err) {
     console.error(err);
     await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `Couldn't deploy the wrapper: ${err.shortMessage || err.message}`);
+  }
+});
+
+/*//////////////////////////////////////////////////////////////
+                        /handovertowrapper
+//////////////////////////////////////////////////////////////*/
+
+bot.command("handovertowrapper", async (ctx) => {
+  const address = await requireDAO(ctx);
+  if (!address) return;
+
+  const chatCreator = getChatCreator(ctx.chat.id);
+  if (!chatCreator || String(ctx.from.id) !== chatCreator) {
+    await ctx.reply("Only this DAO's creator can compute a handover to a guard wrapper.");
+    return;
+  }
+
+  const wrapperAddress = ctx.match?.trim();
+  if (!wrapperAddress || !isAddress(wrapperAddress)) {
+    await ctx.reply(
+      "Usage: `/handovertowrapper <wrapperAddress>` — computes the exact `/propose` commands needed to hand Treasury and token-minting control to an already-deployed GuardWrapper.\n\nBoth still need to actually be proposed and pass a real vote - this only computes the calldata, it doesn't submit anything.",
+      { parse_mode: "Markdown" }
+    );
+    return;
+  }
+
+  const statusMsg = await ctx.reply("⏳ Computing handover proposals…");
+
+  try {
+    const model = getChatModel(ctx.chat.id);
+    const { treasuryAddress, tokenAddress } = await getDaoInfo(model, address);
+
+    // tokenAddress here is the staking wrapper, not the raw, mintable
+    // token - same distinction stakeTokens() already has to account
+    // for. transferOwnership() (needed to hand over minting rights)
+    // lives on the underlying token, not the staking wrapper.
+    const underlyingTokenAddress = await publicClient.readContract({
+      address: getAddress(tokenAddress),
+      abi: abis.StakedGovernanceToken,
+      functionName: "underlying",
+    });
+
+    // Both selectors computed via real keccak256, not guessed:
+    // transferGovernance(address) -> 0xd38bfff4
+    // transferOwnership(address) -> 0xf2fde38b (standard OZ Ownable)
+    const treasuryData =
+      "0xd38bfff4" + getAddress(wrapperAddress).slice(2).toLowerCase().padStart(64, "0");
+    const tokenData =
+      "0xf2fde38b" + getAddress(wrapperAddress).slice(2).toLowerCase().padStart(64, "0");
+
+    const message = [
+      "*Handover proposals* - both are normal proposals, needing a full vote each. Run them one at a time, whenever you're ready:",
+      "",
+      "*1. Hand Treasury control to the wrapper:*",
+      `\`/propose ${treasuryAddress} 0 ${treasuryData} Hand Treasury control to the security guard wrapper\``,
+      "",
+      "*2. Hand token-minting control to the wrapper:*",
+      `\`/propose ${underlyingTokenAddress} 0 ${tokenData} Hand token-minting control to the security guard wrapper\``,
+      "",
+      "⚠️ Once #1 executes, this DAO's governance can no longer move Treasury funds directly - every future Treasury action has to go through the wrapper's own proposeInstruction, confirmed by its signers, from that point on. Same for #2 and minting, once it executes. Consider proposing and confirming a real test instruction through the wrapper before relying on this for anything that matters.",
+    ].join("\n");
+
+    await deliverPrivately(ctx, statusMsg, message, "Sent the handover proposals.");
+  } catch (err) {
+    console.error(err);
+    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `Couldn't compute the handover proposals: ${err.shortMessage || err.message}`);
+  }
+});
+
+/*//////////////////////////////////////////////////////////////
+                        /deployguardwrapper
+//////////////////////////////////////////////////////////////*/
+
+bot.command("deployguardwrapper", async (ctx) => {
+  const address = await requireDAO(ctx);
+  if (!address) return;
+
+  const chatCreator = getChatCreator(ctx.chat.id);
+  if (!chatCreator || String(ctx.from.id) !== chatCreator) {
+    await ctx.reply("Only this DAO's creator can deploy a guard wrapper.");
+    return;
+  }
+
+  const existing = getChatGuardWrapper(ctx.chat.id);
+  if (existing) {
+    await ctx.reply(`This DAO already has one linked at \`${short(existing)}\`. Deploying another won't replace it automatically.`, {
+      parse_mode: "Markdown",
+    });
+    return;
+  }
+
+  const args = (ctx.match?.trim() ?? "").split(/\s+/).filter(Boolean);
+  const [requiredApprovalsStr, tenureLengthStr, ...signers] = args;
+  const requiredApprovals = Number(requiredApprovalsStr);
+  const tenureLengthSeconds = Number(tenureLengthStr);
+
+  if (
+    !requiredApprovalsStr ||
+    !Number.isInteger(requiredApprovals) ||
+    requiredApprovals <= 0 ||
+    !tenureLengthStr ||
+    !Number.isInteger(tenureLengthSeconds) ||
+    tenureLengthSeconds <= 0 ||
+    signers.length === 0 ||
+    requiredApprovals > signers.length ||
+    !signers.every((s) => isAddress(s, { strict: false }))
+  ) {
+    await ctx.reply(
+      "Usage: `/deployguardwrapper <requiredApprovals> <tenureLengthSeconds> <signer1> <signer2> ...`\n\nExample: `/deployguardwrapper 2 2592000 0xAb1...ef2 0xCd3...gh4 0xEf5...ij6` — a 3-signer wrapper needing 2 confirmations, with a 30-day tenure (2592000 seconds) before signers can be replaced.",
+      { parse_mode: "Markdown" }
+    );
+    return;
+  }
+
+  const statusMsg = await ctx.reply("⏳ Deploying a guard wrapper…");
+
+  try {
+    const { wrapperAddress } = await guardWrapper.deployGuardWrapper(walletClient, address, signers, requiredApprovals, tenureLengthSeconds);
+    registerGuardWrapper(ctx.chat.id, wrapperAddress);
+
+    await ctx.api.editMessageText(
+      ctx.chat.id,
+      statusMsg.message_id,
+      `✅ Deployed at \`${short(wrapperAddress)}\`.\n\nThis wrapper is now linked to this DAO. Nothing routes through it automatically - use \`/handovertowrapper ${wrapperAddress}\` to compute the proposals that actually hand Treasury and token-minting control over to it.`,
+      { parse_mode: "Markdown" }
+    );
+  } catch (err) {
+    console.error(err);
+    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `Couldn't deploy the guard wrapper: ${err.shortMessage || err.message}`);
+  }
+});
+
+/*//////////////////////////////////////////////////////////////
+                        /registerguardwrapper
+//////////////////////////////////////////////////////////////*/
+
+bot.command("registerguardwrapper", async (ctx) => {
+  const address = await requireDAO(ctx);
+  if (!address) return;
+
+  const chatCreator = getChatCreator(ctx.chat.id);
+  if (!chatCreator || String(ctx.from.id) !== chatCreator) {
+    await ctx.reply("Only this DAO's creator can link a guard wrapper.");
+    return;
+  }
+
+  const wrapperAddress = ctx.match?.trim();
+  if (!wrapperAddress || !isAddress(wrapperAddress, { strict: false })) {
+    await ctx.reply("Usage: `/registerguardwrapper <wrapperAddress>`", { parse_mode: "Markdown" });
+    return;
+  }
+
+  registerGuardWrapper(ctx.chat.id, getAddress(wrapperAddress.toLowerCase()));
+  await ctx.reply(`Linked. Run /guardwrapper to see its current signers and status.`);
+});
+
+/*//////////////////////////////////////////////////////////////
+                            /guardwrapper
+//////////////////////////////////////////////////////////////*/
+
+bot.command("guardwrapper", async (ctx) => {
+  const address = await requireGuardWrapper(ctx);
+  if (!address) return;
+
+  try {
+    const [info, signers] = await Promise.all([guardWrapper.getWrapperInfo(address), guardWrapper.getSigners(address)]);
+    const tenureEndDate = new Date(Number(info.tenureEnd) * 1000).toUTCString();
+    const lines = [
+      `*Guard wrapper* \`${short(address)}\``,
+      `Governance: \`${short(info.governance)}\``,
+      `Required confirmations: *${info.requiredApprovals}* of *${signers.length}* signers`,
+      `Tenure ends: *${tenureEndDate}*`,
+      `Instructions so far: *${info.instructionCount}*`,
+      "",
+      "*Signers:*",
+      ...signers.map((s, i) => `${i + 1}. \`${short(s)}\``),
+    ];
+    await ctx.reply(lines.join("\n"), { parse_mode: "Markdown" });
+  } catch (err) {
+    console.error(err);
+    await ctx.reply(`Couldn't read wrapper info: ${err.shortMessage || err.message}`);
+  }
+});
+
+/*//////////////////////////////////////////////////////////////
+                            /instruction
+//////////////////////////////////////////////////////////////*/
+
+bot.command("instruction", async (ctx) => {
+  const address = await requireGuardWrapper(ctx);
+  if (!address) return;
+
+  const idStr = ctx.match?.trim();
+  if (!idStr || !/^\d+$/.test(idStr)) {
+    await ctx.reply("Usage: `/instruction <id>` — full detail on one pending or resolved instruction, including its raw calldata.", {
+      parse_mode: "Markdown",
+    });
+    return;
+  }
+
+  try {
+    const instruction = await guardWrapper.getInstruction(address, idStr);
+    const status = instruction.executed ? "✅ Executed" : instruction.rejected ? "❌ Rejected" : "⏳ Pending";
+    const lines = [
+      `*Instruction #${idStr}* — ${status}`,
+      `Target: \`${instruction.target}\``,
+      `Value: *${instruction.value}* wei`,
+      `Confirmations: *${instruction.confirmations}*`,
+      `Rejections: *${instruction.rejections}*`,
+      "",
+      "*Raw calldata:*",
+      `\`${instruction.data}\``,
+    ];
+    await ctx.reply(lines.join("\n"), { parse_mode: "Markdown" });
+  } catch (err) {
+    console.error(err);
+    await ctx.reply(`Couldn't read that instruction: ${err.shortMessage || err.message}`);
+  }
+});
+
+/*//////////////////////////////////////////////////////////////
+                        /confirminstruction
+//////////////////////////////////////////////////////////////*/
+
+bot.command("confirminstruction", async (ctx) => {
+  const address = await requireGuardWrapper(ctx);
+  if (!address) return;
+  if (!isWalletStoreConfigured()) {
+    await ctx.reply("Wallets aren't set up on this bot yet - ask an admin.");
+    return;
+  }
+
+  const idStr = ctx.match?.trim();
+  if (!idStr || !/^\d+$/.test(idStr)) {
+    await ctx.reply("Usage: `/confirminstruction <id>` — signers only. Executes automatically once enough confirmations accumulate.", {
+      parse_mode: "Markdown",
+    });
+    return;
+  }
+
+  const account = await getOrCreateUserAccount(ctx.from.id);
+  const client = walletClientFor(account);
+  const statusMsg = await ctx.reply("⏳ Confirming…");
+
+  try {
+    await ensureGasFunded(account);
+    const { hash } = await guardWrapper.confirmInstruction(client, address, idStr);
+    await ctx.api.editMessageText(
+      ctx.chat.id,
+      statusMsg.message_id,
+      `✅ Confirmed instruction #${idStr}.\nTx: \`${short(hash)}\`\n\nCheck \`/instruction ${idStr}\` to see if it's executed yet.`,
+      { parse_mode: "Markdown" }
+    );
+  } catch (err) {
+    console.error(err);
+    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `Couldn't confirm (this only works if you're a signer on this wrapper): ${err.shortMessage || err.message}`);
+  }
+});
+
+/*//////////////////////////////////////////////////////////////
+                        /rejectinstruction
+//////////////////////////////////////////////////////////////*/
+
+bot.command("rejectinstruction", async (ctx) => {
+  const address = await requireGuardWrapper(ctx);
+  if (!address) return;
+  if (!isWalletStoreConfigured()) {
+    await ctx.reply("Wallets aren't set up on this bot yet - ask an admin.");
+    return;
+  }
+
+  const idStr = ctx.match?.trim();
+  if (!idStr || !/^\d+$/.test(idStr)) {
+    await ctx.reply("Usage: `/rejectinstruction <id>` — signers only. Once enough signers reject, the instruction is permanently cancelled - nobody can confirm it afterward.", {
+      parse_mode: "Markdown",
+    });
+    return;
+  }
+
+  const account = await getOrCreateUserAccount(ctx.from.id);
+  const client = walletClientFor(account);
+  const statusMsg = await ctx.reply("⏳ Rejecting…");
+
+  try {
+    await ensureGasFunded(account);
+    const { hash } = await guardWrapper.rejectInstruction(client, address, idStr);
+    await ctx.api.editMessageText(
+      ctx.chat.id,
+      statusMsg.message_id,
+      `✅ Rejected instruction #${idStr}.\nTx: \`${short(hash)}\``,
+      { parse_mode: "Markdown" }
+    );
+  } catch (err) {
+    console.error(err);
+    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `Couldn't reject (this only works if you're a signer on this wrapper): ${err.shortMessage || err.message}`);
+  }
+});
+
+/*//////////////////////////////////////////////////////////////
+                        /revokeconfirmation
+//////////////////////////////////////////////////////////////*/
+
+bot.command("revokeconfirmation", async (ctx) => {
+  const address = await requireGuardWrapper(ctx);
+  if (!address) return;
+  if (!isWalletStoreConfigured()) {
+    await ctx.reply("Wallets aren't set up on this bot yet - ask an admin.");
+    return;
+  }
+
+  const idStr = ctx.match?.trim();
+  if (!idStr || !/^\d+$/.test(idStr)) {
+    await ctx.reply("Usage: `/revokeconfirmation <id>` — withdraw your own earlier confirmation, before the instruction executes.", {
+      parse_mode: "Markdown",
+    });
+    return;
+  }
+
+  const account = await getOrCreateUserAccount(ctx.from.id);
+  const client = walletClientFor(account);
+  const statusMsg = await ctx.reply("⏳ Revoking…");
+
+  try {
+    await ensureGasFunded(account);
+    const { hash } = await guardWrapper.revokeConfirmation(client, address, idStr);
+    await ctx.api.editMessageText(
+      ctx.chat.id,
+      statusMsg.message_id,
+      `✅ Revoked your confirmation on instruction #${idStr}.\nTx: \`${short(hash)}\``,
+      { parse_mode: "Markdown" }
+    );
+  } catch (err) {
+    console.error(err);
+    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `Couldn't revoke: ${err.shortMessage || err.message}`);
   }
 });
 
@@ -1584,6 +1954,197 @@ bot.command("propose", async (ctx) => {
 });
 
 /*//////////////////////////////////////////////////////////////
+                            /listactions
+//////////////////////////////////////////////////////////////*/
+
+bot.command("listactions", async (ctx) => {
+  const model = getChatModel(ctx.chat.id);
+  const modelActions = listActionsForModel(model);
+  const universalActions = listActionsForModel("treasury").concat(listActionsForModel("token"));
+  const daoSpecific = getChatNftWrapper(ctx.chat.id) ? listActionsForModel("nftWrapper") : [];
+  const guarded = getChatGuardWrapper(ctx.chat.id) ? listActionsForModel("guardWrapper") : [];
+
+  const lines = ["*Verified action library*", "", "Only native, already-verified DAO instructions - no external platform actions yet.", ""];
+
+  if (modelActions.length) {
+    lines.push(`*Governance (${model}):*`);
+    for (const a of modelActions) lines.push(`\`${a.id}\` — ${a.label}`);
+    lines.push("");
+  }
+  lines.push("*Treasury & tokens:*");
+  for (const a of universalActions) lines.push(`\`${a.id}\` — ${a.label}`);
+
+  if (daoSpecific.length) {
+    lines.push("", "*NFT wrapper:*");
+    for (const a of daoSpecific) lines.push(`\`${a.id}\` — ${a.label}`);
+  }
+  if (guarded.length) {
+    lines.push("", "*Guard wrapper:*");
+    for (const a of guarded) lines.push(`\`${a.id}\` — ${a.label}`);
+  }
+
+  lines.push("", "Use `/proposeaction <actionId> <arg1> <arg2> ... <description>` to propose one.");
+  await ctx.reply(lines.join("\n"), { parse_mode: "Markdown" });
+});
+
+/*//////////////////////////////////////////////////////////////
+                            /proposeaction
+//////////////////////////////////////////////////////////////*/
+
+bot.command("proposeaction", async (ctx) => {
+  const address = await requireDAO(ctx);
+  if (!address) return;
+  if (!isWalletStoreConfigured()) {
+    await ctx.reply("Wallets aren't set up on this bot yet - ask an admin to configure the KMS/Supabase wallet system.");
+    return;
+  }
+
+  const parts = (ctx.match?.trim() ?? "").split(/\s+/);
+  const [actionId, ...rest] = parts;
+  const action = getAction(actionId);
+
+  if (!action) {
+    await ctx.reply("Usage: `/proposeaction <actionId> <arg1> <arg2> ... <description>` — run `/listactions` to see what's available.", { parse_mode: "Markdown" });
+    return;
+  }
+
+  const model = getChatModel(ctx.chat.id);
+  const appliesHere =
+    action.appliesTo === "any" ||
+    action.appliesTo === model ||
+    (Array.isArray(action.appliesTo) && action.appliesTo.includes(model)) ||
+    (action.appliesTo === "treasury") ||
+    (action.appliesTo === "token") ||
+    (action.appliesTo === "nftWrapper" && getChatNftWrapper(ctx.chat.id)) ||
+    (action.appliesTo === "guardWrapper" && getChatGuardWrapper(ctx.chat.id));
+
+  if (!appliesHere) {
+    await ctx.reply(`\`${actionId}\` doesn't apply to this DAO. Run \`/listactions\` to see what does.`, { parse_mode: "Markdown" });
+    return;
+  }
+
+  const argCount = action.params.length === 1 && action.params[0].type === "tuple" ? action.params[0].fields.length : action.params.length;
+  const actionArgs = rest.slice(0, argCount);
+  const description = rest.slice(argCount).join(" ");
+
+  if (actionArgs.length !== argCount || !description) {
+    const argNames =
+      action.params.length === 1 && action.params[0].type === "tuple"
+        ? action.params[0].fields.join(" ")
+        : action.params.map((p) => p.name).join(" ");
+    await ctx.reply(`Usage: \`/proposeaction ${actionId} ${argNames} <description>\``, { parse_mode: "Markdown" });
+    return;
+  }
+
+  const account = await getOrCreateUserAccount(ctx.from.id);
+  const client = walletClientFor(account);
+  const statusMsg = await ctx.reply("⏳ Encoding and submitting proposal…");
+
+  try {
+    let { data, target: fixedTarget } = encodeAction(actionId, actionArgs);
+
+    let target;
+    if (action.targetKind === "governance") {
+      target = address;
+    } else if (action.targetKind === "treasury") {
+      const { treasuryAddress } = await getDaoInfo(model, address);
+      target = treasuryAddress;
+
+      // Treasury may no longer accept calls from this DAO's own
+      // governance at all - if a GuardWrapper handover already ran
+      // (Treasury.transferGovernance(wrapper)), Treasury's own
+      // governance field now points at the wrapper, not this DAO's
+      // Governance contract. Proposing a direct call in that state
+      // would pass its vote and timelock, then fail only at execution.
+      // Checking Treasury's real, current governance address here -
+      // not assuming it's still this DAO - catches that before the
+      // proposal is even created.
+      const currentTreasuryGovernance = await publicClient.readContract({
+        address: getAddress(treasuryAddress),
+        abi: [{ type: "function", name: "governance", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] }],
+        functionName: "governance",
+      });
+
+      if (getAddress(currentTreasuryGovernance) !== getAddress(address)) {
+        // A mismatch alone doesn't prove it's a GuardWrapper - it could
+        // be any address for any reason. Only proceed with the
+        // proposeInstruction wrapping if it genuinely matches this
+        // chat's own registered wrapper; otherwise calling
+        // proposeInstruction on an unconfirmed address would likely
+        // just revert (wrong selector, no matching function) - an
+        // opaque failure discovered only at execution, not a helpful
+        // one discovered now.
+        const registeredWrapper = getChatGuardWrapper(ctx.chat.id);
+        if (!registeredWrapper || getAddress(registeredWrapper) !== getAddress(currentTreasuryGovernance)) {
+          throw new Error(
+            `Treasury's governance has changed to ${currentTreasuryGovernance}, which isn't this chat's registered guard wrapper` +
+              (registeredWrapper ? ` (${registeredWrapper})` : " (none registered)") +
+              `. Won't guess - link it first with /registerguardwrapper if that address is genuinely a GuardWrapper, or investigate if it's not.`
+          );
+        }
+        data = encodeFunctionData({
+          abi: [{ type: "function", name: "proposeInstruction", stateMutability: "nonpayable", inputs: [{ name: "target", type: "address" }, { name: "value", type: "uint256" }, { name: "data", type: "bytes" }], outputs: [{ name: "instructionId", type: "uint256" }] }],
+          functionName: "proposeInstruction",
+          args: [getAddress(treasuryAddress), 0n, data],
+        });
+        target = currentTreasuryGovernance; // confirmed to be the registered wrapper
+      }
+    } else {
+      target = fixedTarget; // supplied inline as the action's own first arg
+
+      // Same risk as Treasury, different access-control shape: token
+      // and staking-wrapper contracts are Ownable-style (owner(), not
+      // governance()), and a handover via transferOwnership() would
+      // leave them only accepting calls from whatever now holds
+      // ownership - typically a GuardWrapper. Only checked for
+      // "token"-appliesTo actions, since NFT/Guard wrapper targets
+      // aren't ordinarily handed over to a further wrapper themselves.
+      if (action.appliesTo === "token") {
+        const currentOwner = await publicClient.readContract({
+          address: target,
+          abi: [{ type: "function", name: "owner", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] }],
+          functionName: "owner",
+        });
+
+        if (getAddress(currentOwner) !== getAddress(address)) {
+          // Same verification as Treasury above - don't assume, confirm
+          // against this chat's actual registered wrapper first.
+          const registeredWrapper = getChatGuardWrapper(ctx.chat.id);
+          if (!registeredWrapper || getAddress(registeredWrapper) !== getAddress(currentOwner)) {
+            throw new Error(
+              `This token's owner has changed to ${currentOwner}, which isn't this chat's registered guard wrapper` +
+                (registeredWrapper ? ` (${registeredWrapper})` : " (none registered)") +
+                `. Won't guess - link it first with /registerguardwrapper if that address is genuinely a GuardWrapper, or investigate if it's not.`
+            );
+          }
+          data = encodeFunctionData({
+            abi: [{ type: "function", name: "proposeInstruction", stateMutability: "nonpayable", inputs: [{ name: "target", type: "address" }, { name: "value", type: "uint256" }, { name: "data", type: "bytes" }], outputs: [{ name: "instructionId", type: "uint256" }] }],
+            functionName: "proposeInstruction",
+            args: [target, 0n, data],
+          });
+          target = currentOwner; // confirmed to be the registered wrapper
+        }
+      }
+    }
+
+    await ensureGasFunded(account, true);
+    const adapter = getAdapter(model);
+    const actions = [{ target: getAddress(target), value: 0n, data }];
+    const { proposalId } = await adapter.propose(client, address, actions, description);
+
+    await ctx.api.editMessageText(
+      ctx.chat.id,
+      statusMsg.message_id,
+      `✅ Proposal #${proposalId} created via \`${actionId}\`.\n\nUse /proposal ${proposalId} to check on it, or /vote ${proposalId} for|against|abstain once voting opens.`,
+      { parse_mode: "Markdown" }
+    );
+  } catch (err) {
+    console.error(err);
+    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `Couldn't create the proposal: ${err.shortMessage || err.message}`);
+  }
+});
+
+/*//////////////////////////////////////////////////////////////
                       /deploychainlinkoracle
 //////////////////////////////////////////////////////////////*/
 
@@ -2234,8 +2795,19 @@ bot.command("support", async (ctx) => {
 
   try {
     await ensureGasFunded(account);
-    await adapter.support(client, address, id);
-    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `✅ Now backing proposal #${id} with your full staked balance.`);
+    const { weight } = await adapter.support(client, address, id);
+
+    const weightNote =
+      weight === 0n
+        ? "\n\n⚠️ This carried *zero weight* - you likely have no staked balance right now. It's recorded, but doesn't actually back the proposal. Stake first, then support again."
+        : `\nWeight: ${formatEther(weight)}`;
+
+    await ctx.api.editMessageText(
+      ctx.chat.id,
+      statusMsg.message_id,
+      `✅ Now backing proposal #${id} with your full staked balance.${weightNote}`,
+      { parse_mode: "Markdown" }
+    );
   } catch (err) {
     console.error(err);
     await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `Couldn't back that proposal: ${err.shortMessage || err.message}`);
@@ -2619,8 +3191,19 @@ bot.command("voteinelection", async (ctx) => {
 
   try {
     await ensureGasFunded(account);
-    await adapter.voteInElection(client, address, electionId, candidates);
-    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `✅ Voted for ${candidates.length} candidate(s) in election #${electionId}.`);
+    const { weight } = await adapter.voteInElection(client, address, electionId, candidates);
+
+    const weightNote =
+      weight === 0n
+        ? "\n\n⚠️ This carried *zero weight* - your tokens likely weren't staked before this election's snapshot block. It's recorded, but doesn't affect any candidate's tally."
+        : `\nWeight: ${formatEther(weight)}`;
+
+    await ctx.api.editMessageText(
+      ctx.chat.id,
+      statusMsg.message_id,
+      `✅ Voted for ${candidates.length} candidate(s) in election #${electionId}.${weightNote}`,
+      { parse_mode: "Markdown" }
+    );
   } catch (err) {
     console.error(err);
     await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `Couldn't vote: ${err.shortMessage || err.message}`);
@@ -2812,8 +3395,19 @@ bot.command("castapprovalvote", async (ctx) => {
 
   try {
     await ensureGasFunded(account);
-    await adapter.castApprovalVote(client, address, id, VOTE_CHOICES[choice]);
-    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `✅ Voted *${choice}* on proposal #${id}'s approval.`, { parse_mode: "Markdown" });
+    const { weight } = await adapter.castApprovalVote(client, address, id, VOTE_CHOICES[choice]);
+
+    const weightNote =
+      weight === 0n
+        ? "\n\n⚠️ This vote carried *zero weight* - your tokens likely weren't staked before this proposal's approval snapshot block. It's recorded, but didn't affect the tally."
+        : `\nWeight: ${formatEther(weight)}`;
+
+    await ctx.api.editMessageText(
+      ctx.chat.id,
+      statusMsg.message_id,
+      `✅ Voted *${choice}* on proposal #${id}'s approval.${weightNote}`,
+      { parse_mode: "Markdown" }
+    );
   } catch (err) {
     console.error(err);
     await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `Couldn't vote: ${err.shortMessage || err.message}`);
@@ -3078,8 +3672,19 @@ bot.command("castadjudicationvote", async (ctx) => {
 
   try {
     await ensureGasFunded(account);
-    await adapter.castAdjudicationVote(client, address, id, OUTCOME_CHOICES[outcome]);
-    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `✅ Voted *${outcome}* on proposal #${id}'s adjudication.`, { parse_mode: "Markdown" });
+    const { weight } = await adapter.castAdjudicationVote(client, address, id, OUTCOME_CHOICES[outcome]);
+
+    const weightNote =
+      weight === 0n
+        ? "\n\n⚠️ This vote carried *zero weight* - your tokens likely weren't staked before this proposal's adjudication snapshot block. It's recorded, but didn't affect the tally."
+        : `\nWeight: ${formatEther(weight)}`;
+
+    await ctx.api.editMessageText(
+      ctx.chat.id,
+      statusMsg.message_id,
+      `✅ Voted *${outcome}* on proposal #${id}'s adjudication.${weightNote}`,
+      { parse_mode: "Markdown" }
+    );
   } catch (err) {
     console.error(err);
     await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `Couldn't vote: ${err.shortMessage || err.message}`);
@@ -3507,6 +4112,7 @@ bot.catch((err) => {
 });
 
 run(bot);
+startEventListener(bot);
 
 /*//////////////////////////////////////////////////////////////
                     WELCOME DISTRIBUTION
