@@ -114,6 +114,29 @@ export function getChatCreator(chatId, platform = "telegram") {
 }
 
 /**
+ * Records who linked this chat to an externally-deployed DAO (Discord /
+ * Slack `register`), so only they - or a platform admin - can relink or
+ * unlink it later. Deliberately separate from creatorPlatformUserId:
+ * linking a DAO proves nothing about who created it, and the creator
+ * field unlocks /tip, which spends operator-held tokens. Any creator left
+ * over from a DAO this chat was previously linked to is cleared too.
+ */
+export function recordChatLinker(chatId, platformUserId, platform = "telegram", { keepCreator = false } = {}) {
+  const db = readDb();
+  const k = key(chatId, platform);
+  if (!db[k]) return;
+  const { creatorPlatformUserId, ...rest } = db[k];
+  db[k] = { ...rest, ...(keepCreator && creatorPlatformUserId ? { creatorPlatformUserId } : {}), linkedByPlatformUserId: String(platformUserId) };
+  writeDb(db);
+}
+
+/** Who linked this chat to its DAO (see recordChatLinker), or null. */
+export function getChatLinker(chatId, platform = "telegram") {
+  const db = readDb();
+  return db[key(chatId, platform)]?.linkedByPlatformUserId ?? null;
+}
+
+/**
  * Registers a ticker -> token address mapping for this chat, on top of
  * (not replacing) the DAO's own token, which contracts.js's
  * resolveTokenReference already resolves by reading its real, on-chain

@@ -5,15 +5,21 @@
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "node --watch src/index.js"
+    "dev": "node --watch src/index.js",
+    "discord": "node src/platforms/discord.js",
+    "slack": "node src/platforms/slack.js",
+    "keeper:sortition": "node src/keepers/sortitionKeeper.js",
+    "keeper:switchboard": "node src/keepers/switchboardPriceKeeper.js"
   },
   "dependencies": {
     "@aws-sdk/client-kms": "^3.1131.0",
     "@grammyjs/runner": "^2.0.3",
+    "@slack/bolt": "^5.1.0",
     "@supabase/supabase-js": "^2.116.0",
     "@switchboard-xyz/common": "^5.8.5",
     "@switchboard-xyz/on-demand-solidity": "^1.1.0",
     "@zama-fhe/relayer-sdk": "^0.4.4",
+    "discord.js": "^14.27.0",
     "dotenv": "^16.4.5",
     "grammy": "^1.45.1",
     "viem": "^2.21.0"

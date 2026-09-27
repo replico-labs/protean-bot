@@ -3,6 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { getAddress, parseEther } from "viem";
 import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer } from "../config.js";
+import { ensureAllowance } from "./common.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -23,6 +24,11 @@ const ERC20_APPROVE_ABI = [
 // wrap/unwrap functions, confirmed directly from WMON.sol's own source.
 const WMON_ABI = [
   { type: "function", name: "withdraw", inputs: [{ type: "uint256" }], outputs: [], stateMutability: "nonpayable" },
+];
+
+const POOL_TOKEN_ABI = [
+  { type: "function", name: "token0", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
+  { type: "function", name: "token1", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
 ];
 
 function contractFor(address) {
@@ -163,6 +169,9 @@ export async function proposeWithSeed(
   quoteSeedAmountWhole
 ) {
   const gov = contractFor(governanceAddress);
+  // propose() pulls the base seed via transferFrom - approve it first.
+  const baseToken = await publicClient.readContract({ ...gov, functionName: "governanceToken" });
+  await ensureAllowance(client, baseToken, governanceAddress, parseEther(String(baseSeedAmountWhole)));
 
   const hash = await writeWithGasBuffer(client, {
     ...gov,
@@ -189,6 +198,12 @@ export async function proposeWithSeed(
  */
 export async function trade(client, governanceAddress, proposalId, market, sideIn, amountInWhole, minAmountOutWhole) {
   const gov = contractFor(governanceAddress);
+  // trade() pulls the conditional token being sold (the pool's token0 for
+  // base, token1 for quote) via transferFrom - approve it first.
+  const proposal = await publicClient.readContract({ ...gov, functionName: "getProposal", args: [BigInt(proposalId)] });
+  const pool = getAddress(market === 0 ? proposal.passPool : proposal.failPool);
+  const tokenIn = await publicClient.readContract({ address: pool, abi: POOL_TOKEN_ABI, functionName: sideIn === 0 ? "token0" : "token1" });
+  await ensureAllowance(client, tokenIn, governanceAddress, parseEther(String(amountInWhole)));
 
   const hash = await writeWithGasBuffer(client, {
     ...gov,

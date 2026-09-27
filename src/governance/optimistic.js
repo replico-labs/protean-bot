@@ -3,6 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { getAddress, parseEther } from "viem";
 import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer } from "../config.js";
+import { ensureAllowance } from "./common.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -185,6 +186,12 @@ export async function getProposal(governanceAddress, proposalId) {
  */
 export async function challenge(client, governanceAddress, proposalId) {
   const gov = contractFor(governanceAddress);
+  // The contract pulls challengeBond via transferFrom - approve it first.
+  const [token, config] = await Promise.all([
+    publicClient.readContract({ ...gov, functionName: "governanceToken" }),
+    publicClient.readContract({ ...gov, functionName: "config" }),
+  ]);
+  await ensureAllowance(client, token, governanceAddress, config.challengeBond);
   const hash = await writeWithGasBuffer(client, { ...gov, functionName: "challenge", args: [BigInt(proposalId)] });
   await publicClient.waitForTransactionReceipt({ hash });
   return { hash };

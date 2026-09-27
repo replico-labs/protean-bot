@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { createWalletClient, http, getAddress, parseEther } from "viem";
+import { createWalletClient, http, getAddress, parseEther, parseAbi, encodeFunctionData } from "viem";
 import { publicClient, monadTestnet, writeWithGasBuffer } from "../config.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -178,4 +178,72 @@ export async function unstakeTokens(client, stakingTokenAddress, amountWhole) {
   await publicClient.waitForTransactionReceipt({ hash });
 
   return { hash };
+}
+const ERC20_ALLOWANCE_ABI = [
+  { type: "function", name: "allowance", stateMutability: "view", inputs: [{ type: "address" }, { type: "address" }], outputs: [{ type: "uint256" }] },
+  { type: "function", name: "approve", stateMutability: "nonpayable", inputs: [{ type: "address" }, { type: "uint256" }], outputs: [{ type: "bool" }] },
+];
+
+/**
+ * Approves `spender` to pull `amount` of `tokenAddress` from the caller,
+ * if the current allowance is lower. Every governance action that posts a
+ * bond or seed (Optimistic challenge, Sowellian bonds and positions,
+ * Decision Markets seeding and trading) pulls tokens with transferFrom,
+ * so without this the contract call always reverts. Same two-step,
+ * wait-for-receipt pattern as stakeTokens above.
+ */
+export async function ensureAllowance(client, tokenAddress, spender, amount) {
+  if (amount === 0n) return null;
+  const token = getAddress(tokenAddress);
+  const current = await publicClient.readContract({
+    address: token,
+    abi: ERC20_ALLOWANCE_ABI,
+    functionName: "allowance",
+    args: [client.account.address, getAddress(spender)],
+  });
+  if (current >= amount) return null;
+  const hash = await writeWithGasBuffer(client, { address: token, abi: ERC20_ALLOWANCE_ABI, functionName: "approve", args: [getAddress(spender), amount] });
+  await publicClient.waitForTransactionReceipt({ hash });
+  return hash;
+}
+
+/**
+ * One cheap read per model that only a real deployment of that model
+ * answers - a view function no other model has (the call reverts on
+ * any other model's contract). Optimistic has no unique view function,
+ * so it's identified by its config() struct being exactly 8 words.
+ */
+const MODEL_FINGERPRINTS = {
+  tokenWeighted: { sig: "function governanceConfig() view returns (uint256)", args: [] },
+  quadratic: { sig: "function previewWeight(address) view returns (uint256)", args: ["0x0000000000000000000000000000000000000000"] },
+  liquid: { sig: "function MAX_CHAIN_DEPTH() view returns (uint256)", args: [] },
+  delegate: { sig: "function electionCount() view returns (uint256)", args: [] },
+  board: { sig: "function getSigners() view returns (address[])", args: [] },
+  sortition: { sig: "function sortitionRound() view returns (uint256)", args: [] },
+  conviction: { sig: "function totalSupport(uint256) view returns (uint256)", args: [0n] },
+  sowellian: { sig: "function yesPosition(uint256,address) view returns (uint256)", args: [0n, "0x0000000000000000000000000000000000000000"] },
+  decisionMarkets: { sig: "function wmon() view returns (address)", args: [] },
+  optimistic: { sig: "function config() view returns (uint256)", args: [], words: 8 },
+};
+
+/**
+ * Whether `governanceAddress` is really a deployment of `model` - used
+ * before linking a chat to an address someone typed, so a DAO can't be
+ * registered under the wrong model (every model has governanceToken(),
+ * so that alone proves nothing, and Board has no token at all).
+ */
+export async function isGovernanceModel(model, governanceAddress) {
+  const fp = MODEL_FINGERPRINTS[model];
+  if (!fp) return false;
+  const [item] = parseAbi([fp.sig]);
+  try {
+    const { data } = await publicClient.call({
+      to: getAddress(governanceAddress),
+      data: encodeFunctionData({ abi: [item], functionName: item.name, args: fp.args }),
+    });
+    if (!data || data === "0x") return false;
+    return fp.words === undefined ? true : (data.length - 2) / 64 === fp.words;
+  } catch {
+    return false;
+  }
 }

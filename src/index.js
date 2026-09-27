@@ -1,6 +1,6 @@
 import { Bot } from "grammy";
 import { run, sequentialize } from "@grammyjs/runner";
-import { isAddress, getAddress, parseEther, formatUnits, encodeFunctionData } from "viem";
+import { isAddress, getAddress, parseEther, formatUnits } from "viem";
 import { BOT_TOKEN, monadTestnet, publicClient, SORTITION_RANDOMNESS_SOURCE, SWITCHBOARD_ORACLE_ADAPTER, walletClient } from "./config.js";
 import {
   registerChat,
@@ -58,19 +58,29 @@ import {
   getDaoInfo,
   hasToken,
   PROPOSAL_STATE_LABELS,
+  isGovernanceModel,
 } from "./governance/common.js";
 import { short, stateLine, formatDate } from "./format.js";
+import { hoursFrom, CONFIG_DISPLAY_BY_MODEL, VOTE_CHOICES } from "./display.js";
 import { deriveUserWallet, isWalletDerivationConfigured } from "./wallet.js";
 import { getOrCreateUserAccount, getUserAddress } from "./walletResolver.js";
 import { findWalletRecord, createWalletRecord, isWalletStoreConfigured } from "./walletStore.js";
 import { opportunityWalletClientFor, isOpportunityMarketConfigured } from "./opportunityMarket/config.js";
 import * as opportunityMarket from "./opportunityMarket/market.js";
 import * as guardWrapper from "./wrapper.js";
-import { listActionsForModel, getAction, encodeAction } from "./actionLibrary.js";
+import { listActionsForModel, getAction } from "./actionLibrary.js";
+import { actionAppliesTo, actionArgSpec, buildActionProposal, computeHandoverProposals } from "./proposalBuilder.js";
 import { startEventListener } from "./eventListener.js";
 import { back as opportunityBack } from "./opportunityMarket/encryptedBet.js";
 import { getBalance as opportunityGetBalance, getBet as opportunityGetBet, getAllBets as opportunityGetAllBets, getMarketAnalytics as opportunityGetAnalytics } from "./opportunityMarket/decrypt.js";
 import { revealAndCompleteWinningTotal, revealAndCompleteWithdrawal } from "./opportunityMarket/publicReveal.js";
+
+// Checked here rather than in config.js, so the keepers and the Discord
+// and Slack entrypoints (which share config.js) don't need a Telegram token.
+if (!BOT_TOKEN) {
+  console.error("Missing TELEGRAM_BOT_TOKEN - copy .env.example to .env and fill it in.");
+  process.exit(1);
+}
 
 const bot = new Bot(BOT_TOKEN);
 
@@ -658,13 +668,10 @@ bot.command("register", async (ctx) => {
     return;
   }
 
-  try {
-    // Sanity check: does this actually look like a governance contract
-    // of the claimed model? A cheap read that only a real deployment of
-    // that specific model will answer.
-    getAdapter(model); // throws if model isn't registered - already validated above, but cheap to keep
-    await getGovernanceTokenAddress(model, address);
-  } catch (err) {
+  // Does this actually look like a governance contract of the claimed
+  // model? A read only a real deployment of that specific model answers
+  // (governanceToken() alone can't tell models apart, and Board has none).
+  if (!(await isGovernanceModel(model, address))) {
     await ctx.reply(
       `Couldn't read a "${model}" DAO at that address on ${monadTestnet.name}. Double-check the address and model.`
     );
@@ -809,25 +816,9 @@ bot.command("handovertowrapper", async (ctx) => {
 
   try {
     const model = getChatModel(ctx.chat.id);
-    const { treasuryAddress, tokenAddress } = await getDaoInfo(model, address);
-
-    // tokenAddress here is the staking wrapper, not the raw, mintable
-    // token - same distinction stakeTokens() already has to account
-    // for. transferOwnership() (needed to hand over minting rights)
-    // lives on the underlying token, not the staking wrapper.
-    const underlyingTokenAddress = await publicClient.readContract({
-      address: getAddress(tokenAddress),
-      abi: abis.StakedGovernanceToken,
-      functionName: "underlying",
-    });
-
-    // Both selectors computed via real keccak256, not guessed:
-    // transferGovernance(address) -> 0xd38bfff4
-    // transferOwnership(address) -> 0xf2fde38b (standard OZ Ownable)
-    const treasuryData =
-      "0xd38bfff4" + getAddress(wrapperAddress).slice(2).toLowerCase().padStart(64, "0");
-    const tokenData =
-      "0xf2fde38b" + getAddress(wrapperAddress).slice(2).toLowerCase().padStart(64, "0");
+    // Shared with Discord/Slack. Reads the raw underlying token (the one
+    // whose ownership controls minting) rather than the staking wrapper.
+    const { treasuryAddress, treasuryData, underlyingTokenAddress, tokenData } = await computeHandoverProposals(model, address, wrapperAddress);
 
     const message = [
       "*Handover proposals* - both are normal proposals, needing a full vote each. Run them one at a time, whenever you're ready:",
@@ -835,9 +826,9 @@ bot.command("handovertowrapper", async (ctx) => {
       "*1. Hand Treasury control to the wrapper:*",
       `\`/propose ${treasuryAddress} 0 ${treasuryData} Hand Treasury control to the security guard wrapper\``,
       "",
-      "*2. Hand token-minting control to the wrapper:*",
-      `\`/propose ${underlyingTokenAddress} 0 ${tokenData} Hand token-minting control to the security guard wrapper\``,
-      "",
+      ...(tokenData
+        ? ["*2. Hand token-minting control to the wrapper:*", `\`/propose ${underlyingTokenAddress} 0 ${tokenData} Hand token-minting control to the security guard wrapper\``, ""]
+        : []),
       "⚠️ Once #1 executes, this DAO's governance can no longer move Treasury funds directly - every future Treasury action has to go through the wrapper's own proposeInstruction, confirmed by its signers, from that point on. Same for #2 and minting, once it executes. Consider proposing and confirming a real test instruction through the wrapper before relying on this for anything that matters.",
     ].join("\n");
 
@@ -1278,98 +1269,6 @@ bot.command("contribute", async (ctx) => {
 // contract's real struct fields, not assumed. tokenWeighted/quadratic/
 // liquid happen to share the exact same 7-field shape; every other
 // model differs, several completely.
-function hoursFrom(seconds) {
-  return (Number(seconds) / 3600).toFixed(1);
-}
-
-const STANDARD_CONFIG_LINES = (c) => [
-  `Quorum: ${Number(c.quorumBps) / 100}%`,
-  `Approval threshold: ${Number(c.approvalThresholdBps) / 100}%`,
-  `Voting delay: ${c.votingDelay} blocks`,
-  `Voting period: ${c.votingPeriod} blocks`,
-  `Timelock: ${hoursFrom(c.timelockDelay)}h`,
-  `Execution window: ${hoursFrom(c.executionPeriod)}h`,
-  `Proposal threshold: ${formatEther(c.proposalThreshold)} tokens`,
-];
-
-const CONFIG_DISPLAY_BY_MODEL = {
-  tokenWeighted: STANDARD_CONFIG_LINES,
-  quadratic: STANDARD_CONFIG_LINES,
-  liquid: STANDARD_CONFIG_LINES,
-  optimistic: (c) => [
-    `Challenge period: ${hoursFrom(c.challengePeriod)}h`,
-    `Challenge bond: ${formatEther(c.challengeBond)} tokens`,
-    `Quorum (if challenged): ${Number(c.quorumBps) / 100}%`,
-    `Approval threshold (if challenged): ${Number(c.approvalThresholdBps) / 100}%`,
-    `Voting period (if challenged): ${c.votingPeriod} blocks`,
-    `Timelock: ${hoursFrom(c.timelockDelay)}h`,
-    `Execution window: ${hoursFrom(c.executionPeriod)}h`,
-    `Proposal threshold: ${formatEther(c.proposalThreshold)} tokens`,
-  ],
-  delegate: (c) => [
-    `Council size: ${c.councilSize}`,
-    `Term length: ${(Number(c.termLength) / 86400).toFixed(1)} days`,
-    `Candidacy threshold: ${formatEther(c.candidacyThreshold)} tokens`,
-    `Candidacy period: ${c.candidacyPeriod} blocks`,
-    `Election voting period: ${c.electionVotingPeriod} blocks`,
-    `Council quorum: ${c.councilQuorum}`,
-    `Council approval threshold: ${Number(c.councilApprovalThresholdBps) / 100}%`,
-    `Voting delay: ${c.votingDelay} blocks`,
-    `Voting period: ${c.votingPeriod} blocks`,
-    `Timelock: ${hoursFrom(c.timelockDelay)}h`,
-    `Execution window: ${hoursFrom(c.executionPeriod)}h`,
-    `Recall quorum: ${Number(c.recallQuorumBps) / 100}%`,
-    `Recall approval threshold: ${Number(c.recallApprovalThresholdBps) / 100}%`,
-    `Recall voting period: ${c.recallVotingPeriod} blocks`,
-  ],
-  board: (c) => [
-    `Required approvals: ${c.requiredApprovals}`,
-    `Timelock: ${hoursFrom(c.timelockDelay)}h`,
-    `Execution window: ${hoursFrom(c.executionPeriod)}h`,
-  ],
-  sortition: (c) => [
-    `Council size: ${c.councilSize}`,
-    `Term length: ${(Number(c.termLength) / 86400).toFixed(1)} days`,
-    `Eligibility threshold: ${formatEther(c.eligibilityThreshold)} tokens`,
-    `Council quorum: ${c.councilQuorum}`,
-    `Council approval threshold: ${Number(c.councilApprovalThresholdBps) / 100}%`,
-    `Voting delay: ${c.votingDelay} blocks`,
-    `Voting period: ${c.votingPeriod} blocks`,
-    `Timelock: ${hoursFrom(c.timelockDelay)}h`,
-    `Execution window: ${hoursFrom(c.executionPeriod)}h`,
-  ],
-  conviction: (c) => [
-    `Conviction growth rate: ${c.convictionGrowthRate} per block`,
-    `Min threshold conviction: ${formatEther(c.minThresholdConviction)}`,
-    `Threshold multiplier: ${c.thresholdMultiplier} per token requested`,
-    `Proposal threshold: ${formatEther(c.proposalThreshold)} tokens`,
-    `Timelock: ${hoursFrom(c.timelockDelay)}h`,
-    `Execution window: ${hoursFrom(c.executionPeriod)}h`,
-  ],
-  sowellian: (c) => [
-    `Proposal bond: ${formatEther(c.proposalBondAmount)} tokens`,
-    `Approval voting delay: ${c.approvalVotingDelay} blocks`,
-    `Approval voting period: ${c.approvalVotingPeriod} blocks`,
-    `Approval quorum: ${Number(c.approvalQuorumBps) / 100}%`,
-    `Approval threshold: ${Number(c.approvalThresholdBps) / 100}%`,
-    `Positions window: ${hoursFrom(c.positionsWindow)}h`,
-    `Execution timelock: ${hoursFrom(c.executionTimelockDelay)}h`,
-    `Resolution bond: ${formatEther(c.resolutionBondAmount)} tokens`,
-    `Challenge period: ${hoursFrom(c.challengePeriod)}h`,
-    `Challenge bond: ${formatEther(c.challengeBondAmount)} tokens`,
-    `Adjudication voting period: ${c.adjudicationVotingPeriod} blocks`,
-    `Adjudication quorum: ${Number(c.adjudicationQuorumBps) / 100}%`,
-    `Adjudication threshold: ${Number(c.adjudicationThresholdBps) / 100}%`,
-    `Max oracle staleness: ${hoursFrom(c.maxOracleStaleness)}h`,
-  ],
-  decisionMarkets: (c) => [
-    `Trading period: ${hoursFrom(c.tradingPeriod)}h`,
-    `Pass must beat fail by: ${Number(c.thresholdBps) / 100}%`,
-    `Timelock: ${hoursFrom(c.timelockDelay)}h`,
-    `Execution window: ${hoursFrom(c.executionPeriod)}h`,
-  ],
-};
-
 bot.command("dao", async (ctx) => {
   const address = await requireDAO(ctx);
   if (!address) return;
@@ -2009,29 +1908,22 @@ bot.command("proposeaction", async (ctx) => {
   }
 
   const model = getChatModel(ctx.chat.id);
-  const appliesHere =
-    action.appliesTo === "any" ||
-    action.appliesTo === model ||
-    (Array.isArray(action.appliesTo) && action.appliesTo.includes(model)) ||
-    (action.appliesTo === "treasury") ||
-    (action.appliesTo === "token") ||
-    (action.appliesTo === "nftWrapper" && getChatNftWrapper(ctx.chat.id)) ||
-    (action.appliesTo === "guardWrapper" && getChatGuardWrapper(ctx.chat.id));
+  const appliesHere = actionAppliesTo(action, model, {
+    nftWrapperAddress: getChatNftWrapper(ctx.chat.id),
+    guardWrapperAddress: getChatGuardWrapper(ctx.chat.id),
+  });
 
   if (!appliesHere) {
     await ctx.reply(`\`${actionId}\` doesn't apply to this DAO. Run \`/listactions\` to see what does.`, { parse_mode: "Markdown" });
     return;
   }
 
-  const argCount = action.params.length === 1 && action.params[0].type === "tuple" ? action.params[0].fields.length : action.params.length;
+  const { count: argCount, names: argNameList } = actionArgSpec(action);
   const actionArgs = rest.slice(0, argCount);
   const description = rest.slice(argCount).join(" ");
 
   if (actionArgs.length !== argCount || !description) {
-    const argNames =
-      action.params.length === 1 && action.params[0].type === "tuple"
-        ? action.params[0].fields.join(" ")
-        : action.params.map((p) => p.name).join(" ");
+    const argNames = argNameList.join(" ");
     await ctx.reply(`Usage: \`/proposeaction ${actionId} ${argNames} <description>\``, { parse_mode: "Markdown" });
     return;
   }
@@ -2041,95 +1933,19 @@ bot.command("proposeaction", async (ctx) => {
   const statusMsg = await ctx.reply("⏳ Encoding and submitting proposal…");
 
   try {
-    let { data, target: fixedTarget } = encodeAction(actionId, actionArgs);
-
-    let target;
-    if (action.targetKind === "governance") {
-      target = address;
-    } else if (action.targetKind === "treasury") {
-      const { treasuryAddress } = await getDaoInfo(model, address);
-      target = treasuryAddress;
-
-      // Treasury may no longer accept calls from this DAO's own
-      // governance at all - if a GuardWrapper handover already ran
-      // (Treasury.transferGovernance(wrapper)), Treasury's own
-      // governance field now points at the wrapper, not this DAO's
-      // Governance contract. Proposing a direct call in that state
-      // would pass its vote and timelock, then fail only at execution.
-      // Checking Treasury's real, current governance address here -
-      // not assuming it's still this DAO - catches that before the
-      // proposal is even created.
-      const currentTreasuryGovernance = await publicClient.readContract({
-        address: getAddress(treasuryAddress),
-        abi: [{ type: "function", name: "governance", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] }],
-        functionName: "governance",
-      });
-
-      if (getAddress(currentTreasuryGovernance) !== getAddress(address)) {
-        // A mismatch alone doesn't prove it's a GuardWrapper - it could
-        // be any address for any reason. Only proceed with the
-        // proposeInstruction wrapping if it genuinely matches this
-        // chat's own registered wrapper; otherwise calling
-        // proposeInstruction on an unconfirmed address would likely
-        // just revert (wrong selector, no matching function) - an
-        // opaque failure discovered only at execution, not a helpful
-        // one discovered now.
-        const registeredWrapper = getChatGuardWrapper(ctx.chat.id);
-        if (!registeredWrapper || getAddress(registeredWrapper) !== getAddress(currentTreasuryGovernance)) {
-          throw new Error(
-            `Treasury's governance has changed to ${currentTreasuryGovernance}, which isn't this chat's registered guard wrapper` +
-              (registeredWrapper ? ` (${registeredWrapper})` : " (none registered)") +
-              `. Won't guess - link it first with /registerguardwrapper if that address is genuinely a GuardWrapper, or investigate if it's not.`
-          );
-        }
-        data = encodeFunctionData({
-          abi: [{ type: "function", name: "proposeInstruction", stateMutability: "nonpayable", inputs: [{ name: "target", type: "address" }, { name: "value", type: "uint256" }, { name: "data", type: "bytes" }], outputs: [{ name: "instructionId", type: "uint256" }] }],
-          functionName: "proposeInstruction",
-          args: [getAddress(treasuryAddress), 0n, data],
-        });
-        target = currentTreasuryGovernance; // confirmed to be the registered wrapper
-      }
-    } else {
-      target = fixedTarget; // supplied inline as the action's own first arg
-
-      // Same risk as Treasury, different access-control shape: token
-      // and staking-wrapper contracts are Ownable-style (owner(), not
-      // governance()), and a handover via transferOwnership() would
-      // leave them only accepting calls from whatever now holds
-      // ownership - typically a GuardWrapper. Only checked for
-      // "token"-appliesTo actions, since NFT/Guard wrapper targets
-      // aren't ordinarily handed over to a further wrapper themselves.
-      if (action.appliesTo === "token") {
-        const currentOwner = await publicClient.readContract({
-          address: target,
-          abi: [{ type: "function", name: "owner", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] }],
-          functionName: "owner",
-        });
-
-        if (getAddress(currentOwner) !== getAddress(address)) {
-          // Same verification as Treasury above - don't assume, confirm
-          // against this chat's actual registered wrapper first.
-          const registeredWrapper = getChatGuardWrapper(ctx.chat.id);
-          if (!registeredWrapper || getAddress(registeredWrapper) !== getAddress(currentOwner)) {
-            throw new Error(
-              `This token's owner has changed to ${currentOwner}, which isn't this chat's registered guard wrapper` +
-                (registeredWrapper ? ` (${registeredWrapper})` : " (none registered)") +
-                `. Won't guess - link it first with /registerguardwrapper if that address is genuinely a GuardWrapper, or investigate if it's not.`
-            );
-          }
-          data = encodeFunctionData({
-            abi: [{ type: "function", name: "proposeInstruction", stateMutability: "nonpayable", inputs: [{ name: "target", type: "address" }, { name: "value", type: "uint256" }, { name: "data", type: "bytes" }], outputs: [{ name: "instructionId", type: "uint256" }] }],
-            functionName: "proposeInstruction",
-            args: [target, 0n, data],
-          });
-          target = currentOwner; // confirmed to be the registered wrapper
-        }
-      }
-    }
+    // Shared with the Discord/Slack core - see proposalBuilder.js for the
+    // GuardWrapper handover checks this runs before anything is proposed.
+    const { target, data } = await buildActionProposal({
+      model,
+      governanceAddress: address,
+      actionId,
+      actionArgs,
+      guardWrapperAddress: getChatGuardWrapper(ctx.chat.id),
+    });
 
     await ensureGasFunded(account, true);
     const adapter = getAdapter(model);
-    const actions = [{ target: getAddress(target), value: 0n, data }];
+    const actions = [{ target, value: 0n, data }];
     const { proposalId } = await adapter.propose(client, address, actions, description);
 
     await ctx.api.editMessageText(
@@ -2377,7 +2193,6 @@ bot.command("proposemarket", async (ctx) => {
                               /vote
 //////////////////////////////////////////////////////////////*/
 
-const VOTE_CHOICES = { for: 1, against: 0, abstain: 2 };
 
 bot.command("vote", async (ctx) => {
   const address = await requireDAO(ctx);

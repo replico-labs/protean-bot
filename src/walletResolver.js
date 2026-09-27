@@ -3,8 +3,11 @@ import { deriveUserWallet, isWalletDerivationConfigured } from "./wallet.js";
 import { publicClient } from "./config.js";
 
 /**
- * Resolves a Telegram user's signing account - the KMS-backed wallet if
- * one already exists, or a freshly created one for genuinely new users.
+ * Resolves a user's signing account - the KMS-backed wallet if one
+ * already exists, or a freshly created one for genuinely new users.
+ * Keyed by (platform, platformUserId), matching walletStore.js, so a
+ * Discord or Slack user gets their own wallet; `platform` defaults to
+ * "telegram" so every existing caller behaves exactly as before.
  *
  * Deliberately does NOT silently migrate a user who already has funds
  * under the old master-seed-derived system (wallet.js) - if their old
@@ -14,17 +17,20 @@ import { publicClient } from "./config.js";
  * funds. A genuinely new user (old wallet balance is zero, the common
  * case) gets a new KMS wallet created transparently, no extra step.
  */
-export async function getOrCreateUserAccount(telegramUserId) {
+export async function getOrCreateUserAccount(platformUserId, platform = "telegram") {
   if (!isWalletStoreConfigured()) {
     throw new Error("The KMS/Supabase wallet system is not configured on this bot instance.");
   }
 
-  const existing = await findWalletRecord("telegram", telegramUserId);
+  const existing = await findWalletRecord(platform, platformUserId);
   if (existing) {
-    return getWalletAccount("telegram", telegramUserId);
+    return getWalletAccount(platform, platformUserId);
   }
 
-  if (isWalletDerivationConfigured()) {
+  // The old master-seed wallets were only ever derived from Telegram IDs,
+  // so only Telegram users can have legacy funds to migrate.
+  if (platform === "telegram" && isWalletDerivationConfigured()) {
+    const telegramUserId = platformUserId;
     const oldAccount = deriveUserWallet(telegramUserId);
     const balance = await publicClient.getBalance({ address: oldAccount.address });
     if (balance > 0n) {
@@ -35,8 +41,8 @@ export async function getOrCreateUserAccount(telegramUserId) {
     }
   }
 
-  await createWalletRecord("telegram", telegramUserId);
-  return getWalletAccount("telegram", telegramUserId);
+  await createWalletRecord(platform, platformUserId);
+  return getWalletAccount(platform, platformUserId);
 }
 
 /**
@@ -47,9 +53,9 @@ export async function getOrCreateUserAccount(telegramUserId) {
  * who's never interacted with the bot before - never creates anything,
  * unlike getOrCreateUserAccount.
  */
-export async function getUserAddress(telegramUserId) {
-  const existing = await findWalletRecord("telegram", telegramUserId);
+export async function getUserAddress(platformUserId, platform = "telegram") {
+  const existing = await findWalletRecord(platform, platformUserId);
   if (existing) return existing.address;
-  if (isWalletDerivationConfigured()) return deriveUserWallet(telegramUserId).address;
+  if (platform === "telegram" && isWalletDerivationConfigured()) return deriveUserWallet(platformUserId).address;
   throw new Error("No wallet system configured on this bot instance.");
 }

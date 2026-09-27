@@ -105,11 +105,6 @@ export const SORTITION_RANDOMNESS_SOURCE = process.env.SORTITION_RANDOMNESS_SOUR
  */
 export const SWITCHBOARD_ORACLE_ADAPTER = process.env.SWITCHBOARD_ORACLE_ADAPTER;
 
-if (!BOT_TOKEN) {
-  console.error("Missing TELEGRAM_BOT_TOKEN - copy .env.example to .env and fill it in.");
-  process.exit(1);
-}
-
 /**
  * Estimates real gas for a contract write, applies a modest, controlled
  * buffer, then submits with that as an EXPLICIT limit - rather than

@@ -88,7 +88,9 @@ export async function getInstruction(wrapperAddress, instructionId) {
     functionName: "getInstruction",
     args: [BigInt(instructionId)],
   });
-  const [target, value, data, executed, rejected, confirmations, rejections] = result;
+  // getInstruction returns one Instruction struct, which viem decodes as
+  // a named object - not a positional array.
+  const { target, value, data, executed, rejected, confirmations, rejections } = result;
   return { target, value, data, executed, rejected, confirmations, rejections };
 }
 

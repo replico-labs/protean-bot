@@ -1,0 +1,37 @@
+# Slack app manifest for the Protean DAO bot.
+# Create the app at https://api.slack.com/apps -> "Create New App" ->
+# "From an app manifest", pick your workspace, paste this, then:
+#   1. Basic Information -> App-Level Tokens -> generate one with the
+#      connections:write scope -> that's SLACK_APP_TOKEN (xapp-...).
+#   2. Install App -> Install to Workspace -> copy the Bot User OAuth
+#      Token -> that's SLACK_BOT_TOKEN (xoxb-...).
+display_information:
+  name: Protean DAO
+  description: Run an on-chain DAO from a Slack channel
+features:
+  bot_user:
+    display_name: Protean DAO
+    always_online: true
+  slash_commands:
+    - command: /protean
+      description: Protean DAO governance — try /protean help
+      usage_hint: help | register <address> [model] | proposals | vote <id> for
+      should_escape: false
+oauth_config:
+  scopes:
+    bot:
+      - commands          # the /protean slash command
+      - chat:write        # proposal notifications in channels the bot is in
+      - chat:write.public # ...and public channels it hasn't been invited to
+      - users:read        # admin check for register/unregister
+      - channels:read     # member_joined_channel events (welcome tokens)
+      - groups:read       # ...in private channels too
+settings:
+  event_subscriptions:
+    bot_events:
+      - member_joined_channel   # auto-send welcome tokens on join
+  interactivity:
+    is_enabled: false
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false

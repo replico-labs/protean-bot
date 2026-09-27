@@ -3,6 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { getAddress, parseEther, zeroHash } from "viem";
 import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer } from "../config.js";
+import { ensureAllowance } from "./common.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -17,6 +18,15 @@ const { abi: chainlinkAdapterAbi, bytecode: chainlinkAdapterBytecode } = loadAbi
 
 function contractFor(address) {
   return { address: getAddress(address), abi };
+}
+
+/** governanceToken() and one config() field - what a bond approval needs. */
+async function bondToken(gov, configField) {
+  const [token, config] = await Promise.all([
+    publicClient.readContract({ ...gov, functionName: "governanceToken" }),
+    configField ? publicClient.readContract({ ...gov, functionName: "config" }) : null,
+  ]);
+  return { token, amount: configField ? config[configField] : undefined };
 }
 
 /**
@@ -172,6 +182,9 @@ export async function proposeWithCriteria(
   measurementPeriod
 ) {
   const gov = contractFor(governanceAddress);
+  // propose() pulls the proposal bond via transferFrom - approve it first.
+  const bond = await bondToken(gov, "proposalBondAmount");
+  await ensureAllowance(client, bond.token, governanceAddress, bond.amount);
 
   const hash = await writeWithGasBuffer(client, {
     ...gov,
@@ -237,6 +250,8 @@ export async function finalizeApproval(client, governanceAddress, proposalId) {
  */
 export async function takePosition(client, governanceAddress, proposalId, side, amountWhole) {
   const gov = contractFor(governanceAddress);
+  const { token } = await bondToken(gov);
+  await ensureAllowance(client, token, governanceAddress, parseEther(String(amountWhole)));
   const hash = await writeWithGasBuffer(client, {
     ...gov,
     functionName: "takePosition",
@@ -266,6 +281,8 @@ export async function resolveViaOracle(client, governanceAddress, proposalId) {
 /** Proposes what actually happened - human-track only. `outcome`: 1 = Success, 2 = Failure (0 = Unresolved is invalid here). */
 export async function proposeResolution(client, governanceAddress, proposalId, outcome) {
   const gov = contractFor(governanceAddress);
+  const bond = await bondToken(gov, "resolutionBondAmount");
+  await ensureAllowance(client, bond.token, governanceAddress, bond.amount);
   const hash = await writeWithGasBuffer(client, {
     ...gov,
     functionName: "proposeResolution",
@@ -278,6 +295,8 @@ export async function proposeResolution(client, governanceAddress, proposalId, o
 /** Disputes a proposed resolution within its window, posting a challenge bond. Opens the adjudication vote. */
 export async function challengeResolution(client, governanceAddress, proposalId) {
   const gov = contractFor(governanceAddress);
+  const bond = await bondToken(gov, "challengeBondAmount");
+  await ensureAllowance(client, bond.token, governanceAddress, bond.amount);
   const hash = await writeWithGasBuffer(client, { ...gov, functionName: "challengeResolution", args: [BigInt(proposalId)] });
   await publicClient.waitForTransactionReceipt({ hash });
   return { hash };

@@ -5,7 +5,13 @@ import { getAllRegisteredDaos } from "./db.js";
 import { publicClient } from "./config.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const STATE_PATH = path.join(__dirname, "..", "data", "eventListenerState.json");
+// One state file per platform process: Telegram keeps the original file
+// name, and Discord/Slack (separate processes) each get their own, so two
+// processes never overwrite each other's progress.
+function statePathFor(platform) {
+  const name = platform === "telegram" ? "eventListenerState.json" : `eventListenerState.${platform}.json`;
+  return path.join(__dirname, "..", "data", name);
+}
 
 // Every governance model uses its own separate ABI file, but most share
 // the same *names* for their core lifecycle events (each was built
@@ -51,20 +57,20 @@ function loadAbi(name) {
   }
 }
 
-function ensureStateFile() {
-  const dir = path.dirname(STATE_PATH);
+function ensureStateFile(statePath) {
+  const dir = path.dirname(statePath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  if (!fs.existsSync(STATE_PATH)) fs.writeFileSync(STATE_PATH, JSON.stringify({}, null, 2));
+  if (!fs.existsSync(statePath)) fs.writeFileSync(statePath, JSON.stringify({}, null, 2));
 }
 
-function readState() {
-  ensureStateFile();
-  return JSON.parse(fs.readFileSync(STATE_PATH, "utf8"));
+function readState(statePath) {
+  ensureStateFile(statePath);
+  return JSON.parse(fs.readFileSync(statePath, "utf8"));
 }
 
-function writeState(state) {
-  ensureStateFile();
-  fs.writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
+function writeState(statePath, state) {
+  ensureStateFile(statePath);
+  fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
 }
 
 /**
@@ -115,7 +121,7 @@ function short(address) {
 // same oversized range gets recomputed on the next poll too.
 const MAX_BLOCK_RANGE = 90n; // kept safely under the 100 limit, not flush against it
 
-async function checkDao(bot, dao, currentBlock, state) {
+async function checkDao(notify, dao, currentBlock, state) {
   const abiName = modelToAbiName(dao.model);
   if (!abiName) return;
 
@@ -157,7 +163,7 @@ async function checkDao(bot, dao, currentBlock, state) {
       for (const log of logs) {
         const message = formatEvent(log.eventName, log.args ?? {});
         try {
-          await bot.api.sendMessage(dao.chatId, message, { parse_mode: "Markdown" });
+          await notify(dao.chatId, message);
         } catch (sendErr) {
           console.error(`Event listener: couldn't notify chat ${dao.chatId}:`, sendErr.message);
         }
@@ -174,30 +180,39 @@ async function checkDao(bot, dao, currentBlock, state) {
 }
 
 /**
- * Starts the polling loop. Call once at bot startup, alongside the
- * sortition keeper - same pattern, a separate background interval that
- * runs independently of any command a user types.
+ * Starts the polling loop. Call once at startup of each platform process.
+ *
+ * `target` is either a grammY bot (Telegram, the original behavior) or
+ * `{ platform, notify }`, where notify(chatId, markdownText) posts to one
+ * channel on that platform. Only DAOs linked on that platform are
+ * watched, so each platform process notifies its own channels.
  */
-export function startEventListener(bot, pollIntervalMs = 20_000) {
+export function startEventListener(target, pollIntervalMs = 20_000) {
+  const { platform, notify } =
+    target && target.api && typeof target.api.sendMessage === "function"
+      ? { platform: "telegram", notify: (chatId, text) => target.api.sendMessage(chatId, text, { parse_mode: "Markdown" }) }
+      : target;
+  const statePath = statePathFor(platform);
+
   async function pollOnce() {
     try {
-      const daos = getAllRegisteredDaos();
+      const daos = getAllRegisteredDaos().filter((dao) => dao.platform === platform);
       if (daos.length === 0) return;
 
       const currentBlock = await publicClient.getBlockNumber();
-      const state = readState();
+      const state = readState(statePath);
 
       for (const dao of daos) {
-        await checkDao(bot, dao, currentBlock, state);
+        await checkDao(notify, dao, currentBlock, state);
       }
 
-      writeState(state);
+      writeState(statePath, state);
     } catch (err) {
       console.error("Event listener: poll cycle failed:", err.message);
     }
   }
 
-  console.log(`Event listener starting - polling every ${pollIntervalMs / 1000}s`);
+  console.log(`Event listener (${platform}) starting - polling every ${pollIntervalMs / 1000}s`);
   pollOnce();
   setInterval(pollOnce, pollIntervalMs);
 }

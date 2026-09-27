@@ -87,7 +87,7 @@ npm start
 | `FACTORY_ADDRESS` + `<MODEL>_FACTORY_ADDRESS` | `/createdao` per model | a model with no address set can't be created, but can still be `/register`ed |
 | `SORTITION_RANDOMNESS_SOURCE` | `/createdao ... sortition` | deployed `SwitchboardRandomnessAdapter` |
 | `SWITCHBOARD_ORACLE_ADAPTER` | `switchboard` shorthand in `/proposecriteria` | deployed `SwitchboardPriceFeedAdapter` (optional) |
-| `SWITCHBOARD_ADDRESS` | the sortition keeper | Switchboard's own proxy, not our adapter |
+| `SWITCHBOARD_ADDRESS` | both keepers | Switchboard's own proxy, not our adapter |
 | `KMS_KEY_ID`, `AWS_REGION`, AWS credentials | KMS wallets | symmetric KMS key |
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | KMS wallets | service_role key — RLS allows nothing else |
 | `MASTER_WALLET_SEED` | legacy wallets only | keep set only while old wallets still hold funds |
@@ -103,6 +103,18 @@ npm run keeper:sortition
 
 Run it as its own long-lived process alongside the bot (a second Railway service, pm2, systemd). It polls every 30 seconds and pays gas from the operator wallet.
 
+### Running the Switchboard price-feed keeper
+
+Sowellian oracle-track proposals resolve with `resolveViaOracle()`, which rejects feed data older than the DAO's `maxOracleStaleness`. Switchboard feeds are pull-based, so nothing refreshes them on its own. This keeper finds proposals whose measurement period has ended and whose oracle is the Switchboard adapter, pushes a fresh signed update from Crossbar, and resolves them:
+
+```bash
+npm run keeper:switchboard
+```
+
+It polls every 60 seconds, skips Chainlink-backed proposals, and pays gas plus Switchboard's per-update fee from the operator wallet. Optional: `SWITCHBOARD_FEED_IDS` (comma-separated feed IDs to keep fresh on a timer), `SWITCHBOARD_REFRESH_SECONDS` (default 300), `SWITCHBOARD_NETWORK` (`testnet` default, or `mainnet`), `CROSSBAR_URL`.
+
+Both keepers only need `OPERATOR_PRIVATE_KEY`, `SWITCHBOARD_ADDRESS` and `RPC_URL`; neither needs `TELEGRAM_BOT_TOKEN`.
+
 ## Security — read before deploying anywhere real
 
 - **Never paste private keys into chats, commands, or shell history.** Use `export PRIVATE_KEY=...` and reference `$PRIVATE_KEY`. Any key that has appeared in plaintext should be treated as burned.
@@ -110,6 +122,24 @@ Run it as its own long-lived process alongside the bot (a second Railway service
 - **KMS IAM scope.** The bot's AWS credentials should only be able to `Decrypt` and `GenerateDataKey` on the one key — not manage or delete it.
 - **`SUPABASE_SERVICE_ROLE_KEY`** bypasses Row Level Security by design. Treat it like a database root password.
 - **`MASTER_WALLET_SEED`** (legacy) can derive every old wallet's key. Remove it once no old wallet holds funds.
+
+## Discord and Slack
+
+Every Telegram command also runs on Discord and Slack, except `/start` (use `help`) and `/migratewallet` (legacy seed wallets only ever existed for Telegram IDs). Each platform runs as its own process sharing the same `data/` volume, wallet store and chain config as the Telegram bot. Neither needs `TELEGRAM_BOT_TOKEN`.
+
+```bash
+npm run discord   # DISCORD_BOT_TOKEN, DISCORD_APPLICATION_ID, optional DISCORD_GUILD_ID
+npm run slack     # SLACK_BOT_TOKEN, SLACK_APP_TOKEN (Socket Mode - no public URL needed)
+```
+
+- **Discord** registers 97 native slash commands on startup (Discord allows 100 per bot). `/register` and `/unregister` default to members with *Manage Server*. Long replies are split across messages.
+- **Slack** uses one command, `/protean <subcommand>` (e.g. `/protean vote 3 for`). Create the app from [`docs/slack-app-manifest.yml`](docs/slack-app-manifest.yml). Joining a channel with a welcome distributor sends the newcomer their tokens, as on Telegram.
+- **Privacy:** anything Telegram sends by DM (bets, confidential balances, rewards, handover proposals, the treasury address from `contribute`) is shown only to the caller: an ephemeral reply on Discord (which also hides the options typed), an ephemeral response on Slack. So `back` takes its opportunity and amount directly - they never appear in the channel.
+- One channel links to one DAO. Each user gets their own wallet per platform.
+- **Link vs creator:** whoever runs `register` becomes the channel's *linker* (can relink/unlink); whoever runs `createdao`/`createboarddao` is the DAO's *creator* (can also `tip`, deploy wrappers and distributors). Registering an existing DAO never grants creator rights. Server/workspace admins can always relink.
+- Notifications for proposal created/queued/executed/cancelled post to linked channels.
+
+`help` shows only the commands that apply to the channel's DAO model and linked wrappers/markets. Command logic lives in `src/platforms/commands/` (grouped as core, setup, tokens, models, sowellian, markets, opportunity); `discord.js` and `slack.js` only handle transport.
 
 ## Known limitations
 
@@ -133,14 +163,14 @@ A reasonable first live test: `/wallet` → `/createdao` → `/stake` → `/prop
 
 - **Transaction compiler** — structured actions (transfer, swap, approve) compiled to calldata, wrapped through `Treasury.execute()`
 - **Event listener** — proactive chat messages for on-chain events; everything today is pull-based
-- **Discord and Slack adapters**
 - **`/deploydistributor`**, in-chat tipping, and group-wide gas sponsorship with spending limits
 
 ## Architecture
 
 ```
 src/
-├── index.js              command handlers, model-aware /help
+├── index.js              Telegram command handlers, model-aware /help
+├── platforms/            Discord + Slack front-ends over a shared command core
 ├── config.js             chain, viem clients, operator wallet, factory + oracle addresses
 ├── contracts.js          original-model reads/writes, gas top-ups
 ├── db.js                 chat ↔ DAO / model / market links (flat JSON — swap before scaling)
@@ -150,7 +180,7 @@ src/
 ├── wallet.js             legacy seed-derived wallets
 ├── governance/           one adapter per model + shared helpers (common.js, index.js registry)
 ├── opportunityMarket/    Sepolia config, market actions, FHE encryption, user + public decrypt
-├── keepers/              standalone sortition randomness keeper
+├── keepers/              standalone Switchboard keepers (sortition randomness, Sowellian price feeds)
 └── abis/                 compiled ABIs (and adapter bytecode for on-demand deployment)
 supabase/schema.sql       wallets table, RLS enabled
 ```
