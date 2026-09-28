@@ -23,6 +23,26 @@ for (const n of only) if (!NETWORK_IDS.includes(n)) throw new Error(`Unknown net
 
 const getter = (name, type = "address") => [{ type: "function", name, stateMutability: "view", inputs: [], outputs: [{ type }] }];
 
+/**
+ * Public RPCs (Base's especially) refuse or rate-limit bursts of reads, so
+ * each network's client retries a failed request a few times with backoff
+ * before a check is counted as failed.
+ */
+function withRetry(client) {
+  const retry = (fn) => async (...args) => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await fn(...args);
+      } catch (err) {
+        const rpcError = /RPC Request failed|HTTP request failed|rate limit|429|timed out|fetch failed/i.test(`${err.shortMessage || ""} ${err.message}`);
+        if (!rpcError || attempt >= 4) throw err;
+        await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+      }
+    }
+  };
+  return { ...client, getCode: retry(client.getCode), readContract: retry(client.readContract), call: retry(client.call), simulateContract: retry(client.simulateContract) };
+}
+
 let failures = 0;
 let checked = 0;
 const fail = (msg) => {
@@ -33,7 +53,8 @@ const fail = (msg) => {
 for (const mod of allIntegrationModules()) {
   for (const [networkId, deployment] of Object.entries(mod.protocol.deployments)) {
     if (only.length && !only.includes(networkId)) continue;
-    const network = getNetwork(networkId);
+    const base = getNetwork(networkId);
+    const network = { ...base, publicClient: withRetry(base.publicClient) };
     console.log(`\n${mod.protocol.name} on ${network.chain.name}${deployment.warning ? "  (⚠ " + deployment.warning + ")" : ""}`);
     const addresses = Object.fromEntries(Object.entries(deployment).filter(([, v]) => typeof v === "string" && isAddress(v, { strict: false })));
 

@@ -1,4 +1,4 @@
-import { encodeFunctionData, formatUnits, getAddress, parseUnits } from "viem";
+import { encodeFunctionData, erc20Abi, formatUnits, getAddress, parseUnits } from "viem";
 import { loadIntegrationAbi } from "./abis/index.js";
 import { IntegrationError, checksummed, call, approveCall, requireCode } from "./common.js";
 
@@ -43,10 +43,13 @@ export const protocol = {
     },
     "monad-testnet": {
       exchange: "0x1964c32f0be608e7d29302aff5e61268e72080cc",
-      collateral: "0xdf5b718d8fcc173335185a2a1513ee8151e3c027",
-      collateralSymbol: "USD",
+      // The api-docs README lists an older testnet collateral token; this is the one the exchange itself reports.
+      collateral: "0xa9012a055bd4e0edff8ce09f960291c09d5322dc",
       markets: { BTC: 16, ETH: 32, SOL: 48, MON: 64, ZEC: 256 },
-      sources: ["PerplFoundation/api-docs README (Network Configuration, Markets)"],
+      sources: [
+        "PerplFoundation/api-docs README (Network Configuration, Markets)",
+        "collateral: the exchange's own getExchangeInfo().collateralToken on Monad testnet (verify:integrations, 2026-09-28)",
+      ],
     },
   },
 };
@@ -72,10 +75,14 @@ async function exchangeState(ctx, d) {
   if (await read(ctx, d, "isHalted")) throw new IntegrationError("Perpl's exchange is halted right now.");
   const info = await read(ctx, d, "getExchangeInfo");
   const decimals = Number(info.collateralDecimals ?? info[3]);
+  // Never approve a token the exchange doesn't actually take as collateral.
+  const collateral = getAddress(info.collateralToken ?? info[4]);
+  if (collateral !== d.collateral) throw new IntegrationError(`Perpl's exchange now takes ${collateral} as collateral, not the ${d.collateral} the bot has pinned - refusing until that's re-verified.`);
+  const symbol = await ctx.publicClient.readContract({ address: collateral, abi: erc20Abi, functionName: "symbol" }).catch(() => d.collateralSymbol ?? "collateral");
   const account = await read(ctx, d, "getAccountByAddr", [ctx.treasury]);
   const whitelisting = await read(ctx, d, "whitelistingEnabled");
   const whitelisted = whitelisting ? await read(ctx, d, "whitelisted", [ctx.treasury]) : true;
-  return { decimals, accountId: account.accountId, balance: account.balanceCNS, whitelisted };
+  return { decimals, symbol, accountId: account.accountId, balance: account.balanceCNS, whitelisted };
 }
 
 /** Parse a human decimal into `decimals` places, refusing extra precision (the contract would silently truncate it). */
@@ -146,7 +153,7 @@ export const actions = [
       const opening = state.accountId === 0n;
       if (opening) {
         const min = await read(ctx, d, "getMinAccountOpenCNS");
-        if (amount < min) throw new IntegrationError(`Opening a Perpl account needs at least ${formatUnits(min, state.decimals)} ${d.collateralSymbol}.`);
+        if (amount < min) throw new IntegrationError(`Opening a Perpl account needs at least ${formatUnits(min, state.decimals)} ${state.symbol}.`);
       }
       return {
         calls: [
@@ -154,7 +161,7 @@ export const actions = [
           call(d.exchange, encodeFunctionData({ abi: ABI, functionName: opening ? "createAccount" : "depositCollateral", args: [amount] }), { note: opening ? "open account" : "deposit" }),
         ],
         summary:
-          `${opening ? "Open a Perpl account for the Treasury with" : "Deposit"} ${formatUnits(amount, state.decimals)} ${d.collateralSymbol} ${opening ? "" : "into the Treasury's Perpl account "}as trading collateral.`.replace(/  +/g, " ") +
+          `${opening ? "Open a Perpl account for the Treasury with" : "Deposit"} ${formatUnits(amount, state.decimals)} ${state.symbol} ${opening ? "" : "into the Treasury's Perpl account "}as trading collateral.`.replace(/  +/g, " ") +
           whitelistNote(state),
       };
     },
@@ -169,10 +176,10 @@ export const actions = [
       const state = await exchangeState(ctx, d);
       if (state.accountId === 0n) throw new IntegrationError("The Treasury has no Perpl account yet.");
       const amount = scaled(ctx.args[0], state.decimals, "Amount");
-      if (amount > state.balance) throw new IntegrationError(`The Treasury's Perpl account has ${formatUnits(state.balance, state.decimals)} ${d.collateralSymbol} free.`);
+      if (amount > state.balance) throw new IntegrationError(`The Treasury's Perpl account has ${formatUnits(state.balance, state.decimals)} ${state.symbol} free.`);
       return {
         calls: [call(d.exchange, encodeFunctionData({ abi: ABI, functionName: "withdrawCollateral", args: [amount] }), { note: "withdraw" })],
-        summary: `Withdraw ${formatUnits(amount, state.decimals)} ${d.collateralSymbol} from the Treasury's Perpl account to the Treasury.`,
+        summary: `Withdraw ${formatUnits(amount, state.decimals)} ${state.symbol} from the Treasury's Perpl account to the Treasury.`,
       };
     },
   },
@@ -201,7 +208,7 @@ export const actions = [
         summary:
           `Open a ${ctx.options.leverage ?? "1"}x ${side} of ${ctx.args[2]} ${m.symbol} on Perpl at ${ctx.args[3]} or better ` +
           `(immediate-or-cancel; unfilled size is cancelled). Margin comes from the Treasury's Perpl balance, ` +
-          `now ${formatUnits(state.balance, state.decimals)} ${d.collateralSymbol}.` + whitelistNote(state),
+          `now ${formatUnits(state.balance, state.decimals)} ${state.symbol}.` + whitelistNote(state),
       };
     },
   },

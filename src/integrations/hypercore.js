@@ -72,12 +72,16 @@ export const protocol = {
   },
 };
 
-/** verify-integrations: HyperCore's own precompiles must agree - token 0 is linked to our USDC, the HYPE index is HYPE. */
+/**
+ * verify-integrations: HyperCore's own precompiles must agree. USDC (token 0)
+ * is linked on Core to Circle's CoreDepositWallet, not to the USDC ERC20 -
+ * so that link confirms the deposit wallet; the HYPE index must be HYPE.
+ */
 export async function verify(publicClient, d) {
   const ctx = { publicClient };
   const problems = [];
   const usdc = await precompile(ctx, PRECOMPILE.tokenInfo, [{ type: "uint64" }], [0n], TOKEN_INFO);
-  if (getAddress(usdc.evmContract) !== getAddress(d.usdc)) problems.push(`HyperCore token 0 (${usdc.name}) is linked to ${usdc.evmContract}, not USDC ${getAddress(d.usdc)}`);
+  if (getAddress(usdc.evmContract) !== getAddress(d.coreDepositWallet)) problems.push(`HyperCore token 0 (${usdc.name}) is linked to ${usdc.evmContract}, not the CoreDepositWallet ${getAddress(d.coreDepositWallet)}`);
   const hype = await precompile(ctx, PRECOMPILE.tokenInfo, [{ type: "uint64" }], [BigInt(d.hypeTokenIndex)], TOKEN_INFO);
   if (hype.name !== "HYPE") problems.push(`HyperCore token ${d.hypeTokenIndex} is "${hype.name}", not HYPE`);
   return problems;
