@@ -241,36 +241,85 @@ export async function getMarketAnalytics(client, marketAddress) {
       functionName: "opportunities",
       args: [BigInt(id)],
     });
-    perOpportunity.set(id, { id, lister, metadataURI, totalStaked: 0n, backers: new Set() });
+    perOpportunity.set(id, { id, lister, metadataURI });
   }
 
+  return summarizeBets(bets, [...perOpportunity.values()]);
+}
+
+/** Rounded bigint division; 0 when there's nothing to divide by. */
+function roundedDiv(a, b) {
+  return b === 0n ? 0n : (a * 2n + b) / (2n * b);
+}
+
+function averageOf(total, count) {
+  return roundedDiv(total, BigInt(count));
+}
+
+/**
+ * Pure summary of decrypted bets, split out so it can be tested without
+ * a chain or the relayer. `opportunities` are { id, lister, metadataURI }.
+ *
+ * A bet whose amount decrypts to 0 is one back() zeroed because the
+ * backer's balance was too low - it's counted separately and left out of
+ * every average, so failed bets don't drag the averages down.
+ */
+export function summarizeBets(bets, opportunities) {
+  const perOpportunity = new Map(
+    opportunities.map((o) => [o.id, { ...o, totalStaked: 0n, betCount: 0, largestBet: 0n, backers: new Set() }])
+  );
+
   let totalStakedOverall = 0n;
+  let fundedBets = 0;
+  let zeroBets = 0;
+  let unmatchedBets = 0;
+  let largestBet = 0n;
   const allBettors = new Set();
   for (const bet of bets) {
-    const targetId = Number(bet.target);
-    const entry = perOpportunity.get(targetId);
-    // A bet's target can decrypt to an id outside the current
-    // opportunity list (e.g. one that didn't exist yet, or a
-    // corrupted/zeroed decrypt) - skip rather than crash the whole
-    // report over one bad entry.
-    if (entry) {
-      entry.totalStaked += bet.amount;
-      entry.backers.add(bet.bettor);
-    }
-    totalStakedOverall += bet.amount;
+    const amount = BigInt(bet.amount);
     allBettors.add(bet.bettor);
+    if (amount === 0n) {
+      zeroBets++;
+      continue;
+    }
+    fundedBets++;
+    totalStakedOverall += amount;
+    if (amount > largestBet) largestBet = amount;
+    // A bet's target can decrypt to an id outside the current
+    // opportunity list (e.g. one that didn't exist yet) - it still
+    // counts toward the overall figures, just not any opportunity's.
+    const entry = perOpportunity.get(Number(bet.target));
+    if (!entry) {
+      unmatchedBets++;
+      continue;
+    }
+    entry.totalStaked += amount;
+    entry.betCount++;
+    entry.backers.add(bet.bettor);
+    if (amount > entry.largestBet) entry.largestBet = amount;
   }
 
   return {
     totalBets: bets.length,
+    fundedBets,
+    zeroBets,
+    unmatchedBets,
     totalStakedOverall,
     totalUniqueBettors: allBettors.size,
+    averageBet: averageOf(totalStakedOverall, fundedBets),
+    averagePerBettor: averageOf(totalStakedOverall, allBettors.size),
+    largestBet,
     opportunities: [...perOpportunity.values()].map((o) => ({
       id: o.id,
       lister: o.lister,
       metadataURI: o.metadataURI,
       totalStaked: o.totalStaked,
+      betCount: o.betCount,
       backerCount: o.backers.size,
+      averageBet: averageOf(o.totalStaked, o.betCount),
+      largestBet: o.largestBet,
+      // basis points of everything staked, so 1234 = 12.34%
+      shareBps: Number(roundedDiv(o.totalStaked * 10000n, totalStakedOverall)),
     })),
   };
 }

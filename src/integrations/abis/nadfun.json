@@ -1,0 +1,170 @@
+{
+  "_source": "@nadfun/sdk@0.4.3 src/abis (router.ts routerAbi + bondingCurveRouterAbi, lens.ts lensAbi) - Nad.fun official SDK. Do not hand-edit.",
+  "router": [
+    {
+      "type": "function",
+      "name": "buy",
+      "inputs": [
+        {
+          "name": "params",
+          "type": "tuple",
+          "components": [
+            {
+              "name": "amountOutMin",
+              "type": "uint256"
+            },
+            {
+              "name": "token",
+              "type": "address"
+            },
+            {
+              "name": "to",
+              "type": "address"
+            },
+            {
+              "name": "deadline",
+              "type": "uint256"
+            }
+          ]
+        }
+      ],
+      "outputs": [
+        {
+          "name": "amountOut",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "payable"
+    },
+    {
+      "type": "function",
+      "name": "sell",
+      "inputs": [
+        {
+          "name": "params",
+          "type": "tuple",
+          "components": [
+            {
+              "name": "amountIn",
+              "type": "uint256"
+            },
+            {
+              "name": "amountOutMin",
+              "type": "uint256"
+            },
+            {
+              "name": "token",
+              "type": "address"
+            },
+            {
+              "name": "to",
+              "type": "address"
+            },
+            {
+              "name": "deadline",
+              "type": "uint256"
+            }
+          ]
+        }
+      ],
+      "outputs": [
+        {
+          "name": "amountOut",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    }
+  ],
+  "bondingCurveRouter": [
+    {
+      "type": "function",
+      "name": "curve",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "wMon",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view"
+    }
+  ],
+  "lens": [
+    {
+      "type": "function",
+      "name": "getAmountOut",
+      "inputs": [
+        {
+          "name": "_token",
+          "type": "address"
+        },
+        {
+          "name": "_amountIn",
+          "type": "uint256"
+        },
+        {
+          "name": "_isBuy",
+          "type": "bool"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "router",
+          "type": "address"
+        },
+        {
+          "name": "amountOut",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "isGraduated",
+      "inputs": [
+        {
+          "name": "_token",
+          "type": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "isGraduated",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "isLocked",
+      "inputs": [
+        {
+          "name": "_token",
+          "type": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "isLocked",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view"
+    }
+  ]
+}

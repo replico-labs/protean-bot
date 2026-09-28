@@ -55,6 +55,7 @@ const CORE_META = {
   proposal: ["The DAO", "<id>"],
   listactions: ["Proposing", ""],
   proposeaction: ["Proposing", "<actionId> <args...> <description>"],
+  actioninfo: ["Proposing", "<actionId>"],
   propose: ["Proposing", "<target> <valueWei> <data> <description>"],
   vote: ["Deciding", "<id> for|against|abstain [reason]"],
   queue: ["Deciding", "<id>"],

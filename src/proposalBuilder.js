@@ -1,6 +1,8 @@
 import { encodeFunctionData, getAddress } from "viem";
 import { publicClient } from "./config.js";
 import { getAction, encodeAction } from "./actionLibrary.js";
+import { getIntegrationAction, parseIntegrationWords, integrationUsage, IntegrationError } from "./integrations/index.js";
+import { currentNetwork } from "./networks.js";
 import { getDaoInfo, hasToken } from "./governance/common.js";
 import { getAdapter } from "./governance/index.js";
 
@@ -77,30 +79,8 @@ export async function buildActionProposal({ model, governanceAddress, actionId, 
   if (action.targetKind === "governance") {
     target = governanceAddress;
   } else if (action.targetKind === "treasury") {
-    const { treasuryAddress } = await daoInfoFor(model, governanceAddress);
-    target = treasuryAddress;
-
-    const currentTreasuryGovernance = await publicClient.readContract({
-      address: getAddress(treasuryAddress),
-      abi: [{ type: "function", name: "governance", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] }],
-      functionName: "governance",
-    });
-
-    if (getAddress(currentTreasuryGovernance) !== getAddress(governanceAddress)) {
-      if (!guardWrapperAddress || getAddress(guardWrapperAddress) !== getAddress(currentTreasuryGovernance)) {
-        throw new Error(
-          `Treasury's governance has changed to ${currentTreasuryGovernance}, which isn't this chat's registered guard wrapper` +
-            (guardWrapperAddress ? ` (${guardWrapperAddress})` : " (none registered)") +
-            `. Won't guess - link it first with /registerguardwrapper if that address is genuinely a GuardWrapper, or investigate if it's not.`
-        );
-      }
-      data = encodeFunctionData({
-        abi: PROPOSE_INSTRUCTION_ABI,
-        functionName: "proposeInstruction",
-        args: [getAddress(treasuryAddress), 0n, data],
-      });
-      target = currentTreasuryGovernance; // confirmed to be the registered wrapper
-    }
+    const route = await treasuryRoute({ model, governanceAddress, guardWrapperAddress });
+    ({ target, data } = route.wrap(data));
   } else {
     target = fixedTarget; // supplied inline as the action's own first arg
 
@@ -133,6 +113,111 @@ export async function buildActionProposal({ model, governanceAddress, actionId, 
   }
 
   return { target: getAddress(target), data };
+}
+
+/**
+ * Where a proposal must send a Treasury call. Normally straight to the
+ * Treasury; after a GuardWrapper handover (Treasury.transferGovernance)
+ * the Treasury only accepts the wrapper, so the call is wrapped in
+ * proposeInstruction() - but only if the Treasury's governance is
+ * exactly this chat's registered guard wrapper. Any other mismatch
+ * throws rather than guessing.
+ */
+async function treasuryRoute({ model, governanceAddress, guardWrapperAddress }) {
+  const { treasuryAddress } = await daoInfoFor(model, governanceAddress);
+  const treasury = getAddress(treasuryAddress);
+  const currentTreasuryGovernance = await publicClient.readContract({
+    address: treasury,
+    abi: [{ type: "function", name: "governance", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] }],
+    functionName: "governance",
+  });
+
+  if (getAddress(currentTreasuryGovernance) === getAddress(governanceAddress)) {
+    return { treasury, guarded: false, wrap: (data) => ({ target: treasury, data }) };
+  }
+  if (!guardWrapperAddress || getAddress(guardWrapperAddress) !== getAddress(currentTreasuryGovernance)) {
+    throw new Error(
+      `Treasury's governance has changed to ${currentTreasuryGovernance}, which isn't this chat's registered guard wrapper` +
+        (guardWrapperAddress ? ` (${guardWrapperAddress})` : " (none registered)") +
+        `. Won't guess - link it first with /registerguardwrapper if that address is genuinely a GuardWrapper, or investigate if it's not.`
+    );
+  }
+  const wrapper = getAddress(currentTreasuryGovernance); // confirmed to be the registered wrapper
+  return {
+    treasury,
+    guarded: true,
+    wrap: (data) => ({
+      target: wrapper,
+      data: encodeFunctionData({ abi: PROPOSE_INSTRUCTION_ABI, functionName: "proposeInstruction", args: [treasury, 0n, data] }),
+    }),
+  };
+}
+
+const EXECUTE_ABI = [
+  {
+    type: "function",
+    name: "execute",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "target", type: "address" },
+      { name: "value", type: "uint256" },
+      { name: "data", type: "bytes" },
+    ],
+    outputs: [{ name: "", type: "bytes" }],
+  },
+];
+
+/**
+ * An external-protocol action (src/integrations) as proposal actions.
+ * The action's build() returns ordered calls made by the Treasury (or,
+ * for NFT custody, the chat's NFT wrapper); each becomes one proposal
+ * action - Treasury.execute(target, value, data) - so the protocol sees
+ * the Treasury as the caller and the Treasury's own balance pays any
+ * value. Runs on the chat's network (the caller's runOnNetwork context).
+ *
+ * `words` are the command words after the action id: positional args,
+ * then name=value options, then the description.
+ * Returns { actions, summary, description, guarded }.
+ */
+export async function buildIntegrationProposal({ model, governanceAddress, actionId, words, guardWrapperAddress, nftWrapperAddress, lookupTicker }) {
+  const action = getIntegrationAction(actionId);
+  if (!action) throw new Error(`Unknown action "${actionId}"`);
+  const network = currentNetwork();
+  if (!action.protocol.deployments[network.id]) {
+    throw new IntegrationError(`${action.protocol.name} isn't available on ${network.chain.name}.`);
+  }
+
+  const { args, options, description } = parseIntegrationWords(action, words);
+  if (args.length !== action.usage.length || args.some((a) => /^[A-Za-z][A-Za-z0-9]*=/.test(a))) {
+    throw new IntegrationError(`Usage: ${actionId} ${integrationUsage(action)} <description>`);
+  }
+
+  const route = await treasuryRoute({ model, governanceAddress, guardWrapperAddress });
+  const ctx = {
+    network,
+    publicClient,
+    treasury: route.treasury,
+    nftWrapper: nftWrapperAddress ? getAddress(nftWrapperAddress) : null,
+    args,
+    options,
+    lookupTicker,
+  };
+  const { calls, summary } = await action.build(ctx);
+
+  const actions = calls.map((c) => {
+    const executeData = encodeFunctionData({ abi: EXECUTE_ABI, functionName: "execute", args: [c.target, c.value, c.data] });
+    if (c.via === "nftWrapper") {
+      if (!ctx.nftWrapper) throw new IntegrationError("This action needs the DAO's NFT wrapper - deploy one with /deploynftwrapper first.");
+      // A call to the wrapper itself (approveOrderHash etc.) goes straight
+      // to it; anything else is made by the wrapper via its execute().
+      return c.target === ctx.nftWrapper
+        ? { target: ctx.nftWrapper, value: 0n, data: c.data }
+        : { target: ctx.nftWrapper, value: 0n, data: executeData };
+    }
+    return { ...route.wrap(executeData), value: 0n };
+  });
+
+  return { actions, summary, description, guarded: route.guarded };
 }
 
 const HANDOVER_ABI = [

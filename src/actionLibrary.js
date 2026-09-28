@@ -320,7 +320,12 @@ export const ACTION_LIBRARY = [
   //////////////////////////////////////////////////////////////*/
   {
     id: "nftwrapper-approve-order-hash",
-    label: "Approve an NFT marketplace order hash",
+    // Seaport checks a contract's signature against the order's EIP-712
+    // digest (keccak256(0x1901 || domainSeparator || orderHash)), not the
+    // raw order hash - so that digest is what has to be approved here.
+    // For OpenSea, the opensea-list action does all of this (via Seaport
+    // validate(), no approval needed) and is the easier route.
+    label: "Approve a marketplace order's EIP-712 digest for EIP-1271 (Seaport: not the raw order hash - prefer opensea-list)",
     appliesTo: "nftWrapper",
     targetKind: "fixedAddress",
     functionName: "approveOrderHash",
@@ -329,7 +334,7 @@ export const ACTION_LIBRARY = [
   },
   {
     id: "nftwrapper-revoke-order-hash",
-    label: "Revoke an NFT marketplace order hash",
+    label: "Revoke an approved marketplace order digest",
     appliesTo: "nftWrapper",
     targetKind: "fixedAddress",
     functionName: "revokeOrderHash",

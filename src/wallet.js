@@ -5,7 +5,7 @@ const MASTER_WALLET_SEED = process.env.MASTER_WALLET_SEED;
 
 if (!MASTER_WALLET_SEED) {
   console.warn(
-    "MASTER_WALLET_SEED not set - /wallet, /stake, /propose, /vote, and welcome distribution will not work until it is."
+    "MASTER_WALLET_SEED not set - fine unless users still have funds in the old seed-derived wallets: /migratewallet needs it. Wallets themselves are KMS-backed."
   );
 } else if (MASTER_WALLET_SEED.length < 32) {
   console.warn(

@@ -4,6 +4,7 @@ import { fileURLToPath } from "url";
 import { getAllRegisteredDaos } from "./db.js";
 import { publicClient } from "./config.js";
 import { runOnNetwork } from "./networks.js";
+import { readJson, writeJsonAtomic } from "./jsonFile.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // One state file per platform process: Telegram keeps the original file
@@ -58,20 +59,12 @@ function loadAbi(name) {
   }
 }
 
-function ensureStateFile(statePath) {
-  const dir = path.dirname(statePath);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  if (!fs.existsSync(statePath)) fs.writeFileSync(statePath, JSON.stringify({}, null, 2));
-}
-
 function readState(statePath) {
-  ensureStateFile(statePath);
-  return JSON.parse(fs.readFileSync(statePath, "utf8"));
+  return readJson(statePath, {});
 }
 
 function writeState(statePath, state) {
-  ensureStateFile(statePath);
-  fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
+  writeJsonAtomic(statePath, state);
 }
 
 /**

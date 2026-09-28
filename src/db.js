@@ -1,25 +1,24 @@
-import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { resolveNetworkId, currentNetwork, DEFAULT_NETWORK } from "./networks.js";
+import { readJson, updateJson } from "./jsonFile.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = path.join(__dirname, "..", "data", "chats.json");
 
-function ensureDbFile() {
-  const dir = path.dirname(DB_PATH);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  if (!fs.existsSync(DB_PATH)) fs.writeFileSync(DB_PATH, JSON.stringify({}, null, 2));
-}
-
 function readDb() {
-  ensureDbFile();
-  return JSON.parse(fs.readFileSync(DB_PATH, "utf8"));
+  return readJson(DB_PATH, {});
 }
 
-function writeDb(data) {
-  ensureDbFile();
-  fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2));
+/**
+ * Every change goes through here: the Telegram, Discord and Slack bots
+ * (and the keepers) are separate processes sharing this one file, so a
+ * change re-reads the file under a lock and writes it back atomically -
+ * otherwise two bots saving at the same moment would lose one's change.
+ * `mutate` edits `db` in place; returning false skips the write.
+ */
+function updateDb(mutate) {
+  updateJson(DB_PATH, {}, mutate);
 }
 
 /**
@@ -62,21 +61,21 @@ function key(chatId, platform) {
  * "monad", which resolveNetworkId reads as Monad testnet.
  */
 export function registerChat(chatId, governanceAddress, model = "tokenWeighted", platform = "telegram", creatorPlatformUserId = undefined, network = currentNetwork().id) {
-  const db = readDb();
-  const k = key(chatId, platform);
-  const creatorField = creatorPlatformUserId !== undefined
-    ? { creatorPlatformUserId: String(creatorPlatformUserId) }
-    : {};
-  let previous = db[k] ?? {};
-  // Wrappers, distributors and registered tickers are contracts on the
-  // old DAO's chain - carrying them to another chain would point commands
-  // at addresses that don't exist there (or are someone else's).
-  if (previous.governanceAddress && (resolveNetworkId(previous.network) ?? DEFAULT_NETWORK) !== network) {
-    const { tokens, distributorAddress, wrapperAddress, guardWrapperAddress, ...rest } = previous;
-    previous = rest;
-  }
-  db[k] = { ...previous, governanceAddress, model, platform, ...creatorField, network, registeredAt: Date.now() };
-  writeDb(db);
+  updateDb((db) => {
+    const k = key(chatId, platform);
+    const creatorField = creatorPlatformUserId !== undefined
+      ? { creatorPlatformUserId: String(creatorPlatformUserId) }
+      : {};
+    let previous = db[k] ?? {};
+    // Wrappers, distributors and registered tickers are contracts on the
+    // old DAO's chain - carrying them to another chain would point commands
+    // at addresses that don't exist there (or are someone else's).
+    if (previous.governanceAddress && (resolveNetworkId(previous.network) ?? DEFAULT_NETWORK) !== network) {
+      const { tokens, distributorAddress, wrapperAddress, guardWrapperAddress, ...rest } = previous;
+      previous = rest;
+    }
+    db[k] = { ...previous, governanceAddress, model, platform, ...creatorField, network, registeredAt: Date.now() };
+  });
 }
 
 /**
@@ -134,12 +133,12 @@ export function getChatCreator(chatId, platform = "telegram") {
  * over from a DAO this chat was previously linked to is cleared too.
  */
 export function recordChatLinker(chatId, platformUserId, platform = "telegram", { keepCreator = false } = {}) {
-  const db = readDb();
-  const k = key(chatId, platform);
-  if (!db[k]) return;
-  const { creatorPlatformUserId, ...rest } = db[k];
-  db[k] = { ...rest, ...(keepCreator && creatorPlatformUserId ? { creatorPlatformUserId } : {}), linkedByPlatformUserId: String(platformUserId) };
-  writeDb(db);
+  updateDb((db) => {
+    const k = key(chatId, platform);
+    if (!db[k]) return false;
+    const { creatorPlatformUserId, ...rest } = db[k];
+    db[k] = { ...rest, ...(keepCreator && creatorPlatformUserId ? { creatorPlatformUserId } : {}), linkedByPlatformUserId: String(platformUserId) };
+  });
 }
 
 /** Who linked this chat to its DAO (see recordChatLinker), or null. */
@@ -159,11 +158,11 @@ export function getChatLinker(chatId, platform = "telegram") {
  * needing to normalize at every call site.
  */
 export function registerToken(chatId, ticker, tokenAddress, platform = "telegram") {
-  const db = readDb();
-  const k = key(chatId, platform);
-  const tokens = { ...db[k]?.tokens, [ticker.toUpperCase()]: tokenAddress };
-  db[k] = { ...db[k], tokens };
-  writeDb(db);
+  updateDb((db) => {
+    const k = key(chatId, platform);
+    const tokens = { ...db[k]?.tokens, [ticker.toUpperCase()]: tokenAddress };
+    db[k] = { ...db[k], tokens };
+  });
 }
 
 /** Looks up one registered ticker for this chat, or null if not registered. */
@@ -197,10 +196,10 @@ export function getChatModel(chatId, platform = "telegram") {
 
 /** Link a chat's WelcomeDistributor address (optional, separate from Governance). */
 export function registerDistributor(chatId, distributorAddress, platform = "telegram") {
-  const db = readDb();
-  const k = key(chatId, platform);
-  db[k] = { ...db[k], distributorAddress, platform };
-  writeDb(db);
+  updateDb((db) => {
+    const k = key(chatId, platform);
+    db[k] = { ...db[k], distributorAddress, platform };
+  });
 }
 
 /** Get the WelcomeDistributor address linked to a chat, or null if unset. */
@@ -211,10 +210,10 @@ export function getChatDistributor(chatId, platform = "telegram") {
 
 /** Link a chat's NFTMarketplaceWrapper address (optional, separate from Governance/Treasury). */
 export function registerNftWrapper(chatId, wrapperAddress, platform = "telegram") {
-  const db = readDb();
-  const k = key(chatId, platform);
-  db[k] = { ...db[k], wrapperAddress, platform };
-  writeDb(db);
+  updateDb((db) => {
+    const k = key(chatId, platform);
+    db[k] = { ...db[k], wrapperAddress, platform };
+  });
 }
 
 /** Get the NFTMarketplaceWrapper address linked to a chat, or null if unset. */
@@ -225,10 +224,10 @@ export function getChatNftWrapper(chatId, platform = "telegram") {
 
 /** Link a chat's GuardWrapper address (optional - a DAO may never adopt one). */
 export function registerGuardWrapper(chatId, guardWrapperAddress, platform = "telegram") {
-  const db = readDb();
-  const k = key(chatId, platform);
-  db[k] = { ...db[k], guardWrapperAddress, platform };
-  writeDb(db);
+  updateDb((db) => {
+    const k = key(chatId, platform);
+    db[k] = { ...db[k], guardWrapperAddress, platform };
+  });
 }
 
 /** Get the GuardWrapper address linked to a chat, or null if unset. */
@@ -238,9 +237,9 @@ export function getChatGuardWrapper(chatId, platform = "telegram") {
 }
 
 export function unregisterChat(chatId, platform = "telegram") {
-  const db = readDb();
-  delete db[key(chatId, platform)];
-  writeDb(db);
+  updateDb((db) => {
+    delete db[key(chatId, platform)];
+  });
 }
 
 /**
@@ -250,11 +249,11 @@ export function unregisterChat(chatId, platform = "telegram") {
  * here. Recorded on every /protean call in a linked channel.
  */
 export function recordSlackTeam(channelId, teamId) {
-  const db = readDb();
-  const k = key(channelId, "slack");
-  if (!db[k] || !teamId || db[k].slackTeamId === teamId) return;
-  db[k].slackTeamId = teamId;
-  writeDb(db);
+  updateDb((db) => {
+    const k = key(channelId, "slack");
+    if (!db[k] || !teamId || db[k].slackTeamId === teamId) return false;
+    db[k].slackTeamId = teamId;
+  });
 }
 
 export function getSlackTeam(channelId) {
@@ -276,10 +275,10 @@ export function getSlackChannelsWithoutTeam() {
  * so they get their own field rather than overloading governanceAddress.
  */
 export function registerMarket(chatId, marketAddress, platform = "telegram") {
-  const db = readDb();
-  const k = key(chatId, platform);
-  db[k] = { ...db[k], marketAddress, marketRegisteredAt: Date.now(), platform };
-  writeDb(db);
+  updateDb((db) => {
+    const k = key(chatId, platform);
+    db[k] = { ...db[k], marketAddress, marketRegisteredAt: Date.now(), platform };
+  });
 }
 
 /** Get the OpportunityMarket address linked to a chat, or null if unregistered. */
@@ -289,13 +288,13 @@ export function getChatMarket(chatId, platform = "telegram") {
 }
 
 export function unregisterMarket(chatId, platform = "telegram") {
-  const db = readDb();
-  const k = key(chatId, platform);
-  if (db[k]) {
-    delete db[k].marketAddress;
-    delete db[k].marketRegisteredAt;
-    writeDb(db);
-  }
+  updateDb((db) => {
+    const k = key(chatId, platform);
+    if (db[k]) {
+      delete db[k].marketAddress;
+      delete db[k].marketRegisteredAt;
+    }
+  });
 }
 
 /**

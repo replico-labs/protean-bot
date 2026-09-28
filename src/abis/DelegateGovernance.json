@@ -1,1470 +1,1500 @@
 [
   {
-    "inputs": [
-      {
-        "internalType": "string",
-        "name": "daoName_",
-        "type": "string"
-      },
-      {
-        "internalType": "address",
-        "name": "creator_",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "governanceToken_",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "treasury_",
-        "type": "address"
-      },
-      {
-        "components": [
-          {
-            "internalType": "uint16",
-            "name": "councilSize",
-            "type": "uint16"
-          },
-          {
-            "internalType": "uint32",
-            "name": "termLength",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint256",
-            "name": "candidacyThreshold",
-            "type": "uint256"
-          },
-          {
-            "internalType": "uint32",
-            "name": "candidacyPeriod",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint32",
-            "name": "electionVotingPeriod",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint16",
-            "name": "councilQuorum",
-            "type": "uint16"
-          },
-          {
-            "internalType": "uint16",
-            "name": "councilApprovalThresholdBps",
-            "type": "uint16"
-          },
-          {
-            "internalType": "uint32",
-            "name": "votingDelay",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint32",
-            "name": "votingPeriod",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint32",
-            "name": "timelockDelay",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint32",
-            "name": "executionPeriod",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint16",
-            "name": "recallQuorumBps",
-            "type": "uint16"
-          },
-          {
-            "internalType": "uint16",
-            "name": "recallApprovalThresholdBps",
-            "type": "uint16"
-          },
-          {
-            "internalType": "uint32",
-            "name": "recallVotingPeriod",
-            "type": "uint32"
-          }
-        ],
-        "internalType": "struct DelegateGovernance.DelegateGovernanceConfig",
-        "name": "config_",
-        "type": "tuple"
-      },
-      {
-        "internalType": "address[]",
-        "name": "initialCouncil_",
-        "type": "address[]"
-      }
-    ],
-    "stateMutability": "nonpayable",
-    "type": "constructor"
-  },
-  {
+    "type": "constructor",
     "inputs": [],
-    "name": "AlreadyCandidate",
-    "type": "error"
+    "stateMutability": "nonpayable"
   },
   {
-    "inputs": [],
-    "name": "AlreadyVoted",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "AlreadyVotedInElection",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "CandidacyThresholdNotMet",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "CandidacyWindowClosed",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "CouncilApprovalNotMet",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "CouncilQuorumNotReached",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "DuplicateCandidate",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ElectionAlreadyActive",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ElectionAlreadyFinalized",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ElectionNotYetVoting",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ElectionVotingClosed",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ElectionVotingNotEnded",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "EmptyMetadataURI",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "EmptyProposalActions",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ExecutionFailed",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "InvalidConfiguration",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "InvalidProposalAction",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "InvalidValue",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "NoActiveElection",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "NoActiveRecall",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "NotACandidate",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "NotCouncilMember",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "NotCurrentlyOnCouncil",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ProposalAlreadyCancelled",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ProposalAlreadyExecuted",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ProposalAlreadyQueued",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ProposalExpired",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ProposalNotActive",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ProposalNotExecutable",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ProposalNotFound",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "RecallAlreadyFinalized",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "RecallVotingClosed",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "RecallVotingNotEnded",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "TooEarlyForElection",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "TooManyCandidatesSelected",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "Unauthorized",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ZeroAddress",
-    "type": "error"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "electionId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "candidate",
-        "type": "address"
-      }
-    ],
-    "name": "CandidacyDeclared",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [],
-    "name": "ConfigUpdated",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "caller",
-        "type": "address"
-      }
-    ],
-    "name": "CouncilProposalCancelled",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "proposer",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "string",
-        "name": "metadataURI",
-        "type": "string"
-      }
-    ],
-    "name": "CouncilProposalCreated",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "executor",
-        "type": "address"
-      }
-    ],
-    "name": "CouncilProposalExecuted",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "executeAfter",
-        "type": "uint256"
-      }
-    ],
-    "name": "CouncilProposalQueued",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "delegate",
-        "type": "address"
-      },
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "enum DelegateGovernance.VoteType",
-        "name": "support",
-        "type": "uint8"
-      }
-    ],
-    "name": "CouncilVoteCast",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "electionId",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "address[]",
-        "name": "newCouncil",
-        "type": "address[]"
-      }
-    ],
-    "name": "ElectionFinalized",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "electionId",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "candidacyDeadline",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "votingEndBlock",
-        "type": "uint256"
-      }
-    ],
-    "name": "ElectionStarted",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "electionId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "voter",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "weight",
-        "type": "uint256"
-      }
-    ],
-    "name": "ElectionVoteCast",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "previousToken",
-        "type": "address"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "newToken",
-        "type": "address"
-      }
-    ],
-    "name": "GovernanceTokenUpdated",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "recallId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "delegate",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "bool",
-        "name": "removed",
-        "type": "bool"
-      }
-    ],
-    "name": "RecallFinalized",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "recallId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "delegate",
-        "type": "address"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "initiator",
-        "type": "address"
-      }
-    ],
-    "name": "RecallInitiated",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "recallId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "voter",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "enum DelegateGovernance.VoteType",
-        "name": "support",
-        "type": "uint8"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "weight",
-        "type": "uint256"
-      }
-    ],
-    "name": "RecallVoteCast",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "previousTreasury",
-        "type": "address"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "newTreasury",
-        "type": "address"
-      }
-    ],
-    "name": "TreasuryUpdated",
-    "type": "event"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      }
-    ],
+    "type": "function",
     "name": "cancelCouncilProposal",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
     "inputs": [
       {
-        "internalType": "uint256",
         "name": "proposalId",
-        "type": "uint256"
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "castCouncilVote",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
       },
       {
-        "internalType": "enum DelegateGovernance.VoteType",
         "name": "support",
-        "type": "uint8"
+        "type": "uint8",
+        "internalType": "enum DelegateGovernance.VoteType"
       }
     ],
-    "name": "castCouncilVote",
     "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
+    "stateMutability": "nonpayable"
   },
   {
-    "inputs": [],
+    "type": "function",
     "name": "config",
+    "inputs": [],
     "outputs": [
       {
-        "components": [
-          {
-            "internalType": "uint16",
-            "name": "councilSize",
-            "type": "uint16"
-          },
-          {
-            "internalType": "uint32",
-            "name": "termLength",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint256",
-            "name": "candidacyThreshold",
-            "type": "uint256"
-          },
-          {
-            "internalType": "uint32",
-            "name": "candidacyPeriod",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint32",
-            "name": "electionVotingPeriod",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint16",
-            "name": "councilQuorum",
-            "type": "uint16"
-          },
-          {
-            "internalType": "uint16",
-            "name": "councilApprovalThresholdBps",
-            "type": "uint16"
-          },
-          {
-            "internalType": "uint32",
-            "name": "votingDelay",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint32",
-            "name": "votingPeriod",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint32",
-            "name": "timelockDelay",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint32",
-            "name": "executionPeriod",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint16",
-            "name": "recallQuorumBps",
-            "type": "uint16"
-          },
-          {
-            "internalType": "uint16",
-            "name": "recallApprovalThresholdBps",
-            "type": "uint16"
-          },
-          {
-            "internalType": "uint32",
-            "name": "recallVotingPeriod",
-            "type": "uint32"
-          }
-        ],
+        "name": "",
+        "type": "tuple",
         "internalType": "struct DelegateGovernance.DelegateGovernanceConfig",
-        "name": "",
-        "type": "tuple"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "name": "council",
-    "outputs": [
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "creator",
-    "outputs": [
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "currentTermEnd",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "daoName",
-    "outputs": [
-      {
-        "internalType": "string",
-        "name": "",
-        "type": "string"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "electionId",
-        "type": "uint256"
-      }
-    ],
-    "name": "declareCandidacy",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "electionCount",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      }
-    ],
-    "name": "executableAfter",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      }
-    ],
-    "name": "executeCouncilProposal",
-    "outputs": [],
-    "stateMutability": "payable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "electionId",
-        "type": "uint256"
-      }
-    ],
-    "name": "finalizeElection",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "recallId",
-        "type": "uint256"
-      }
-    ],
-    "name": "finalizeRecall",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "getCouncil",
-    "outputs": [
-      {
-        "internalType": "address[]",
-        "name": "",
-        "type": "address[]"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "electionId",
-        "type": "uint256"
-      }
-    ],
-    "name": "getElection",
-    "outputs": [
-      {
         "components": [
           {
-            "internalType": "uint256",
-            "name": "id",
-            "type": "uint256"
+            "name": "councilSize",
+            "type": "uint16",
+            "internalType": "uint16"
           },
           {
-            "internalType": "uint256",
-            "name": "candidacyDeadline",
-            "type": "uint256"
+            "name": "termLength",
+            "type": "uint32",
+            "internalType": "uint32"
           },
           {
-            "internalType": "uint256",
-            "name": "votingEndBlock",
-            "type": "uint256"
+            "name": "candidacyThreshold",
+            "type": "uint256",
+            "internalType": "uint256"
           },
           {
-            "internalType": "uint256",
-            "name": "snapshotBlock",
-            "type": "uint256"
+            "name": "candidacyPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
           },
           {
-            "internalType": "bool",
-            "name": "finalized",
-            "type": "bool"
+            "name": "electionVotingPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
           },
           {
-            "internalType": "address[]",
-            "name": "candidates",
-            "type": "address[]"
+            "name": "councilQuorum",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "councilApprovalThresholdBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "votingDelay",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "votingPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "timelockDelay",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "executionPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "recallQuorumBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "recallApprovalThresholdBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "recallVotingPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
           }
-        ],
-        "internalType": "struct DelegateGovernance.Election",
-        "name": "",
-        "type": "tuple"
+        ]
       }
     ],
-    "stateMutability": "view",
-    "type": "function"
+    "stateMutability": "view"
   },
   {
+    "type": "function",
+    "name": "council",
     "inputs": [
       {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
-    "name": "getProposal",
     "outputs": [
       {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "creator",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "currentTermEnd",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "daoName",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "declareCandidacy",
+    "inputs": [
+      {
+        "name": "electionId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "electionCount",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "executableAfter",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "executeCouncilProposal",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "payable"
+  },
+  {
+    "type": "function",
+    "name": "finalizeElection",
+    "inputs": [
+      {
+        "name": "electionId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "finalizeRecall",
+    "inputs": [
+      {
+        "name": "recallId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "getCouncil",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address[]",
+        "internalType": "address[]"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getElection",
+    "inputs": [
+      {
+        "name": "electionId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct DelegateGovernance.Election",
         "components": [
           {
-            "internalType": "uint256",
             "name": "id",
-            "type": "uint256"
+            "type": "uint256",
+            "internalType": "uint256"
           },
           {
+            "name": "candidacyDeadline",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "votingEndBlock",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "snapshotBlock",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "finalized",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "candidates",
+            "type": "address[]",
+            "internalType": "address[]"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getProposal",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct DelegateGovernance.CouncilProposal",
+        "components": [
+          {
+            "name": "id",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "actions",
+            "type": "tuple[]",
+            "internalType": "struct DelegateGovernance.ProposalAction[]",
             "components": [
               {
-                "internalType": "address",
                 "name": "target",
-                "type": "address"
+                "type": "address",
+                "internalType": "address"
               },
               {
-                "internalType": "uint256",
                 "name": "value",
-                "type": "uint256"
+                "type": "uint256",
+                "internalType": "uint256"
               },
               {
-                "internalType": "bytes",
                 "name": "data",
-                "type": "bytes"
+                "type": "bytes",
+                "internalType": "bytes"
               }
-            ],
-            "internalType": "struct DelegateGovernance.ProposalAction[]",
-            "name": "actions",
-            "type": "tuple[]"
+            ]
           },
           {
-            "internalType": "address",
             "name": "proposer",
-            "type": "address"
+            "type": "address",
+            "internalType": "address"
           },
           {
-            "internalType": "string",
             "name": "metadataURI",
-            "type": "string"
+            "type": "string",
+            "internalType": "string"
           },
           {
-            "internalType": "uint256",
             "name": "createdBlock",
-            "type": "uint256"
+            "type": "uint256",
+            "internalType": "uint256"
           },
           {
-            "internalType": "uint256",
             "name": "startBlock",
-            "type": "uint256"
+            "type": "uint256",
+            "internalType": "uint256"
           },
           {
-            "internalType": "uint256",
             "name": "endBlock",
-            "type": "uint256"
+            "type": "uint256",
+            "internalType": "uint256"
           },
           {
-            "internalType": "uint16",
             "name": "forVotes",
-            "type": "uint16"
+            "type": "uint16",
+            "internalType": "uint16"
           },
           {
-            "internalType": "uint16",
             "name": "againstVotes",
-            "type": "uint16"
+            "type": "uint16",
+            "internalType": "uint16"
           },
           {
-            "internalType": "uint16",
             "name": "abstainVotes",
-            "type": "uint16"
+            "type": "uint16",
+            "internalType": "uint16"
           },
           {
-            "internalType": "uint256",
             "name": "queuedAt",
-            "type": "uint256"
+            "type": "uint256",
+            "internalType": "uint256"
           },
           {
-            "internalType": "bool",
             "name": "executed",
-            "type": "bool"
+            "type": "bool",
+            "internalType": "bool"
           },
           {
-            "internalType": "bool",
             "name": "cancelled",
-            "type": "bool"
+            "type": "bool",
+            "internalType": "bool"
           }
-        ],
-        "internalType": "struct DelegateGovernance.CouncilProposal",
-        "name": "",
-        "type": "tuple"
+        ]
       }
     ],
-    "stateMutability": "view",
-    "type": "function"
+    "stateMutability": "view"
   },
   {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "recallId",
-        "type": "uint256"
-      }
-    ],
+    "type": "function",
     "name": "getRecall",
+    "inputs": [
+      {
+        "name": "recallId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
     "outputs": [
       {
-        "components": [
-          {
-            "internalType": "uint256",
-            "name": "id",
-            "type": "uint256"
-          },
-          {
-            "internalType": "address",
-            "name": "delegate",
-            "type": "address"
-          },
-          {
-            "internalType": "uint256",
-            "name": "endBlock",
-            "type": "uint256"
-          },
-          {
-            "internalType": "uint256",
-            "name": "snapshotBlock",
-            "type": "uint256"
-          },
-          {
-            "internalType": "uint256",
-            "name": "forVotes",
-            "type": "uint256"
-          },
-          {
-            "internalType": "uint256",
-            "name": "againstVotes",
-            "type": "uint256"
-          },
-          {
-            "internalType": "uint256",
-            "name": "abstainVotes",
-            "type": "uint256"
-          },
-          {
-            "internalType": "bool",
-            "name": "finalized",
-            "type": "bool"
-          },
-          {
-            "internalType": "bool",
-            "name": "executed",
-            "type": "bool"
-          }
-        ],
+        "name": "",
+        "type": "tuple",
         "internalType": "struct DelegateGovernance.RecallVote",
-        "name": "",
-        "type": "tuple"
+        "components": [
+          {
+            "name": "id",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "delegate",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "endBlock",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "snapshotBlock",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "forVotes",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "againstVotes",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "abstainVotes",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "finalized",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "executed",
+            "type": "bool",
+            "internalType": "bool"
+          }
+        ]
       }
     ],
-    "stateMutability": "view",
-    "type": "function"
+    "stateMutability": "view"
   },
   {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      },
-      {
-        "internalType": "address",
-        "name": "delegate",
-        "type": "address"
-      }
-    ],
+    "type": "function",
     "name": "getVoteReceipt",
-    "outputs": [
-      {
-        "components": [
-          {
-            "internalType": "bool",
-            "name": "hasVoted",
-            "type": "bool"
-          },
-          {
-            "internalType": "enum DelegateGovernance.VoteType",
-            "name": "support",
-            "type": "uint8"
-          }
-        ],
-        "internalType": "struct DelegateGovernance.CouncilVoteReceipt",
-        "name": "",
-        "type": "tuple"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "governanceToken",
-    "outputs": [
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
     "inputs": [
       {
-        "internalType": "address",
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
         "name": "delegate",
-        "type": "address"
+        "type": "address",
+        "internalType": "address"
       }
     ],
-    "name": "initiateRecall",
     "outputs": [
       {
-        "internalType": "uint256",
-        "name": "recallId",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
         "name": "",
-        "type": "address"
-      }
-    ],
-    "name": "isCouncilMember",
-    "outputs": [
-      {
-        "internalType": "bool",
-        "name": "",
-        "type": "bool"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "proposalCount",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
+        "type": "tuple",
+        "internalType": "struct DelegateGovernance.CouncilVoteReceipt",
         "components": [
           {
-            "internalType": "address",
-            "name": "target",
-            "type": "address"
+            "name": "hasVoted",
+            "type": "bool",
+            "internalType": "bool"
           },
           {
-            "internalType": "uint256",
-            "name": "value",
-            "type": "uint256"
-          },
-          {
-            "internalType": "bytes",
-            "name": "data",
-            "type": "bytes"
+            "name": "support",
+            "type": "uint8",
+            "internalType": "enum DelegateGovernance.VoteType"
           }
-        ],
-        "internalType": "struct DelegateGovernance.ProposalAction[]",
-        "name": "actions",
-        "type": "tuple[]"
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "governanceToken",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "initialize",
+    "inputs": [
+      {
+        "name": "daoName_",
+        "type": "string",
+        "internalType": "string"
       },
       {
-        "internalType": "string",
-        "name": "metadataURI",
-        "type": "string"
-      }
-    ],
-    "name": "proposeCouncilAction",
-    "outputs": [
+        "name": "creator_",
+        "type": "address",
+        "internalType": "address"
+      },
       {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
+        "name": "governanceToken_",
+        "type": "address",
+        "internalType": "address"
+      },
       {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      }
-    ],
-    "name": "queueCouncilProposal",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "recallCount",
-    "outputs": [
+        "name": "treasury_",
+        "type": "address",
+        "internalType": "address"
+      },
       {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "newToken",
-        "type": "address"
-      }
-    ],
-    "name": "setGovernanceToken",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "newTreasury",
-        "type": "address"
-      }
-    ],
-    "name": "setTreasury",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "startElection",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "electionId",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      }
-    ],
-    "name": "state",
-    "outputs": [
-      {
-        "internalType": "enum DelegateGovernance.ProposalState",
-        "name": "",
-        "type": "uint8"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "treasury",
-    "outputs": [
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "components": [
-          {
-            "internalType": "uint16",
-            "name": "councilSize",
-            "type": "uint16"
-          },
-          {
-            "internalType": "uint32",
-            "name": "termLength",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint256",
-            "name": "candidacyThreshold",
-            "type": "uint256"
-          },
-          {
-            "internalType": "uint32",
-            "name": "candidacyPeriod",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint32",
-            "name": "electionVotingPeriod",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint16",
-            "name": "councilQuorum",
-            "type": "uint16"
-          },
-          {
-            "internalType": "uint16",
-            "name": "councilApprovalThresholdBps",
-            "type": "uint16"
-          },
-          {
-            "internalType": "uint32",
-            "name": "votingDelay",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint32",
-            "name": "votingPeriod",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint32",
-            "name": "timelockDelay",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint32",
-            "name": "executionPeriod",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint16",
-            "name": "recallQuorumBps",
-            "type": "uint16"
-          },
-          {
-            "internalType": "uint16",
-            "name": "recallApprovalThresholdBps",
-            "type": "uint16"
-          },
-          {
-            "internalType": "uint32",
-            "name": "recallVotingPeriod",
-            "type": "uint32"
-          }
-        ],
+        "name": "config_",
+        "type": "tuple",
         "internalType": "struct DelegateGovernance.DelegateGovernanceConfig",
-        "name": "newConfig",
-        "type": "tuple"
-      }
-    ],
-    "name": "updateConfig",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "electionId",
-        "type": "uint256"
+        "components": [
+          {
+            "name": "councilSize",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "termLength",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "candidacyThreshold",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "candidacyPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "electionVotingPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "councilQuorum",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "councilApprovalThresholdBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "votingDelay",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "votingPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "timelockDelay",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "executionPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "recallQuorumBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "recallApprovalThresholdBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "recallVotingPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
+          }
+        ]
       },
       {
-        "internalType": "address[]",
-        "name": "candidates",
-        "type": "address[]"
+        "name": "initialCouncil_",
+        "type": "address[]",
+        "internalType": "address[]"
       }
     ],
-    "name": "voteInElection",
     "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
+    "stateMutability": "nonpayable"
   },
   {
+    "type": "function",
+    "name": "initiateRecall",
     "inputs": [
       {
-        "internalType": "uint256",
+        "name": "delegate",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
         "name": "recallId",
-        "type": "uint256"
-      },
-      {
-        "internalType": "enum DelegateGovernance.VoteType",
-        "name": "support",
-        "type": "uint8"
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
-    "name": "voteRecall",
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "isCouncilMember",
+    "inputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "proposalCount",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "proposeCouncilAction",
+    "inputs": [
+      {
+        "name": "actions",
+        "type": "tuple[]",
+        "internalType": "struct DelegateGovernance.ProposalAction[]",
+        "components": [
+          {
+            "name": "target",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "value",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "data",
+            "type": "bytes",
+            "internalType": "bytes"
+          }
+        ]
+      },
+      {
+        "name": "metadataURI",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "queueCouncilProposal",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
     "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "recallCount",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "setGovernanceToken",
+    "inputs": [
+      {
+        "name": "newToken",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setTreasury",
+    "inputs": [
+      {
+        "name": "newTreasury",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "startElection",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "electionId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "state",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint8",
+        "internalType": "enum DelegateGovernance.ProposalState"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "treasury",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "updateConfig",
+    "inputs": [
+      {
+        "name": "newConfig",
+        "type": "tuple",
+        "internalType": "struct DelegateGovernance.DelegateGovernanceConfig",
+        "components": [
+          {
+            "name": "councilSize",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "termLength",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "candidacyThreshold",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "candidacyPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "electionVotingPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "councilQuorum",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "councilApprovalThresholdBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "votingDelay",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "votingPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "timelockDelay",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "executionPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "recallQuorumBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "recallApprovalThresholdBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "recallVotingPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
+          }
+        ]
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "voteInElection",
+    "inputs": [
+      {
+        "name": "electionId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "candidates",
+        "type": "address[]",
+        "internalType": "address[]"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "voteRecall",
+    "inputs": [
+      {
+        "name": "recallId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "support",
+        "type": "uint8",
+        "internalType": "enum DelegateGovernance.VoteType"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "event",
+    "name": "CandidacyDeclared",
+    "inputs": [
+      {
+        "name": "electionId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "candidate",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ConfigUpdated",
+    "inputs": [],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "CouncilProposalCancelled",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "caller",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "CouncilProposalCreated",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "proposer",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "metadataURI",
+        "type": "string",
+        "indexed": false,
+        "internalType": "string"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "CouncilProposalExecuted",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "executor",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "CouncilProposalQueued",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "executeAfter",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "CouncilVoteCast",
+    "inputs": [
+      {
+        "name": "delegate",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "support",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "enum DelegateGovernance.VoteType"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ElectionFinalized",
+    "inputs": [
+      {
+        "name": "electionId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "newCouncil",
+        "type": "address[]",
+        "indexed": false,
+        "internalType": "address[]"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ElectionStarted",
+    "inputs": [
+      {
+        "name": "electionId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "candidacyDeadline",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "votingEndBlock",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ElectionVoteCast",
+    "inputs": [
+      {
+        "name": "electionId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "voter",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "weight",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "GovernanceTokenUpdated",
+    "inputs": [
+      {
+        "name": "previousToken",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "newToken",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "Initialized",
+    "inputs": [
+      {
+        "name": "version",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "RecallFinalized",
+    "inputs": [
+      {
+        "name": "recallId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "delegate",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "removed",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "RecallInitiated",
+    "inputs": [
+      {
+        "name": "recallId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "delegate",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "initiator",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "RecallVoteCast",
+    "inputs": [
+      {
+        "name": "recallId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "voter",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "support",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "enum DelegateGovernance.VoteType"
+      },
+      {
+        "name": "weight",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "TreasuryUpdated",
+    "inputs": [
+      {
+        "name": "previousTreasury",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "newTreasury",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "error",
+    "name": "AlreadyCandidate",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "AlreadyVoted",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "AlreadyVotedInElection",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "CandidacyThresholdNotMet",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "CandidacyWindowClosed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "CouncilApprovalNotMet",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "CouncilQuorumNotReached",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "DuplicateCandidate",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ElectionAlreadyActive",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ElectionAlreadyFinalized",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ElectionNotYetVoting",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ElectionVotingClosed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ElectionVotingNotEnded",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "EmptyMetadataURI",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "EmptyProposalActions",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ExecutionFailed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidConfiguration",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidInitialization",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidProposalAction",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidValue",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NoActiveElection",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NoActiveRecall",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotACandidate",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotCouncilMember",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotCurrentlyOnCouncil",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotInitializing",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ProposalAlreadyCancelled",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ProposalAlreadyExecuted",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ProposalAlreadyQueued",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ProposalExpired",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ProposalNotActive",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ProposalNotExecutable",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ProposalNotFound",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "RecallAlreadyFinalized",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "RecallVotingClosed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "RecallVotingNotEnded",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "TooEarlyForElection",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "TooManyCandidatesSelected",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "Unauthorized",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ZeroAddress",
+    "inputs": []
   }
 ]

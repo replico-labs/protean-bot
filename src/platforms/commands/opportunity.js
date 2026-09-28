@@ -7,6 +7,7 @@ import { revealAndCompleteWinningTotal, revealAndCompleteWithdrawal } from "../.
 import { getUserAddress } from "../../walletResolver.js";
 import { isWalletStoreConfigured } from "../../walletStore.js";
 import { short } from "../../format.js";
+import { formatMarketAnalytics } from "../../opportunityMarket/analyticsText.js";
 import { UserError, reply, privateReply, requireMarket, parseId, opportunityClient, NO_WALLETS } from "../helpers.js";
 
 /**
@@ -201,7 +202,7 @@ export const OPPORTUNITY_COMMANDS = {
   analytics: {
     section: MARKET,
     usage: "",
-    description: "Deployer: stake totals per opportunity (private)",
+    description: "Deployer: totals and average bets, overall and per opportunity (private)",
     ephemeralByDefault: true,
     options: [],
     async run(ctx) {
@@ -209,19 +210,7 @@ export const OPPORTUNITY_COMMANDS = {
       const { client } = await opportunityClient(ctx);
       const stats = await getMarketAnalytics(client, address);
       const decimals = await opportunityMarket.getUnderlyingDecimals(address);
-      const lines = stats.opportunities.map((o) => `#${o.id} (\`${short(o.lister)}\`): *${formatUnits(o.totalStaked, decimals)}* staked across *${o.backerCount}* backer(s)`);
-      return privateReply(
-        [
-          "*Market analytics*",
-          "",
-          `Total bets placed: *${stats.totalBets}*`,
-          `Total staked overall: *${formatUnits(stats.totalStakedOverall, decimals)}*`,
-          `Unique bettors: *${stats.totalUniqueBettors}*`,
-          "",
-          "*Per opportunity:*",
-          ...(lines.length ? lines : ["No opportunities listed yet."]),
-        ].join("\n")
-      );
+      return privateReply(formatMarketAnalytics(stats, decimals));
     },
   },
 

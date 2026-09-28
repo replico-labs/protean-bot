@@ -80,7 +80,8 @@ Opportunity Markets are separate and always on Ethereum Sepolia; Zama's FHE copr
 - `/proposals` · `/proposal <id>` — list, or full detail rendered for each model's own vote shape
 
 ### Proposing and deciding
-- `/listactions` · `/proposeaction <actionId> <args...> <description>` — the verified action library: every native governance, Treasury, token and wrapper admin function, encoded for you. After a GuardWrapper handover, Treasury and token actions are routed through the wrapper automatically.
+- `/listactions` · `/proposeaction <actionId> <args...> <description>` — the verified action library: every native governance, Treasury, token and wrapper admin function, encoded for you, plus the external protocol actions available on the chat's network (see [External protocol actions](#external-protocol-actions)). After a GuardWrapper handover, Treasury and token actions are routed through the wrapper automatically.
+- `/actioninfo <actionId>` — an action's arguments, options, and the sources its contract addresses were checked against
 - `/propose <target> <value> <data> <description>` — raw calldata, for anything else
 - `/vote <id> for|against|abstain [reason]` · `/queue <id>` · `/execute <id> [nativeValue]` · `/cancel <id>`
 
@@ -113,11 +114,55 @@ Bonds and seeds (Optimistic challenges, Sowellian bonds and positions, Decision 
 ### Opportunity Markets (Ethereum Sepolia, FHE-encrypted)
 - `/createmarket <underlyingToken>` · `/registermarket <address>` · `/unregistermarket`
 - `/listopportunity <metadataURI>` · `/deposit <amount>` · `/back <opportunityId> <amount>` (confidential)
-- `/mybalance` · `/mybet <index>` · `/allbets` · `/analytics` (deployer only)
+- `/mybalance` · `/mybet <index>` · `/allbets` · `/analytics` (deployer only, sent privately: total staked, average bet, average per bettor and largest bet, overall and per opportunity, plus each opportunity's share of all stake. Built from the bets the contract already lets the deployer decrypt; nothing new is revealed publicly)
 - `/fundrewardpool` · `/resolve <id>` · `/cancelmarket` (deployer only)
 - `/reclaimstake` · `/computereward` · `/revealwinningtotal` · `/withdraw` · `/withdrawreward`
 
 `/registermarket` only accepts addresses the configured `OpportunityMarketFactory` reports as its own (`isMarket`).
+
+## External protocol actions
+
+`/proposeaction` can also propose actions on outside protocols. The DAO's funds sit in its Treasury, so each action is one proposal made of several `Treasury.execute(target, value, data)` steps (approve, then act), with the protocol seeing the Treasury as the caller. NFT actions go through the DAO's NFT wrapper instead. After a GuardWrapper handover, every step is routed through the wrapper like any other Treasury action. An action is offered only on networks where its protocol is deployed.
+
+Arguments are positional, then `name=value` options (`/actioninfo` lists them), then the description. Minimum-out amounts are fixed when proposing, and deadlines default to 30 days, so a price that moves too far before execution makes the proposal revert rather than fill badly.
+
+| Protocol | Networks | Actions |
+|---|---|---|
+| Uniswap v4 | Monad, Monad testnet (Monad-maintained), Base, Base Sepolia | `uniswap-swap`, `uniswap-add-liquidity`, `uniswap-remove-liquidity`, `uniswap-collect-fees` |
+| Aave v3 | Monad, Base, Base Sepolia | `aave-supply`, `aave-withdraw`, `aave-borrow`, `aave-repay`, `aave-collateral` |
+| shMON (FastLane) | Monad | `shmon-stake`, `shmon-unstake-instant`, `shmon-request-unstake`, `shmon-complete-unstake` |
+| Nad.fun | Monad, Monad testnet | `nadfun-buy`, `nadfun-sell` |
+| Perpl | Monad, Monad testnet | `perpl-deposit`, `perpl-withdraw`, `perpl-open`, `perpl-close` |
+| OpenSea (Seaport 1.6) | Monad, Base, HyperEVM | `opensea-list`, `opensea-update-listing`, `opensea-cancel-listing`, `opensea-buy` — needs `OPENSEA_API_KEY` |
+| Aerodrome | Base | `aerodrome-swap`, `aerodrome-add-liquidity`, `aerodrome-remove-liquidity` |
+| Lido wstETH | Base | `lido-buy-wsteth`, `lido-sell-wsteth` — through Aerodrome, with the minimum set from Lido's own wstETH/stETH rate feed |
+| Flaunch | Base, Base Sepolia | `flaunch-buy`, `flaunch-sell` — planned by Flaunch's SDK (pinned), current-generation coins only |
+| HyperLend | HyperEVM ⚠ | `hyperlend-supply`, `hyperlend-withdraw`, `hyperlend-borrow`, `hyperlend-repay`, `hyperlend-collateral` |
+| HyperCore | HyperEVM ⚠, HyperEVM testnet ⚠ | `hypercore-deposit-hype`, `hypercore-deposit-usdc`, `hypercore-order`, `hypercore-cancel`, `hypercore-usd-transfer`, `hypercore-withdraw` |
+| HyperSwap (v3) | HyperEVM | `hyperswap-swap` |
+| Kinetiq kHYPE | HyperEVM ⚠ | `kinetiq-buy-khype`, `kinetiq-sell-khype` — through HyperSwap, with the minimum set from Kinetiq's own kHYPE→HYPE rate |
+
+⚠ marks deployments whose addresses or encodings come from a source other than the protocol's own (each shows the warning in `/actioninfo`):
+- HyperLend's registry address is from DefiLlama.
+- HyperCore's encodings are from hyper-evm-lib, which Obsidian Audits maintains.
+- Kinetiq's kHYPE and rate contract are from DefiLlama and a community CLI.
+
+**Check addresses before enabling a network:** `npm run verify:integrations [network ...]`. It reads every address over the real RPCs and checks four things:
+- every contract has code;
+- the protocols' cross-references hold (for example, that a router's factory is the factory listed here);
+- known token symbols are as expected;
+- protocol-specific facts, such as HyperCore's precompiles agreeing on the USDC and HYPE token indexes.
+
+It sends nothing. It hasn't been run against the real networks yet (see below).
+
+**Not available, and why:**
+- **Avantis (Base).** It became Veranta in September 2026. Its v2 contracts' ABIs are not published, and trading goes through off-chain signed intents that a Treasury contract can't sign.
+- **Staking directly with Kinetiq (HyperEVM).** No official source for the staking contract's interface was reachable. `kinetiq-buy-khype` covers the same need through HyperSwap.
+- **HyperSwap v2.** Its router adds a `referral` argument, and HyperSwap doesn't publish that router's ABI. Swaps use HyperSwap v3.
+- **Lido direct staking on Base.** The CCIP direct-staking contracts publish no verifiable interface. `lido-buy-wsteth` covers the same need through Aerodrome.
+- **Flaunch on HyperEVM.** Flaunch isn't deployed there.
+
+HyperCore note: Core applies CoreWriter actions just after the EVM transaction. A proposal can execute successfully while Core rejects the order (tick size, no balance, no fill). The bot checks Hyperliquid's tick and lot rules before proposing, and says so in every summary.
 
 ## NFTs
 
@@ -201,13 +246,19 @@ Switchboard is pull-based: someone has to submit randomness settlements and pric
 
 - The other eight governance models through real Telegram sessions on Monad testnet (they pass on local chains through the shared command code)
 - Anything on Base or HyperEVM — no factories deployed there yet
+- **External protocol actions against the live protocols.** Each was tested on local chains through a real Board DAO:
+  - Uniswap, Aerodrome, Lido-via-Aerodrome and Seaport ran against those protocols' real compiled contracts. HyperSwap and kHYPE-via-HyperSwap ran against Uniswap's real v3 contracts (HyperSwap v3 is a Uniswap v3 fork).
+  - Aave, HyperLend, shMON, Nad.fun, Perpl, Flaunch and HyperCore ran against stand-ins with the protocols' exact function signatures.
+  - HyperCore's action bytes were also compared with those produced by hyper-evm-lib.
+
+  `npm run verify:integrations` has not been run against the real networks.
 - Real Discord and Slack workspaces
 - The FHE relayer round-trip for confidential bets and decryption (Opportunity Markets)
 - Switchboard's Crossbar round-trip for sortition settlement and price updates
 
 ## Not built yet
 
-- **External protocol actions** — DEXs, perps, lending, liquid staking, NFT marketplaces and launchpads on each network, as verified actions (and wrapper contracts where a protocol can't be called directly from the Treasury). Built one protocol at a time, each verified against the protocol's own deployment before any code is written.
+- **Avantis/Veranta actions**, and **direct staking with Lido (Base) or Kinetiq (HyperEVM)**. They are blocked on unpublished or unreachable interfaces; see [External protocol actions](#external-protocol-actions).
 - Group-wide gas sponsorship with spending limits
 
 ## Architecture

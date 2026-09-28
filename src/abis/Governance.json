@@ -1,917 +1,947 @@
 [
   {
-    "inputs": [
-      {
-        "internalType": "string",
-        "name": "daoName_",
-        "type": "string"
-      },
-      {
-        "internalType": "address",
-        "name": "creator_",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "governanceToken_",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "treasury_",
-        "type": "address"
-      },
-      {
-        "components": [
-          {
-            "internalType": "uint16",
-            "name": "quorumBps",
-            "type": "uint16"
-          },
-          {
-            "internalType": "uint16",
-            "name": "approvalThresholdBps",
-            "type": "uint16"
-          },
-          {
-            "internalType": "uint32",
-            "name": "votingDelay",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint32",
-            "name": "votingPeriod",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint32",
-            "name": "timelockDelay",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint32",
-            "name": "executionPeriod",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint256",
-            "name": "proposalThreshold",
-            "type": "uint256"
-          }
-        ],
-        "internalType": "struct GovernanceConfig",
-        "name": "config_",
-        "type": "tuple"
-      }
-    ],
-    "stateMutability": "nonpayable",
-    "type": "constructor"
-  },
-  {
+    "type": "constructor",
     "inputs": [],
-    "name": "AlreadyVoted",
-    "type": "error"
+    "stateMutability": "nonpayable"
   },
   {
-    "inputs": [],
-    "name": "ApprovalThresholdNotMet",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "EmptyMetadataURI",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "EmptyProposalActions",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ExecutionFailed",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "InvalidApprovalThreshold",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "InvalidProposalAction",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "InvalidQuorum",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "InvalidValue",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "InvalidVotingDelay",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "InvalidVotingPeriod",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ProposalAlreadyCancelled",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ProposalAlreadyExecuted",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ProposalAlreadyQueued",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ProposalExpired",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ProposalNotActive",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ProposalNotExecutable",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ProposalThresholdNotMet",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "QuorumNotReached",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "Unauthorized",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "VotingNotStarted",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ZeroAddress",
-    "type": "error"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": false,
-        "internalType": "uint16",
-        "name": "quorumBps",
-        "type": "uint16"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint16",
-        "name": "approvalThresholdBps",
-        "type": "uint16"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint32",
-        "name": "votingDelay",
-        "type": "uint32"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint32",
-        "name": "votingPeriod",
-        "type": "uint32"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "proposalThreshold",
-        "type": "uint256"
-      }
-    ],
-    "name": "GovernanceConfigUpdated",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "previousToken",
-        "type": "address"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "newToken",
-        "type": "address"
-      }
-    ],
-    "name": "GovernanceTokenUpdated",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "cancelledBy",
-        "type": "address"
-      }
-    ],
-    "name": "ProposalCancelled",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "proposer",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "string",
-        "name": "metadataURI",
-        "type": "string"
-      }
-    ],
-    "name": "ProposalCreated",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "executor",
-        "type": "address"
-      }
-    ],
-    "name": "ProposalExecuted",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "executeAfter",
-        "type": "uint256"
-      }
-    ],
-    "name": "ProposalQueued",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "previousTreasury",
-        "type": "address"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "newTreasury",
-        "type": "address"
-      }
-    ],
-    "name": "TreasuryUpdated",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "voter",
-        "type": "address"
-      },
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "enum VoteType",
-        "name": "support",
-        "type": "uint8"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "weight",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "string",
-        "name": "reason",
-        "type": "string"
-      }
-    ],
-    "name": "VoteCast",
-    "type": "event"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      }
-    ],
+    "type": "function",
     "name": "cancelProposal",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
     "inputs": [
       {
-        "internalType": "uint256",
         "name": "proposalId",
-        "type": "uint256"
-      },
-      {
-        "internalType": "enum VoteType",
-        "name": "support",
-        "type": "uint8"
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "castVote",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "weight",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
     "inputs": [
       {
-        "internalType": "uint256",
         "name": "proposalId",
-        "type": "uint256"
+        "type": "uint256",
+        "internalType": "uint256"
       },
       {
-        "internalType": "enum VoteType",
         "name": "support",
-        "type": "uint8"
+        "type": "uint8",
+        "internalType": "enum VoteType"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "weight",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "castVoteWithReason",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
       },
       {
-        "internalType": "string",
+        "name": "support",
+        "type": "uint8",
+        "internalType": "enum VoteType"
+      },
+      {
         "name": "reason",
-        "type": "string"
+        "type": "string",
+        "internalType": "string"
       }
     ],
-    "name": "castVoteWithReason",
     "outputs": [
       {
-        "internalType": "uint256",
         "name": "weight",
-        "type": "uint256"
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
-    "stateMutability": "nonpayable",
-    "type": "function"
+    "stateMutability": "nonpayable"
   },
   {
-    "inputs": [],
+    "type": "function",
     "name": "creator",
-    "outputs": [
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
     "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "daoName",
+    "inputs": [],
     "outputs": [
       {
-        "internalType": "string",
         "name": "",
-        "type": "string"
+        "type": "string",
+        "internalType": "string"
       }
     ],
-    "stateMutability": "view",
-    "type": "function"
+    "stateMutability": "view"
   },
   {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      }
-    ],
+    "type": "function",
     "name": "executableAfter",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
     "outputs": [
       {
-        "internalType": "uint256",
         "name": "",
-        "type": "uint256"
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
-    "stateMutability": "view",
-    "type": "function"
+    "stateMutability": "view"
   },
   {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      }
-    ],
+    "type": "function",
     "name": "executeProposal",
-    "outputs": [],
-    "stateMutability": "payable",
-    "type": "function"
-  },
-  {
     "inputs": [
       {
-        "internalType": "uint256",
         "name": "proposalId",
-        "type": "uint256"
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
+    "outputs": [],
+    "stateMutability": "payable"
+  },
+  {
+    "type": "function",
     "name": "getProposal",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
     "outputs": [
       {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct Proposal",
         "components": [
           {
-            "internalType": "uint256",
             "name": "id",
-            "type": "uint256"
+            "type": "uint256",
+            "internalType": "uint256"
           },
           {
+            "name": "actions",
+            "type": "tuple[]",
+            "internalType": "struct ProposalAction[]",
             "components": [
               {
-                "internalType": "address",
                 "name": "target",
-                "type": "address"
+                "type": "address",
+                "internalType": "address"
               },
               {
-                "internalType": "uint256",
                 "name": "value",
-                "type": "uint256"
+                "type": "uint256",
+                "internalType": "uint256"
               },
               {
-                "internalType": "bytes",
                 "name": "data",
-                "type": "bytes"
+                "type": "bytes",
+                "internalType": "bytes"
               }
-            ],
-            "internalType": "struct ProposalAction[]",
-            "name": "actions",
-            "type": "tuple[]"
+            ]
           },
           {
-            "internalType": "address",
             "name": "proposer",
-            "type": "address"
+            "type": "address",
+            "internalType": "address"
           },
           {
-            "internalType": "string",
             "name": "metadataURI",
-            "type": "string"
+            "type": "string",
+            "internalType": "string"
           },
           {
-            "internalType": "uint256",
             "name": "createdBlock",
-            "type": "uint256"
+            "type": "uint256",
+            "internalType": "uint256"
           },
           {
-            "internalType": "uint256",
             "name": "snapshotBlock",
-            "type": "uint256"
+            "type": "uint256",
+            "internalType": "uint256"
           },
           {
-            "internalType": "uint256",
             "name": "startBlock",
-            "type": "uint256"
+            "type": "uint256",
+            "internalType": "uint256"
           },
           {
-            "internalType": "uint256",
             "name": "endBlock",
-            "type": "uint256"
+            "type": "uint256",
+            "internalType": "uint256"
           },
           {
-            "internalType": "uint256",
             "name": "queuedAt",
-            "type": "uint256"
+            "type": "uint256",
+            "internalType": "uint256"
           },
           {
-            "internalType": "uint256",
             "name": "forVotes",
-            "type": "uint256"
+            "type": "uint256",
+            "internalType": "uint256"
           },
           {
-            "internalType": "uint256",
             "name": "againstVotes",
-            "type": "uint256"
+            "type": "uint256",
+            "internalType": "uint256"
           },
           {
-            "internalType": "uint256",
             "name": "abstainVotes",
-            "type": "uint256"
+            "type": "uint256",
+            "internalType": "uint256"
           },
           {
-            "internalType": "bool",
             "name": "executed",
-            "type": "bool"
+            "type": "bool",
+            "internalType": "bool"
           },
           {
-            "internalType": "bool",
             "name": "cancelled",
-            "type": "bool"
+            "type": "bool",
+            "internalType": "bool"
           }
-        ],
-        "internalType": "struct Proposal",
-        "name": "",
-        "type": "tuple"
+        ]
       }
     ],
-    "stateMutability": "view",
-    "type": "function"
+    "stateMutability": "view"
   },
   {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      },
-      {
-        "internalType": "address",
-        "name": "voter",
-        "type": "address"
-      }
-    ],
+    "type": "function",
     "name": "getVoteReceipt",
-    "outputs": [
-      {
-        "components": [
-          {
-            "internalType": "bool",
-            "name": "hasVoted",
-            "type": "bool"
-          },
-          {
-            "internalType": "enum VoteType",
-            "name": "support",
-            "type": "uint8"
-          },
-          {
-            "internalType": "uint256",
-            "name": "weight",
-            "type": "uint256"
-          }
-        ],
-        "internalType": "struct VoteReceipt",
-        "name": "",
-        "type": "tuple"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "governanceConfig",
-    "outputs": [
-      {
-        "components": [
-          {
-            "internalType": "uint16",
-            "name": "quorumBps",
-            "type": "uint16"
-          },
-          {
-            "internalType": "uint16",
-            "name": "approvalThresholdBps",
-            "type": "uint16"
-          },
-          {
-            "internalType": "uint32",
-            "name": "votingDelay",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint32",
-            "name": "votingPeriod",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint32",
-            "name": "timelockDelay",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint32",
-            "name": "executionPeriod",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint256",
-            "name": "proposalThreshold",
-            "type": "uint256"
-          }
-        ],
-        "internalType": "struct GovernanceConfig",
-        "name": "",
-        "type": "tuple"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "governanceToken",
-    "outputs": [
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "proposalCount",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "proposalThreshold",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
     "inputs": [
       {
-        "components": [
-          {
-            "internalType": "address",
-            "name": "target",
-            "type": "address"
-          },
-          {
-            "internalType": "uint256",
-            "name": "value",
-            "type": "uint256"
-          },
-          {
-            "internalType": "bytes",
-            "name": "data",
-            "type": "bytes"
-          }
-        ],
-        "internalType": "struct ProposalAction[]",
-        "name": "actions",
-        "type": "tuple[]"
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
       },
       {
-        "internalType": "string",
-        "name": "metadataURI",
-        "type": "string"
+        "name": "voter",
+        "type": "address",
+        "internalType": "address"
       }
     ],
-    "name": "propose",
     "outputs": [
       {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      }
-    ],
-    "name": "queueProposal",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      }
-    ],
-    "name": "quorumVotes",
-    "outputs": [
-      {
-        "internalType": "uint256",
         "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "newToken",
-        "type": "address"
-      }
-    ],
-    "name": "setGovernanceToken",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "newTreasury",
-        "type": "address"
-      }
-    ],
-    "name": "setTreasury",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      }
-    ],
-    "name": "state",
-    "outputs": [
-      {
-        "internalType": "enum ProposalState",
-        "name": "",
-        "type": "uint8"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "treasury",
-    "outputs": [
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
+        "type": "tuple",
+        "internalType": "struct VoteReceipt",
         "components": [
           {
-            "internalType": "uint16",
-            "name": "quorumBps",
-            "type": "uint16"
+            "name": "hasVoted",
+            "type": "bool",
+            "internalType": "bool"
           },
           {
-            "internalType": "uint16",
-            "name": "approvalThresholdBps",
-            "type": "uint16"
+            "name": "support",
+            "type": "uint8",
+            "internalType": "enum VoteType"
           },
           {
-            "internalType": "uint32",
-            "name": "votingDelay",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint32",
-            "name": "votingPeriod",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint32",
-            "name": "timelockDelay",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint32",
-            "name": "executionPeriod",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint256",
-            "name": "proposalThreshold",
-            "type": "uint256"
+            "name": "weight",
+            "type": "uint256",
+            "internalType": "uint256"
           }
-        ],
-        "internalType": "struct GovernanceConfig",
-        "name": "newConfig",
-        "type": "tuple"
+        ]
       }
     ],
-    "name": "updateGovernanceConfig",
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "governanceConfig",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct GovernanceConfig",
+        "components": [
+          {
+            "name": "quorumBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "approvalThresholdBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "votingDelay",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "votingPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "timelockDelay",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "executionPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "proposalThreshold",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "governanceToken",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "initialize",
+    "inputs": [
+      {
+        "name": "daoName_",
+        "type": "string",
+        "internalType": "string"
+      },
+      {
+        "name": "creator_",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "governanceToken_",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "treasury_",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "config_",
+        "type": "tuple",
+        "internalType": "struct GovernanceConfig",
+        "components": [
+          {
+            "name": "quorumBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "approvalThresholdBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "votingDelay",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "votingPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "timelockDelay",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "executionPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "proposalThreshold",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      }
+    ],
     "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "proposalCount",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "proposalThreshold",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "propose",
+    "inputs": [
+      {
+        "name": "actions",
+        "type": "tuple[]",
+        "internalType": "struct ProposalAction[]",
+        "components": [
+          {
+            "name": "target",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "value",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "data",
+            "type": "bytes",
+            "internalType": "bytes"
+          }
+        ]
+      },
+      {
+        "name": "metadataURI",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "queueProposal",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "quorumVotes",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "setGovernanceToken",
+    "inputs": [
+      {
+        "name": "newToken",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setTreasury",
+    "inputs": [
+      {
+        "name": "newTreasury",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "state",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint8",
+        "internalType": "enum ProposalState"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "treasury",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "updateGovernanceConfig",
+    "inputs": [
+      {
+        "name": "newConfig",
+        "type": "tuple",
+        "internalType": "struct GovernanceConfig",
+        "components": [
+          {
+            "name": "quorumBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "approvalThresholdBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "votingDelay",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "votingPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "timelockDelay",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "executionPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "proposalThreshold",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "event",
+    "name": "GovernanceConfigUpdated",
+    "inputs": [
+      {
+        "name": "quorumBps",
+        "type": "uint16",
+        "indexed": false,
+        "internalType": "uint16"
+      },
+      {
+        "name": "approvalThresholdBps",
+        "type": "uint16",
+        "indexed": false,
+        "internalType": "uint16"
+      },
+      {
+        "name": "votingDelay",
+        "type": "uint32",
+        "indexed": false,
+        "internalType": "uint32"
+      },
+      {
+        "name": "votingPeriod",
+        "type": "uint32",
+        "indexed": false,
+        "internalType": "uint32"
+      },
+      {
+        "name": "proposalThreshold",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "GovernanceTokenUpdated",
+    "inputs": [
+      {
+        "name": "previousToken",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "newToken",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "Initialized",
+    "inputs": [
+      {
+        "name": "version",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ProposalCancelled",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "cancelledBy",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ProposalCreated",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "proposer",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "metadataURI",
+        "type": "string",
+        "indexed": false,
+        "internalType": "string"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ProposalExecuted",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "executor",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ProposalQueued",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "executeAfter",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "TreasuryUpdated",
+    "inputs": [
+      {
+        "name": "previousTreasury",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "newTreasury",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "VoteCast",
+    "inputs": [
+      {
+        "name": "voter",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "support",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "enum VoteType"
+      },
+      {
+        "name": "weight",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "reason",
+        "type": "string",
+        "indexed": false,
+        "internalType": "string"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "error",
+    "name": "AlreadyVoted",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ApprovalThresholdNotMet",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "EmptyMetadataURI",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "EmptyProposalActions",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ExecutionFailed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidApprovalThreshold",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidInitialization",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidProposalAction",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidQuorum",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidValue",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidVotingDelay",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidVotingPeriod",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotInitializing",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ProposalAlreadyCancelled",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ProposalAlreadyExecuted",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ProposalAlreadyQueued",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ProposalExpired",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ProposalNotActive",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ProposalNotExecutable",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ProposalThresholdNotMet",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "QuorumNotReached",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "Unauthorized",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "VotingNotStarted",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ZeroAddress",
+    "inputs": []
   }
 ]

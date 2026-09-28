@@ -1,220 +1,319 @@
 [
   {
-    "anonymous": false,
+    "type": "constructor",
     "inputs": [
       {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "daoId",
-        "type": "uint256"
+        "name": "governanceTokenImplementation_",
+        "type": "address",
+        "internalType": "address"
       },
       {
-        "indexed": true,
-        "internalType": "address",
-        "name": "creator",
-        "type": "address"
+        "name": "stakedGovernanceTokenImplementation_",
+        "type": "address",
+        "internalType": "address"
       },
       {
-        "indexed": false,
-        "internalType": "address",
-        "name": "governance",
-        "type": "address"
+        "name": "treasuryImplementation_",
+        "type": "address",
+        "internalType": "address"
       },
       {
-        "indexed": false,
-        "internalType": "address",
-        "name": "treasury",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "address",
-        "name": "token",
-        "type": "address"
+        "name": "governanceImplementation_",
+        "type": "address",
+        "internalType": "address"
       }
     ],
-    "name": "DAOCreated",
-    "type": "event"
+    "stateMutability": "nonpayable"
   },
   {
+    "type": "function",
+    "name": "createDAO",
     "inputs": [
       {
-        "internalType": "string",
         "name": "name",
-        "type": "string"
+        "type": "string",
+        "internalType": "string"
       },
       {
-        "internalType": "string",
         "name": "symbol",
-        "type": "string"
+        "type": "string",
+        "internalType": "string"
       },
       {
-        "internalType": "uint256",
         "name": "initialSupply",
-        "type": "uint256"
+        "type": "uint256",
+        "internalType": "uint256"
       },
       {
-        "internalType": "uint256",
         "name": "maxSupply",
-        "type": "uint256"
+        "type": "uint256",
+        "internalType": "uint256"
       },
       {
+        "name": "config",
+        "type": "tuple",
+        "internalType": "struct GovernanceConfig",
         "components": [
           {
-            "internalType": "uint16",
             "name": "quorumBps",
-            "type": "uint16"
+            "type": "uint16",
+            "internalType": "uint16"
           },
           {
-            "internalType": "uint16",
             "name": "approvalThresholdBps",
-            "type": "uint16"
+            "type": "uint16",
+            "internalType": "uint16"
           },
           {
-            "internalType": "uint32",
             "name": "votingDelay",
-            "type": "uint32"
+            "type": "uint32",
+            "internalType": "uint32"
           },
           {
-            "internalType": "uint32",
             "name": "votingPeriod",
-            "type": "uint32"
+            "type": "uint32",
+            "internalType": "uint32"
           },
           {
-            "internalType": "uint32",
             "name": "timelockDelay",
-            "type": "uint32"
+            "type": "uint32",
+            "internalType": "uint32"
           },
           {
-            "internalType": "uint32",
             "name": "executionPeriod",
-            "type": "uint32"
+            "type": "uint32",
+            "internalType": "uint32"
           },
           {
-            "internalType": "uint256",
             "name": "proposalThreshold",
-            "type": "uint256"
+            "type": "uint256",
+            "internalType": "uint256"
           }
-        ],
-        "internalType": "struct GovernanceConfig",
-        "name": "config",
-        "type": "tuple"
+        ]
       }
     ],
-    "name": "createDAO",
     "outputs": [
       {
-        "internalType": "address",
         "name": "governance",
-        "type": "address"
+        "type": "address",
+        "internalType": "address"
       }
     ],
-    "stateMutability": "nonpayable",
-    "type": "function"
+    "stateMutability": "nonpayable"
   },
   {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      },
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
+    "type": "function",
     "name": "creatorDAOs",
-    "outputs": [
+    "inputs": [
       {
-        "internalType": "address",
         "name": "",
-        "type": "address"
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
-    "stateMutability": "view",
-    "type": "function"
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
   },
   {
-    "inputs": [],
+    "type": "function",
     "name": "daoCount",
+    "inputs": [],
     "outputs": [
       {
-        "internalType": "uint256",
         "name": "",
-        "type": "uint256"
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
-    "stateMutability": "view",
-    "type": "function"
+    "stateMutability": "view"
   },
   {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
+    "type": "function",
     "name": "daos",
-    "outputs": [
-      {
-        "internalType": "string",
-        "name": "name",
-        "type": "string"
-      },
-      {
-        "internalType": "address",
-        "name": "creator",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "governanceToken",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "underlyingToken",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "governance",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "treasury",
-        "type": "address"
-      },
-      {
-        "internalType": "uint256",
-        "name": "createdAt",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
     "inputs": [
       {
-        "internalType": "address",
-        "name": "creator",
-        "type": "address"
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
-    "name": "getCreatorDAOs",
     "outputs": [
       {
-        "internalType": "address[]",
-        "name": "",
-        "type": "address[]"
+        "name": "name",
+        "type": "string",
+        "internalType": "string"
+      },
+      {
+        "name": "creator",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "governanceToken",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "underlyingToken",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "governance",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "treasury",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "createdAt",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
-    "stateMutability": "view",
-    "type": "function"
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getCreatorDAOs",
+    "inputs": [
+      {
+        "name": "creator",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address[]",
+        "internalType": "address[]"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "governanceImplementation",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "governanceTokenImplementation",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "stakedGovernanceTokenImplementation",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "treasuryImplementation",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "event",
+    "name": "DAOCreated",
+    "inputs": [
+      {
+        "name": "daoId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "creator",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "governance",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "treasury",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "token",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "error",
+    "name": "FailedDeployment",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InsufficientBalance",
+    "inputs": [
+      {
+        "name": "balance",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "needed",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
   }
 ]

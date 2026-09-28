@@ -71,9 +71,12 @@ import { opportunityWalletClientFor, isOpportunityMarketConfigured } from "./opp
 import * as opportunityMarket from "./opportunityMarket/market.js";
 import * as guardWrapper from "./wrapper.js";
 import { listActionsForModel, getAction } from "./actionLibrary.js";
-import { actionAppliesTo, actionArgSpec, buildActionProposal, computeHandoverProposals } from "./proposalBuilder.js";
+import { getIntegrationAction, integrationUsage } from "./integrations/index.js";
+import { integrationListLines, actionInfoText } from "./integrations/describe.js";
+import { actionAppliesTo, actionArgSpec, buildActionProposal, buildIntegrationProposal, computeHandoverProposals } from "./proposalBuilder.js";
 import { startEventListener } from "./eventListener.js";
 import { back as opportunityBack } from "./opportunityMarket/encryptedBet.js";
+import { formatMarketAnalytics } from "./opportunityMarket/analyticsText.js";
 import { getBalance as opportunityGetBalance, getBet as opportunityGetBet, getAllBets as opportunityGetAllBets, getMarketAnalytics as opportunityGetAnalytics } from "./opportunityMarket/decrypt.js";
 import { revealAndCompleteWinningTotal, revealAndCompleteWithdrawal } from "./opportunityMarket/publicReveal.js";
 
@@ -405,6 +408,11 @@ bot.command("help", async (ctx) => {
       );
     }
     lines.push("", "*Proposals & actions for this DAO*", ...(MODEL_HELP_BLOCKS[model] ?? ["No commands known for this model."]));
+    lines.push(
+      "/listactions — ready-made actions this DAO can propose, including swaps, lending, staking and more on this network's protocols",
+      "/proposeaction `<actionId> <args...> <description>` — propose one of them; the bot encodes every step",
+      "/actioninfo `<actionId>` — an action's arguments, options and where its contract addresses were checked"
+    );
   } else {
     lines.push("", "_This group isn't linked to a DAO yet - run /register or /createdao to see DAO commands here._");
   }
@@ -428,7 +436,7 @@ bot.command("help", async (ctx) => {
       "/cancelmarket — deployer only: cancels the market so everyone can reclaim their stake",
       "/revealwinningtotal — deployer only, but public on purpose: everyone needs this number to compute their own reward",
       "/allbets — deployer only: decrypts every single bet at once, sent to you privately",
-      "/analytics — deployer only: total staked and backer count per opportunity, sent to you privately"
+      "/analytics — deployer only: totals and average bets, overall and per opportunity, sent to you privately"
     );
   } else {
     lines.push(
@@ -1896,7 +1904,7 @@ bot.command("listactions", async (ctx) => {
   const daoSpecific = getChatNftWrapper(ctx.chat.id) ? listActionsForModel("nftWrapper") : [];
   const guarded = getChatGuardWrapper(ctx.chat.id) ? listActionsForModel("guardWrapper") : [];
 
-  const lines = ["*Verified action library*", "", "Only native, already-verified DAO instructions - no external platform actions yet.", ""];
+  const lines = ["*Verified action library*", ""];
 
   if (modelActions.length) {
     lines.push(`*Governance (${model}):*`);
@@ -1914,8 +1922,9 @@ bot.command("listactions", async (ctx) => {
     lines.push("", "*Guard wrapper:*");
     for (const a of guarded) lines.push(`\`${a.id}\` — ${a.label}`);
   }
+  lines.push(...integrationListLines(getChatNetwork(ctx.chat.id)));
 
-  lines.push("", "Use `/proposeaction <actionId> <arg1> <arg2> ... <description>` to propose one.");
+  lines.push("", "Use `/proposeaction <actionId> <arg1> <arg2> ... <description>` to propose one, and `/actioninfo <actionId>` for an action's options.");
   await ctx.reply(lines.join("\n"), { parse_mode: "Markdown" });
 });
 
@@ -1934,6 +1943,11 @@ bot.command("proposeaction", async (ctx) => {
   const parts = (ctx.match?.trim() ?? "").split(/\s+/);
   const [actionId, ...rest] = parts;
   const action = getAction(actionId);
+
+  if (!action && getIntegrationAction(actionId)) {
+    await proposeIntegrationTelegram(ctx, address, actionId, rest);
+    return;
+  }
 
   if (!action) {
     await ctx.reply("Usage: `/proposeaction <actionId> <arg1> <arg2> ... <description>` — run `/listactions` to see what's available.", { parse_mode: "Markdown" });
@@ -1991,6 +2005,54 @@ bot.command("proposeaction", async (ctx) => {
     console.error(err);
     await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `Couldn't create the proposal: ${err.shortMessage || err.message}`);
   }
+});
+
+/** /proposeaction for an external-protocol action (src/integrations): several Treasury calls in one proposal. */
+async function proposeIntegrationTelegram(ctx, address, actionId, words) {
+  const model = getChatModel(ctx.chat.id);
+  if (model === "sowellian" || model === "decisionMarkets") {
+    await ctx.reply(`${model} proposals need extra parameters - use /proposecriteria or /proposewithseed with the calls from /actioninfo instead.`);
+    return;
+  }
+  const statusMsg = await ctx.reply("⏳ Checking the protocol and encoding the proposal…");
+  try {
+    const { actions, summary, description } = await buildIntegrationProposal({
+      model,
+      governanceAddress: address,
+      actionId,
+      words,
+      guardWrapperAddress: getChatGuardWrapper(ctx.chat.id),
+      nftWrapperAddress: getChatNftWrapper(ctx.chat.id),
+      lookupTicker: (ticker) => getRegisteredToken(ctx.chat.id, ticker),
+    });
+    if (!description) {
+      const integration = getIntegrationAction(actionId);
+      throw new Error(`Add a description at the end. Usage: /proposeaction ${actionId} ${integrationUsage(integration)} <description>`);
+    }
+    const account = await getOrCreateUserAccount(ctx.from.id);
+    const client = walletClientFor(account);
+    await ensureGasFunded(account, true);
+    const { proposalId } = await getAdapter(model).propose(client, address, actions, description);
+    await ctx.api.editMessageText(
+      ctx.chat.id,
+      statusMsg.message_id,
+      `✅ Proposal #${proposalId} created via \`${actionId}\` (${actions.length} step${actions.length === 1 ? "" : "s"}).\n\n${summary}\n\nUse /proposal ${proposalId} to check on it.`,
+      { parse_mode: "Markdown" }
+    );
+  } catch (err) {
+    console.error(err);
+    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `Couldn't create the proposal: ${err.shortMessage || err.message}`);
+  }
+}
+
+/*//////////////////////////////////////////////////////////////
+                            /actioninfo
+//////////////////////////////////////////////////////////////*/
+
+bot.command("actioninfo", async (ctx) => {
+  const actionId = ctx.match?.trim();
+  const text = actionInfoText(actionId, getChatNetwork(ctx.chat.id), "/proposeaction");
+  await ctx.reply(text ?? "Usage: `/actioninfo <actionId>` — run /listactions to see them.", { parse_mode: "Markdown" });
 });
 
 /*//////////////////////////////////////////////////////////////
@@ -4382,19 +4444,7 @@ bot.command("analytics", async (ctx) => {
   try {
     const stats = await opportunityGetAnalytics(client, address);
     const decimals = await opportunityMarket.getUnderlyingDecimals(address);
-    const lines = stats.opportunities.map(
-      (o) => `#${o.id} (\`${short(o.lister)}\`): *${formatUnits(o.totalStaked, decimals)}* staked across *${o.backerCount}* backer(s)`
-    );
-    const message = [
-      `*Market analytics*`,
-      "",
-      `Total bets placed: *${stats.totalBets}*`,
-      `Total staked overall: *${formatUnits(stats.totalStakedOverall, decimals)}*`,
-      `Unique bettors: *${stats.totalUniqueBettors}*`,
-      "",
-      "*Per opportunity:*",
-      ...(lines.length ? lines : ["No opportunities listed yet."]),
-    ].join("\n");
+    const message = formatMarketAnalytics(stats, decimals);
     await deliverPrivately(ctx, statusMsg, message, "Sent the market analytics.");
   } catch (err) {
     console.error(err);

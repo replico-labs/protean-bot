@@ -1,0 +1,1024 @@
+{
+  "_source": "Seaport 1.6: compiled Seaport artifact shipped in @opensea/seaport-js@4.3.0 (src/artifacts/seaport/contracts/Seaport.sol). ERC721/ERC1155: seaport-js src/abi. OpenSea official. Do not hand-edit.",
+  "seaport": [
+    {
+      "inputs": [
+        {
+          "components": [
+            {
+              "components": [
+                {
+                  "name": "offerer",
+                  "type": "address"
+                },
+                {
+                  "name": "zone",
+                  "type": "address"
+                },
+                {
+                  "components": [
+                    {
+                      "name": "itemType",
+                      "type": "uint8"
+                    },
+                    {
+                      "name": "token",
+                      "type": "address"
+                    },
+                    {
+                      "name": "identifierOrCriteria",
+                      "type": "uint256"
+                    },
+                    {
+                      "name": "startAmount",
+                      "type": "uint256"
+                    },
+                    {
+                      "name": "endAmount",
+                      "type": "uint256"
+                    }
+                  ],
+                  "name": "offer",
+                  "type": "tuple[]"
+                },
+                {
+                  "components": [
+                    {
+                      "name": "itemType",
+                      "type": "uint8"
+                    },
+                    {
+                      "name": "token",
+                      "type": "address"
+                    },
+                    {
+                      "name": "identifierOrCriteria",
+                      "type": "uint256"
+                    },
+                    {
+                      "name": "startAmount",
+                      "type": "uint256"
+                    },
+                    {
+                      "name": "endAmount",
+                      "type": "uint256"
+                    },
+                    {
+                      "name": "recipient",
+                      "type": "address"
+                    }
+                  ],
+                  "name": "consideration",
+                  "type": "tuple[]"
+                },
+                {
+                  "name": "orderType",
+                  "type": "uint8"
+                },
+                {
+                  "name": "startTime",
+                  "type": "uint256"
+                },
+                {
+                  "name": "endTime",
+                  "type": "uint256"
+                },
+                {
+                  "name": "zoneHash",
+                  "type": "bytes32"
+                },
+                {
+                  "name": "salt",
+                  "type": "uint256"
+                },
+                {
+                  "name": "conduitKey",
+                  "type": "bytes32"
+                },
+                {
+                  "name": "totalOriginalConsiderationItems",
+                  "type": "uint256"
+                }
+              ],
+              "name": "parameters",
+              "type": "tuple"
+            },
+            {
+              "name": "signature",
+              "type": "bytes"
+            }
+          ],
+          "name": "",
+          "type": "tuple[]"
+        }
+      ],
+      "name": "validate",
+      "outputs": [
+        {
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "components": [
+            {
+              "name": "offerer",
+              "type": "address"
+            },
+            {
+              "name": "zone",
+              "type": "address"
+            },
+            {
+              "components": [
+                {
+                  "name": "itemType",
+                  "type": "uint8"
+                },
+                {
+                  "name": "token",
+                  "type": "address"
+                },
+                {
+                  "name": "identifierOrCriteria",
+                  "type": "uint256"
+                },
+                {
+                  "name": "startAmount",
+                  "type": "uint256"
+                },
+                {
+                  "name": "endAmount",
+                  "type": "uint256"
+                }
+              ],
+              "name": "offer",
+              "type": "tuple[]"
+            },
+            {
+              "components": [
+                {
+                  "name": "itemType",
+                  "type": "uint8"
+                },
+                {
+                  "name": "token",
+                  "type": "address"
+                },
+                {
+                  "name": "identifierOrCriteria",
+                  "type": "uint256"
+                },
+                {
+                  "name": "startAmount",
+                  "type": "uint256"
+                },
+                {
+                  "name": "endAmount",
+                  "type": "uint256"
+                },
+                {
+                  "name": "recipient",
+                  "type": "address"
+                }
+              ],
+              "name": "consideration",
+              "type": "tuple[]"
+            },
+            {
+              "name": "orderType",
+              "type": "uint8"
+            },
+            {
+              "name": "startTime",
+              "type": "uint256"
+            },
+            {
+              "name": "endTime",
+              "type": "uint256"
+            },
+            {
+              "name": "zoneHash",
+              "type": "bytes32"
+            },
+            {
+              "name": "salt",
+              "type": "uint256"
+            },
+            {
+              "name": "conduitKey",
+              "type": "bytes32"
+            },
+            {
+              "name": "counter",
+              "type": "uint256"
+            }
+          ],
+          "name": "orders",
+          "type": "tuple[]"
+        }
+      ],
+      "name": "cancel",
+      "outputs": [
+        {
+          "name": "cancelled",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "name": "offerer",
+          "type": "address"
+        }
+      ],
+      "name": "getCounter",
+      "outputs": [
+        {
+          "name": "counter",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "components": [
+            {
+              "name": "offerer",
+              "type": "address"
+            },
+            {
+              "name": "zone",
+              "type": "address"
+            },
+            {
+              "components": [
+                {
+                  "name": "itemType",
+                  "type": "uint8"
+                },
+                {
+                  "name": "token",
+                  "type": "address"
+                },
+                {
+                  "name": "identifierOrCriteria",
+                  "type": "uint256"
+                },
+                {
+                  "name": "startAmount",
+                  "type": "uint256"
+                },
+                {
+                  "name": "endAmount",
+                  "type": "uint256"
+                }
+              ],
+              "name": "offer",
+              "type": "tuple[]"
+            },
+            {
+              "components": [
+                {
+                  "name": "itemType",
+                  "type": "uint8"
+                },
+                {
+                  "name": "token",
+                  "type": "address"
+                },
+                {
+                  "name": "identifierOrCriteria",
+                  "type": "uint256"
+                },
+                {
+                  "name": "startAmount",
+                  "type": "uint256"
+                },
+                {
+                  "name": "endAmount",
+                  "type": "uint256"
+                },
+                {
+                  "name": "recipient",
+                  "type": "address"
+                }
+              ],
+              "name": "consideration",
+              "type": "tuple[]"
+            },
+            {
+              "name": "orderType",
+              "type": "uint8"
+            },
+            {
+              "name": "startTime",
+              "type": "uint256"
+            },
+            {
+              "name": "endTime",
+              "type": "uint256"
+            },
+            {
+              "name": "zoneHash",
+              "type": "bytes32"
+            },
+            {
+              "name": "salt",
+              "type": "uint256"
+            },
+            {
+              "name": "conduitKey",
+              "type": "bytes32"
+            },
+            {
+              "name": "counter",
+              "type": "uint256"
+            }
+          ],
+          "name": "",
+          "type": "tuple"
+        }
+      ],
+      "name": "getOrderHash",
+      "outputs": [
+        {
+          "name": "orderHash",
+          "type": "bytes32"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "name": "orderHash",
+          "type": "bytes32"
+        }
+      ],
+      "name": "getOrderStatus",
+      "outputs": [
+        {
+          "name": "isValidated",
+          "type": "bool"
+        },
+        {
+          "name": "isCancelled",
+          "type": "bool"
+        },
+        {
+          "name": "totalFilled",
+          "type": "uint256"
+        },
+        {
+          "name": "totalSize",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "information",
+      "outputs": [
+        {
+          "name": "version",
+          "type": "string"
+        },
+        {
+          "name": "domainSeparator",
+          "type": "bytes32"
+        },
+        {
+          "name": "conduitController",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "components": [
+            {
+              "name": "considerationToken",
+              "type": "address"
+            },
+            {
+              "name": "considerationIdentifier",
+              "type": "uint256"
+            },
+            {
+              "name": "considerationAmount",
+              "type": "uint256"
+            },
+            {
+              "name": "offerer",
+              "type": "address"
+            },
+            {
+              "name": "zone",
+              "type": "address"
+            },
+            {
+              "name": "offerToken",
+              "type": "address"
+            },
+            {
+              "name": "offerIdentifier",
+              "type": "uint256"
+            },
+            {
+              "name": "offerAmount",
+              "type": "uint256"
+            },
+            {
+              "name": "basicOrderType",
+              "type": "uint8"
+            },
+            {
+              "name": "startTime",
+              "type": "uint256"
+            },
+            {
+              "name": "endTime",
+              "type": "uint256"
+            },
+            {
+              "name": "zoneHash",
+              "type": "bytes32"
+            },
+            {
+              "name": "salt",
+              "type": "uint256"
+            },
+            {
+              "name": "offererConduitKey",
+              "type": "bytes32"
+            },
+            {
+              "name": "fulfillerConduitKey",
+              "type": "bytes32"
+            },
+            {
+              "name": "totalOriginalAdditionalRecipients",
+              "type": "uint256"
+            },
+            {
+              "components": [
+                {
+                  "name": "amount",
+                  "type": "uint256"
+                },
+                {
+                  "name": "recipient",
+                  "type": "address"
+                }
+              ],
+              "name": "additionalRecipients",
+              "type": "tuple[]"
+            },
+            {
+              "name": "signature",
+              "type": "bytes"
+            }
+          ],
+          "name": "",
+          "type": "tuple"
+        }
+      ],
+      "name": "fulfillBasicOrder",
+      "outputs": [
+        {
+          "name": "fulfilled",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "payable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "components": [
+            {
+              "name": "considerationToken",
+              "type": "address"
+            },
+            {
+              "name": "considerationIdentifier",
+              "type": "uint256"
+            },
+            {
+              "name": "considerationAmount",
+              "type": "uint256"
+            },
+            {
+              "name": "offerer",
+              "type": "address"
+            },
+            {
+              "name": "zone",
+              "type": "address"
+            },
+            {
+              "name": "offerToken",
+              "type": "address"
+            },
+            {
+              "name": "offerIdentifier",
+              "type": "uint256"
+            },
+            {
+              "name": "offerAmount",
+              "type": "uint256"
+            },
+            {
+              "name": "basicOrderType",
+              "type": "uint8"
+            },
+            {
+              "name": "startTime",
+              "type": "uint256"
+            },
+            {
+              "name": "endTime",
+              "type": "uint256"
+            },
+            {
+              "name": "zoneHash",
+              "type": "bytes32"
+            },
+            {
+              "name": "salt",
+              "type": "uint256"
+            },
+            {
+              "name": "offererConduitKey",
+              "type": "bytes32"
+            },
+            {
+              "name": "fulfillerConduitKey",
+              "type": "bytes32"
+            },
+            {
+              "name": "totalOriginalAdditionalRecipients",
+              "type": "uint256"
+            },
+            {
+              "components": [
+                {
+                  "name": "amount",
+                  "type": "uint256"
+                },
+                {
+                  "name": "recipient",
+                  "type": "address"
+                }
+              ],
+              "name": "additionalRecipients",
+              "type": "tuple[]"
+            },
+            {
+              "name": "signature",
+              "type": "bytes"
+            }
+          ],
+          "name": "",
+          "type": "tuple"
+        }
+      ],
+      "name": "fulfillBasicOrder_efficient_6GL6yc",
+      "outputs": [
+        {
+          "name": "fulfilled",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "payable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "components": [
+            {
+              "components": [
+                {
+                  "name": "offerer",
+                  "type": "address"
+                },
+                {
+                  "name": "zone",
+                  "type": "address"
+                },
+                {
+                  "components": [
+                    {
+                      "name": "itemType",
+                      "type": "uint8"
+                    },
+                    {
+                      "name": "token",
+                      "type": "address"
+                    },
+                    {
+                      "name": "identifierOrCriteria",
+                      "type": "uint256"
+                    },
+                    {
+                      "name": "startAmount",
+                      "type": "uint256"
+                    },
+                    {
+                      "name": "endAmount",
+                      "type": "uint256"
+                    }
+                  ],
+                  "name": "offer",
+                  "type": "tuple[]"
+                },
+                {
+                  "components": [
+                    {
+                      "name": "itemType",
+                      "type": "uint8"
+                    },
+                    {
+                      "name": "token",
+                      "type": "address"
+                    },
+                    {
+                      "name": "identifierOrCriteria",
+                      "type": "uint256"
+                    },
+                    {
+                      "name": "startAmount",
+                      "type": "uint256"
+                    },
+                    {
+                      "name": "endAmount",
+                      "type": "uint256"
+                    },
+                    {
+                      "name": "recipient",
+                      "type": "address"
+                    }
+                  ],
+                  "name": "consideration",
+                  "type": "tuple[]"
+                },
+                {
+                  "name": "orderType",
+                  "type": "uint8"
+                },
+                {
+                  "name": "startTime",
+                  "type": "uint256"
+                },
+                {
+                  "name": "endTime",
+                  "type": "uint256"
+                },
+                {
+                  "name": "zoneHash",
+                  "type": "bytes32"
+                },
+                {
+                  "name": "salt",
+                  "type": "uint256"
+                },
+                {
+                  "name": "conduitKey",
+                  "type": "bytes32"
+                },
+                {
+                  "name": "totalOriginalConsiderationItems",
+                  "type": "uint256"
+                }
+              ],
+              "name": "parameters",
+              "type": "tuple"
+            },
+            {
+              "name": "signature",
+              "type": "bytes"
+            }
+          ],
+          "name": "",
+          "type": "tuple"
+        },
+        {
+          "name": "fulfillerConduitKey",
+          "type": "bytes32"
+        }
+      ],
+      "name": "fulfillOrder",
+      "outputs": [
+        {
+          "name": "fulfilled",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "payable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "components": [
+            {
+              "components": [
+                {
+                  "name": "offerer",
+                  "type": "address"
+                },
+                {
+                  "name": "zone",
+                  "type": "address"
+                },
+                {
+                  "components": [
+                    {
+                      "name": "itemType",
+                      "type": "uint8"
+                    },
+                    {
+                      "name": "token",
+                      "type": "address"
+                    },
+                    {
+                      "name": "identifierOrCriteria",
+                      "type": "uint256"
+                    },
+                    {
+                      "name": "startAmount",
+                      "type": "uint256"
+                    },
+                    {
+                      "name": "endAmount",
+                      "type": "uint256"
+                    }
+                  ],
+                  "name": "offer",
+                  "type": "tuple[]"
+                },
+                {
+                  "components": [
+                    {
+                      "name": "itemType",
+                      "type": "uint8"
+                    },
+                    {
+                      "name": "token",
+                      "type": "address"
+                    },
+                    {
+                      "name": "identifierOrCriteria",
+                      "type": "uint256"
+                    },
+                    {
+                      "name": "startAmount",
+                      "type": "uint256"
+                    },
+                    {
+                      "name": "endAmount",
+                      "type": "uint256"
+                    },
+                    {
+                      "name": "recipient",
+                      "type": "address"
+                    }
+                  ],
+                  "name": "consideration",
+                  "type": "tuple[]"
+                },
+                {
+                  "name": "orderType",
+                  "type": "uint8"
+                },
+                {
+                  "name": "startTime",
+                  "type": "uint256"
+                },
+                {
+                  "name": "endTime",
+                  "type": "uint256"
+                },
+                {
+                  "name": "zoneHash",
+                  "type": "bytes32"
+                },
+                {
+                  "name": "salt",
+                  "type": "uint256"
+                },
+                {
+                  "name": "conduitKey",
+                  "type": "bytes32"
+                },
+                {
+                  "name": "totalOriginalConsiderationItems",
+                  "type": "uint256"
+                }
+              ],
+              "name": "parameters",
+              "type": "tuple"
+            },
+            {
+              "name": "numerator",
+              "type": "uint120"
+            },
+            {
+              "name": "denominator",
+              "type": "uint120"
+            },
+            {
+              "name": "signature",
+              "type": "bytes"
+            },
+            {
+              "name": "extraData",
+              "type": "bytes"
+            }
+          ],
+          "name": "",
+          "type": "tuple"
+        },
+        {
+          "components": [
+            {
+              "name": "orderIndex",
+              "type": "uint256"
+            },
+            {
+              "name": "side",
+              "type": "uint8"
+            },
+            {
+              "name": "index",
+              "type": "uint256"
+            },
+            {
+              "name": "identifier",
+              "type": "uint256"
+            },
+            {
+              "name": "criteriaProof",
+              "type": "bytes32[]"
+            }
+          ],
+          "name": "",
+          "type": "tuple[]"
+        },
+        {
+          "name": "fulfillerConduitKey",
+          "type": "bytes32"
+        },
+        {
+          "name": "recipient",
+          "type": "address"
+        }
+      ],
+      "name": "fulfillAdvancedOrder",
+      "outputs": [
+        {
+          "name": "fulfilled",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "payable",
+      "type": "function"
+    }
+  ],
+  "erc721": [
+    {
+      "inputs": [
+        {
+          "name": "operator",
+          "type": "address"
+        },
+        {
+          "name": "approved",
+          "type": "bool"
+        }
+      ],
+      "name": "setApprovalForAll",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "name": "",
+          "type": "address"
+        },
+        {
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "name": "isApprovedForAll",
+      "outputs": [
+        {
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "name": "ownerOf",
+      "outputs": [
+        {
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    }
+  ],
+  "erc1155": [
+    {
+      "inputs": [
+        {
+          "name": "operator",
+          "type": "address"
+        },
+        {
+          "name": "approved",
+          "type": "bool"
+        }
+      ],
+      "name": "setApprovalForAll",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "name": "",
+          "type": "address"
+        },
+        {
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "name": "isApprovedForAll",
+      "outputs": [
+        {
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "name": "",
+          "type": "address"
+        },
+        {
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "name": "balanceOf",
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    }
+  ]
+}

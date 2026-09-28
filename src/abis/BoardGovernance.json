@@ -1,782 +1,812 @@
 [
   {
-    "inputs": [
-      {
-        "internalType": "string",
-        "name": "daoName_",
-        "type": "string"
-      },
-      {
-        "internalType": "address",
-        "name": "creator_",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "treasury_",
-        "type": "address"
-      },
-      {
-        "components": [
-          {
-            "internalType": "uint16",
-            "name": "requiredApprovals",
-            "type": "uint16"
-          },
-          {
-            "internalType": "uint32",
-            "name": "timelockDelay",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint32",
-            "name": "executionPeriod",
-            "type": "uint32"
-          }
-        ],
-        "internalType": "struct BoardGovernance.BoardGovernanceConfig",
-        "name": "config_",
-        "type": "tuple"
-      },
-      {
-        "internalType": "address[]",
-        "name": "initialSigners_",
-        "type": "address[]"
-      }
-    ],
-    "stateMutability": "nonpayable",
-    "type": "constructor"
-  },
-  {
+    "type": "constructor",
     "inputs": [],
-    "name": "AlreadyConfirmed",
-    "type": "error"
+    "stateMutability": "nonpayable"
   },
   {
-    "inputs": [],
-    "name": "AlreadySigner",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "EmptyMetadataURI",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "EmptyProposalActions",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ExecutionFailed",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "InvalidConfiguration",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "InvalidProposalAction",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "InvalidValue",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "NotConfirmed",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "NotSigner",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ProposalAlreadyCancelled",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ProposalAlreadyExecuted",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ProposalAlreadyQueued",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ProposalExpired",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ProposalNotExecutable",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ProposalNotFound",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "SignerCountBelowThreshold",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ThresholdNotMet",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "Unauthorized",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ZeroAddress",
-    "type": "error"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "signer",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint16",
-        "name": "totalConfirmations",
-        "type": "uint16"
-      }
-    ],
-    "name": "ConfirmationRevoked",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "signer",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint16",
-        "name": "totalConfirmations",
-        "type": "uint16"
-      }
-    ],
-    "name": "Confirmed",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "caller",
-        "type": "address"
-      }
-    ],
-    "name": "ProposalCancelled",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "proposer",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "string",
-        "name": "metadataURI",
-        "type": "string"
-      }
-    ],
-    "name": "ProposalCreated",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "executor",
-        "type": "address"
-      }
-    ],
-    "name": "ProposalExecuted",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "executeAfter",
-        "type": "uint256"
-      }
-    ],
-    "name": "ProposalQueued",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      }
-    ],
-    "name": "ProposalUnqueued",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": false,
-        "internalType": "uint16",
-        "name": "previousValue",
-        "type": "uint16"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint16",
-        "name": "newValue",
-        "type": "uint16"
-      }
-    ],
-    "name": "RequiredApprovalsUpdated",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "signer",
-        "type": "address"
-      }
-    ],
-    "name": "SignerAdded",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "signer",
-        "type": "address"
-      }
-    ],
-    "name": "SignerRemoved",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "previousTreasury",
-        "type": "address"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "newTreasury",
-        "type": "address"
-      }
-    ],
-    "name": "TreasuryUpdated",
-    "type": "event"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "newSigner",
-        "type": "address"
-      }
-    ],
+    "type": "function",
     "name": "addSigner",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
     "inputs": [
       {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
+        "name": "newSigner",
+        "type": "address",
+        "internalType": "address"
       }
     ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "cancelProposal",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
     "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
+    "stateMutability": "nonpayable"
   },
   {
-    "inputs": [],
+    "type": "function",
     "name": "config",
+    "inputs": [],
     "outputs": [
       {
-        "components": [
-          {
-            "internalType": "uint16",
-            "name": "requiredApprovals",
-            "type": "uint16"
-          },
-          {
-            "internalType": "uint32",
-            "name": "timelockDelay",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint32",
-            "name": "executionPeriod",
-            "type": "uint32"
-          }
-        ],
+        "name": "",
+        "type": "tuple",
         "internalType": "struct BoardGovernance.BoardGovernanceConfig",
-        "name": "",
-        "type": "tuple"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      }
-    ],
-    "name": "confirmTransaction",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "creator",
-    "outputs": [
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "daoName",
-    "outputs": [
-      {
-        "internalType": "string",
-        "name": "",
-        "type": "string"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      }
-    ],
-    "name": "executableAfter",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      }
-    ],
-    "name": "executeTransaction",
-    "outputs": [],
-    "stateMutability": "payable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      }
-    ],
-    "name": "getProposal",
-    "outputs": [
-      {
         "components": [
           {
-            "internalType": "uint256",
-            "name": "id",
-            "type": "uint256"
+            "name": "requiredApprovals",
+            "type": "uint16",
+            "internalType": "uint16"
           },
           {
+            "name": "timelockDelay",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "executionPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "confirmTransaction",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "creator",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "daoName",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "executableAfter",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "executeTransaction",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "payable"
+  },
+  {
+    "type": "function",
+    "name": "getProposal",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct BoardGovernance.Proposal",
+        "components": [
+          {
+            "name": "id",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "actions",
+            "type": "tuple[]",
+            "internalType": "struct BoardGovernance.ProposalAction[]",
             "components": [
               {
-                "internalType": "address",
                 "name": "target",
-                "type": "address"
+                "type": "address",
+                "internalType": "address"
               },
               {
-                "internalType": "uint256",
                 "name": "value",
-                "type": "uint256"
+                "type": "uint256",
+                "internalType": "uint256"
               },
               {
-                "internalType": "bytes",
                 "name": "data",
-                "type": "bytes"
+                "type": "bytes",
+                "internalType": "bytes"
               }
-            ],
-            "internalType": "struct BoardGovernance.ProposalAction[]",
-            "name": "actions",
-            "type": "tuple[]"
+            ]
           },
           {
-            "internalType": "address",
             "name": "proposer",
-            "type": "address"
+            "type": "address",
+            "internalType": "address"
           },
           {
-            "internalType": "string",
             "name": "metadataURI",
-            "type": "string"
+            "type": "string",
+            "internalType": "string"
           },
           {
-            "internalType": "uint256",
             "name": "createdAt",
-            "type": "uint256"
+            "type": "uint256",
+            "internalType": "uint256"
           },
           {
-            "internalType": "uint16",
             "name": "confirmations",
-            "type": "uint16"
+            "type": "uint16",
+            "internalType": "uint16"
           },
           {
-            "internalType": "uint256",
             "name": "queuedAt",
-            "type": "uint256"
+            "type": "uint256",
+            "internalType": "uint256"
           },
           {
-            "internalType": "bool",
             "name": "executed",
-            "type": "bool"
+            "type": "bool",
+            "internalType": "bool"
           },
           {
-            "internalType": "bool",
             "name": "cancelled",
-            "type": "bool"
+            "type": "bool",
+            "internalType": "bool"
           }
-        ],
-        "internalType": "struct BoardGovernance.Proposal",
-        "name": "",
-        "type": "tuple"
+        ]
       }
     ],
-    "stateMutability": "view",
-    "type": "function"
+    "stateMutability": "view"
   },
   {
-    "inputs": [],
+    "type": "function",
     "name": "getSigners",
+    "inputs": [],
     "outputs": [
       {
-        "internalType": "address[]",
         "name": "",
-        "type": "address[]"
+        "type": "address[]",
+        "internalType": "address[]"
       }
     ],
-    "stateMutability": "view",
-    "type": "function"
+    "stateMutability": "view"
   },
   {
+    "type": "function",
+    "name": "hasConfirmed",
     "inputs": [
       {
-        "internalType": "uint256",
         "name": "",
-        "type": "uint256"
+        "type": "uint256",
+        "internalType": "uint256"
       },
       {
-        "internalType": "address",
         "name": "",
-        "type": "address"
+        "type": "address",
+        "internalType": "address"
       }
     ],
-    "name": "hasConfirmed",
     "outputs": [
       {
-        "internalType": "bool",
         "name": "",
-        "type": "bool"
+        "type": "bool",
+        "internalType": "bool"
       }
     ],
-    "stateMutability": "view",
-    "type": "function"
+    "stateMutability": "view"
   },
   {
+    "type": "function",
+    "name": "initialize",
     "inputs": [
       {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "name": "isSigner",
-    "outputs": [
+        "name": "daoName_",
+        "type": "string",
+        "internalType": "string"
+      },
       {
-        "internalType": "bool",
-        "name": "",
-        "type": "bool"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "proposalCount",
-    "outputs": [
+        "name": "creator_",
+        "type": "address",
+        "internalType": "address"
+      },
       {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
+        "name": "treasury_",
+        "type": "address",
+        "internalType": "address"
+      },
       {
+        "name": "config_",
+        "type": "tuple",
+        "internalType": "struct BoardGovernance.BoardGovernanceConfig",
         "components": [
           {
-            "internalType": "address",
-            "name": "target",
-            "type": "address"
+            "name": "requiredApprovals",
+            "type": "uint16",
+            "internalType": "uint16"
           },
           {
-            "internalType": "uint256",
-            "name": "value",
-            "type": "uint256"
+            "name": "timelockDelay",
+            "type": "uint32",
+            "internalType": "uint32"
           },
           {
-            "internalType": "bytes",
-            "name": "data",
-            "type": "bytes"
+            "name": "executionPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
           }
-        ],
-        "internalType": "struct BoardGovernance.ProposalAction[]",
-        "name": "actions",
-        "type": "tuple[]"
+        ]
       },
       {
-        "internalType": "string",
-        "name": "metadataURI",
-        "type": "string"
+        "name": "initialSigners_",
+        "type": "address[]",
+        "internalType": "address[]"
       }
     ],
-    "name": "proposeTransaction",
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "isSigner",
+    "inputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
     "outputs": [
       {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "signer",
-        "type": "address"
-      }
-    ],
-    "name": "removeSigner",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      }
-    ],
-    "name": "revokeConfirmation",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint16",
-        "name": "newRequiredApprovals",
-        "type": "uint16"
-      }
-    ],
-    "name": "setRequiredApprovals",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "newTreasury",
-        "type": "address"
-      }
-    ],
-    "name": "setTreasury",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
         "name": "",
-        "type": "uint256"
+        "type": "bool",
+        "internalType": "bool"
       }
     ],
-    "name": "signers",
-    "outputs": [
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
+    "stateMutability": "view"
   },
   {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      }
-    ],
-    "name": "state",
-    "outputs": [
-      {
-        "internalType": "enum BoardGovernance.ProposalState",
-        "name": "",
-        "type": "uint8"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
+    "type": "function",
+    "name": "proposalCount",
     "inputs": [],
-    "name": "treasury",
     "outputs": [
       {
-        "internalType": "address",
         "name": "",
-        "type": "address"
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
-    "stateMutability": "view",
-    "type": "function"
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "proposeTransaction",
+    "inputs": [
+      {
+        "name": "actions",
+        "type": "tuple[]",
+        "internalType": "struct BoardGovernance.ProposalAction[]",
+        "components": [
+          {
+            "name": "target",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "value",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "data",
+            "type": "bytes",
+            "internalType": "bytes"
+          }
+        ]
+      },
+      {
+        "name": "metadataURI",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "removeSigner",
+    "inputs": [
+      {
+        "name": "signer",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "revokeConfirmation",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setRequiredApprovals",
+    "inputs": [
+      {
+        "name": "newRequiredApprovals",
+        "type": "uint16",
+        "internalType": "uint16"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setTreasury",
+    "inputs": [
+      {
+        "name": "newTreasury",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "signers",
+    "inputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "state",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint8",
+        "internalType": "enum BoardGovernance.ProposalState"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "treasury",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "event",
+    "name": "ConfirmationRevoked",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "signer",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "totalConfirmations",
+        "type": "uint16",
+        "indexed": false,
+        "internalType": "uint16"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "Confirmed",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "signer",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "totalConfirmations",
+        "type": "uint16",
+        "indexed": false,
+        "internalType": "uint16"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "Initialized",
+    "inputs": [
+      {
+        "name": "version",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ProposalCancelled",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "caller",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ProposalCreated",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "proposer",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "metadataURI",
+        "type": "string",
+        "indexed": false,
+        "internalType": "string"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ProposalExecuted",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "executor",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ProposalQueued",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "executeAfter",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ProposalUnqueued",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "RequiredApprovalsUpdated",
+    "inputs": [
+      {
+        "name": "previousValue",
+        "type": "uint16",
+        "indexed": false,
+        "internalType": "uint16"
+      },
+      {
+        "name": "newValue",
+        "type": "uint16",
+        "indexed": false,
+        "internalType": "uint16"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "SignerAdded",
+    "inputs": [
+      {
+        "name": "signer",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "SignerRemoved",
+    "inputs": [
+      {
+        "name": "signer",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "TreasuryUpdated",
+    "inputs": [
+      {
+        "name": "previousTreasury",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "newTreasury",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "error",
+    "name": "AlreadyConfirmed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "AlreadySigner",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "EmptyMetadataURI",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "EmptyProposalActions",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ExecutionFailed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidConfiguration",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidInitialization",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidProposalAction",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidValue",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotConfirmed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotInitializing",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotSigner",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ProposalAlreadyCancelled",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ProposalAlreadyExecuted",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ProposalAlreadyQueued",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ProposalExpired",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ProposalNotExecutable",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ProposalNotFound",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "SignerCountBelowThreshold",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ThresholdNotMet",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "Unauthorized",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ZeroAddress",
+    "inputs": []
   }
 ]

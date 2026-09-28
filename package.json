@@ -9,10 +9,12 @@
     "discord": "node src/platforms/discord.js",
     "slack": "node src/platforms/slack.js",
     "keeper:sortition": "node src/keepers/sortitionKeeper.js",
-    "keeper:switchboard": "node src/keepers/switchboardPriceKeeper.js"
+    "keeper:switchboard": "node src/keepers/switchboardPriceKeeper.js",
+    "verify:integrations": "node scripts/verify-integrations.js"
   },
   "dependencies": {
     "@aws-sdk/client-kms": "^3.1131.0",
+    "@flaunch/sdk": "0.17.1",
     "@grammyjs/runner": "^2.0.3",
     "@slack/bolt": "^5.1.0",
     "@supabase/supabase-js": "^2.116.0",

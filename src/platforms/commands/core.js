@@ -1,13 +1,15 @@
 import { isAddress, getAddress, formatEther } from "viem";
 import { currentNetwork, takeNetworkArg, runOnNetwork, getNetwork, ENABLED_NETWORKS, describeNetwork } from "../../networks.js";
-import { registerChat, recordChatLinker, getChatDAO, getChatModel, unregisterChat, getChatNftWrapper, getChatGuardWrapper } from "../../db.js";
+import { registerChat, recordChatLinker, getChatDAO, getChatModel, unregisterChat, getChatNftWrapper, getChatGuardWrapper, getChatNetwork, getRegisteredToken } from "../../db.js";
 import { getProposalCount, getTreasuryBalance, getVotingPower } from "../../contracts.js";
 import { getAdapter, SUPPORTED_MODELS } from "../../governance/index.js";
 import { hasToken, getDaoInfo, getGovernanceTokenAddress, stakeTokens, unstakeTokens, isGovernanceModel, PROPOSAL_STATE_LABELS } from "../../governance/common.js";
 import { getOrCreateUserAccount } from "../../walletResolver.js";
 import { isWalletStoreConfigured } from "../../walletStore.js";
 import { listActionsForModel, getAction } from "../../actionLibrary.js";
-import { actionAppliesTo, actionArgSpec, buildActionProposal } from "../../proposalBuilder.js";
+import { actionAppliesTo, actionArgSpec, buildActionProposal, buildIntegrationProposal } from "../../proposalBuilder.js";
+import { getIntegrationAction, integrationUsage, IntegrationError } from "../../integrations/index.js";
+import { integrationListLines, actionInfoText } from "../../integrations/describe.js";
 import { CONFIG_DISPLAY_BY_MODEL, VOTE_CHOICES } from "../../display.js";
 import { short, stateLine, formatDate } from "../../format.js";
 import { NO_WALLETS, UserError, reply, requireDao, parseId, parseAmount, userClient, mayManageLink, callerAddress } from "../helpers.js";
@@ -247,7 +249,8 @@ export const CORE_COMMANDS = {
       section("Treasury & tokens", listActionsForModel("treasury").concat(listActionsForModel("token")));
       if (getChatNftWrapper(ctx.chatId, ctx.platform)) section("NFT wrapper", listActionsForModel("nftWrapper"));
       if (getChatGuardWrapper(ctx.chatId, ctx.platform)) section("Guard wrapper", listActionsForModel("guardWrapper"));
-      lines.push(`Use \`${ctx.cmd("proposeaction")} <actionId> <args...> <description>\` to propose one.`);
+      lines.push(...integrationListLines(getChatNetwork(ctx.chatId, ctx.platform)).slice(1), "");
+      lines.push(`Use \`${ctx.cmd("proposeaction")} <actionId> <args...> <description>\` to propose one, and \`${ctx.cmd("actioninfo")} <actionId>\` for an action's options.`);
       return reply(lines.join("\n"), { ephemeral: true });
     },
   },
@@ -266,6 +269,7 @@ export const CORE_COMMANDS = {
       const address = requireDao(ctx);
       const [actionId, ...rest] = ctx.args;
       const action = getAction(actionId);
+      if (!action && getIntegrationAction(actionId)) return proposeIntegration(ctx, address, actionId, rest);
       if (!action) throw new UserError(`Usage: \`${ctx.cmd("proposeaction")} <actionId> <args...> <description>\` — see \`${ctx.cmd("listactions")}\`.`);
 
       const model = getChatModel(ctx.chatId, ctx.platform);
@@ -292,6 +296,17 @@ export const CORE_COMMANDS = {
       const { client } = await userClient(ctx, { forceFullTopup: true });
       const { proposalId } = await getAdapter(model).propose(client, address, [{ target, value: 0n, data }], description);
       return reply(`✅ Proposal #${proposalId} created via \`${actionId}\`.\n\nUse \`${ctx.cmd("proposal")} ${proposalId}\` to check on it, or \`${ctx.cmd("vote")} ${proposalId} for|against|abstain\` once voting opens.`);
+    },
+  },
+
+  actioninfo: {
+    description: "Usage, options and address sources for an external action",
+    ephemeralByDefault: true,
+    options: [{ name: "action", description: "Action ID from listactions", required: true }],
+    async run(ctx) {
+      const text = actionInfoText(ctx.args[0], getChatNetwork(ctx.chatId, ctx.platform), ctx.cmd("proposeaction"));
+      if (!text) throw new UserError(`Usage: \`${ctx.cmd("actioninfo")} <actionId>\` — see \`${ctx.cmd("listactions")}\`.`);
+      return reply(text, { ephemeral: true });
     },
   },
 
@@ -388,3 +403,36 @@ export const CORE_COMMANDS = {
     },
   },
 };
+
+/** proposeaction for an external-protocol action: several Treasury calls in one proposal. */
+async function proposeIntegration(ctx, address, actionId, rest) {
+  const model = getChatModel(ctx.chatId, ctx.platform);
+  if (model === "sowellian" || model === "decisionMarkets") {
+    throw new UserError(`${model} proposals need extra parameters that aren't supported outside Telegram yet.`);
+  }
+  // Discord passes args and description as separate fields; join them so
+  // name=value options and the description parse the same way as Slack.
+  const words = ctx.named ? [...(ctx.named.args ?? "").split(/\s+/).filter(Boolean), ...(ctx.named.description ?? "").trim().split(/\s+/).filter(Boolean)] : rest;
+  let built;
+  try {
+    built = await buildIntegrationProposal({
+      model,
+      governanceAddress: address,
+      actionId,
+      words,
+      guardWrapperAddress: getChatGuardWrapper(ctx.chatId, ctx.platform),
+      nftWrapperAddress: getChatNftWrapper(ctx.chatId, ctx.platform),
+      lookupTicker: (ticker) => getRegisteredToken(ctx.chatId, ticker, ctx.platform),
+    });
+  } catch (err) {
+    if (err instanceof IntegrationError) throw new UserError(err.message);
+    throw err;
+  }
+  if (!built.description) {
+    throw new UserError(`Add a description at the end: \`${ctx.cmd("proposeaction")} ${actionId} ${integrationUsage(getIntegrationAction(actionId))} <description>\``);
+  }
+  const { client } = await userClient(ctx, { forceFullTopup: true });
+  const { proposalId } = await getAdapter(model).propose(client, address, built.actions, built.description);
+  const steps = built.actions.length;
+  return reply(`✅ Proposal #${proposalId} created via \`${actionId}\` (${steps} step${steps === 1 ? "" : "s"}).\n\n${built.summary}\n\nUse \`${ctx.cmd("proposal")} ${proposalId}\` to check on it.`);
+}

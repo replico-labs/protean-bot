@@ -1,0 +1,52 @@
+{
+  "_source": "Compiled with solc 0.8.27 from hyperlendx/hyperlend-core (main, 2026-07-01) src/contracts/interfaces/IPoolAddressesProviderRegistry.sol and IPool.sol. Do not hand-edit.",
+  "registry": [
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "addressesProvider",
+          "type": "address"
+        }
+      ],
+      "name": "getAddressesProviderIdByAddress",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "getAddressesProvidersList",
+      "outputs": [
+        {
+          "internalType": "address[]",
+          "name": "",
+          "type": "address[]"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    }
+  ],
+  "pool": [
+    {
+      "inputs": [],
+      "name": "getReservesList",
+      "outputs": [
+        {
+          "internalType": "address[]",
+          "name": "",
+          "type": "address[]"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    }
+  ]
+}

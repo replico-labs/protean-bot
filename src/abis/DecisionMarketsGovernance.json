@@ -1,919 +1,949 @@
 [
   {
-    "inputs": [
-      {
-        "internalType": "string",
-        "name": "daoName_",
-        "type": "string"
-      },
-      {
-        "internalType": "address",
-        "name": "creator_",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "governanceToken_",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "treasury_",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "wmon_",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "conditionalTokenImplementation_",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "conditionalVaultImplementation_",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "decisionMarketPairImplementation_",
-        "type": "address"
-      },
-      {
-        "components": [
-          {
-            "internalType": "uint32",
-            "name": "tradingPeriod",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint16",
-            "name": "thresholdBps",
-            "type": "uint16"
-          },
-          {
-            "internalType": "uint32",
-            "name": "timelockDelay",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint32",
-            "name": "executionPeriod",
-            "type": "uint32"
-          }
-        ],
-        "internalType": "struct DecisionMarketsGovernance.DecisionMarketsConfig",
-        "name": "config_",
-        "type": "tuple"
-      }
-    ],
-    "stateMutability": "nonpayable",
-    "type": "constructor"
-  },
-  {
+    "type": "constructor",
     "inputs": [],
-    "name": "AlreadyFinalized",
-    "type": "error"
+    "stateMutability": "nonpayable"
   },
   {
-    "inputs": [],
-    "name": "AlreadyReclaimed",
-    "type": "error"
+    "type": "receive",
+    "stateMutability": "payable"
   },
   {
-    "inputs": [],
-    "name": "EmptyMetadataURI",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "EmptyProposalActions",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ExecutionFailed",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "FailedDeployment",
-    "type": "error"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "balance",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "needed",
-        "type": "uint256"
-      }
-    ],
-    "name": "InsufficientBalance",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "InvalidConfiguration",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "InvalidProposalAction",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "InvalidValue",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "NativeTransferFailed",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "NotFinalized",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ProposalAlreadyCancelled",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ProposalAlreadyExecuted",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ProposalDidNotPass",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ProposalExpired",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ProposalNotExecutable",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ProposalNotFound",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "TradingWindowClosed",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "TradingWindowStillOpen",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "TransferFailed",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "Unauthorized",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ZeroAddress",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ZeroSeedAmount",
-    "type": "error"
-  },
-  {
-    "anonymous": false,
-    "inputs": [],
-    "name": "ConfigUpdated",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "previousToken",
-        "type": "address"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "newToken",
-        "type": "address"
-      }
-    ],
-    "name": "GovernanceTokenUpdated",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "baseRecovered",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "quoteRecovered",
-        "type": "uint256"
-      }
-    ],
-    "name": "LiquidityReclaimed",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "caller",
-        "type": "address"
-      }
-    ],
-    "name": "ProposalCancelled",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "proposer",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "string",
-        "name": "metadataURI",
-        "type": "string"
-      },
-      {
-        "indexed": false,
-        "internalType": "address",
-        "name": "passPool",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "address",
-        "name": "failPool",
-        "type": "address"
-      }
-    ],
-    "name": "ProposalCreated",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      }
-    ],
-    "name": "ProposalExecuted",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "bool",
-        "name": "passed",
-        "type": "bool"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "passTWAP",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "failTWAP",
-        "type": "uint256"
-      }
-    ],
-    "name": "ProposalFinalized",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "executeAfter",
-        "type": "uint256"
-      }
-    ],
-    "name": "ProposalQueued",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "trader",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "enum DecisionMarketsGovernance.Market",
-        "name": "market",
-        "type": "uint8"
-      },
-      {
-        "indexed": false,
-        "internalType": "enum DecisionMarketsGovernance.Side",
-        "name": "sideIn",
-        "type": "uint8"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "amountIn",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "amountOut",
-        "type": "uint256"
-      }
-    ],
-    "name": "Traded",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "previousTreasury",
-        "type": "address"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "newTreasury",
-        "type": "address"
-      }
-    ],
-    "name": "TreasuryUpdated",
-    "type": "event"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      }
-    ],
+    "type": "function",
     "name": "cancelProposal",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
     "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
+    "stateMutability": "nonpayable"
   },
   {
-    "inputs": [],
+    "type": "function",
     "name": "conditionalTokenImplementation",
+    "inputs": [],
     "outputs": [
       {
-        "internalType": "address",
         "name": "",
-        "type": "address"
+        "type": "address",
+        "internalType": "address"
       }
     ],
-    "stateMutability": "view",
-    "type": "function"
+    "stateMutability": "view"
   },
   {
-    "inputs": [],
+    "type": "function",
     "name": "conditionalVaultImplementation",
+    "inputs": [],
     "outputs": [
       {
-        "internalType": "address",
         "name": "",
-        "type": "address"
+        "type": "address",
+        "internalType": "address"
       }
     ],
-    "stateMutability": "view",
-    "type": "function"
+    "stateMutability": "view"
   },
   {
-    "inputs": [],
+    "type": "function",
     "name": "config",
+    "inputs": [],
     "outputs": [
       {
-        "components": [
-          {
-            "internalType": "uint32",
-            "name": "tradingPeriod",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint16",
-            "name": "thresholdBps",
-            "type": "uint16"
-          },
-          {
-            "internalType": "uint32",
-            "name": "timelockDelay",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint32",
-            "name": "executionPeriod",
-            "type": "uint32"
-          }
-        ],
+        "name": "",
+        "type": "tuple",
         "internalType": "struct DecisionMarketsGovernance.DecisionMarketsConfig",
-        "name": "",
-        "type": "tuple"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "creator",
-    "outputs": [
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "daoName",
-    "outputs": [
-      {
-        "internalType": "string",
-        "name": "",
-        "type": "string"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "decisionMarketPairImplementation",
-    "outputs": [
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      }
-    ],
-    "name": "executeProposal",
-    "outputs": [],
-    "stateMutability": "payable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      }
-    ],
-    "name": "finalizeProposal",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      }
-    ],
-    "name": "getProposal",
-    "outputs": [
-      {
         "components": [
           {
-            "internalType": "uint256",
-            "name": "id",
-            "type": "uint256"
+            "name": "tradingPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
           },
           {
+            "name": "thresholdBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "timelockDelay",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "executionPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "creator",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "daoName",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "decisionMarketPairImplementation",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "executeProposal",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "payable"
+  },
+  {
+    "type": "function",
+    "name": "finalizeProposal",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "getProposal",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct DecisionMarketsGovernance.Proposal",
+        "components": [
+          {
+            "name": "id",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "actions",
+            "type": "tuple[]",
+            "internalType": "struct DecisionMarketsGovernance.ProposalAction[]",
             "components": [
               {
-                "internalType": "address",
                 "name": "target",
-                "type": "address"
+                "type": "address",
+                "internalType": "address"
               },
               {
-                "internalType": "uint256",
                 "name": "value",
-                "type": "uint256"
+                "type": "uint256",
+                "internalType": "uint256"
               },
               {
-                "internalType": "bytes",
                 "name": "data",
-                "type": "bytes"
+                "type": "bytes",
+                "internalType": "bytes"
               }
-            ],
-            "internalType": "struct DecisionMarketsGovernance.ProposalAction[]",
-            "name": "actions",
-            "type": "tuple[]"
+            ]
           },
           {
-            "internalType": "address",
             "name": "proposer",
-            "type": "address"
+            "type": "address",
+            "internalType": "address"
           },
           {
-            "internalType": "string",
             "name": "metadataURI",
-            "type": "string"
+            "type": "string",
+            "internalType": "string"
           },
           {
-            "internalType": "uint256",
             "name": "createdAt",
-            "type": "uint256"
+            "type": "uint256",
+            "internalType": "uint256"
           },
           {
-            "internalType": "uint256",
             "name": "tradingDeadline",
-            "type": "uint256"
+            "type": "uint256",
+            "internalType": "uint256"
           },
           {
-            "internalType": "address",
             "name": "baseVault",
-            "type": "address"
+            "type": "address",
+            "internalType": "address"
           },
           {
-            "internalType": "address",
             "name": "quoteVault",
-            "type": "address"
+            "type": "address",
+            "internalType": "address"
           },
           {
-            "internalType": "address",
             "name": "passPool",
-            "type": "address"
+            "type": "address",
+            "internalType": "address"
           },
           {
-            "internalType": "address",
             "name": "failPool",
-            "type": "address"
+            "type": "address",
+            "internalType": "address"
           },
           {
-            "internalType": "bool",
             "name": "finalized",
-            "type": "bool"
+            "type": "bool",
+            "internalType": "bool"
           },
           {
-            "internalType": "bool",
             "name": "passed",
-            "type": "bool"
+            "type": "bool",
+            "internalType": "bool"
           },
           {
-            "internalType": "uint256",
             "name": "passTWAP",
-            "type": "uint256"
+            "type": "uint256",
+            "internalType": "uint256"
           },
           {
-            "internalType": "uint256",
             "name": "failTWAP",
-            "type": "uint256"
+            "type": "uint256",
+            "internalType": "uint256"
           },
           {
-            "internalType": "uint256",
             "name": "queuedAt",
-            "type": "uint256"
+            "type": "uint256",
+            "internalType": "uint256"
           },
           {
-            "internalType": "bool",
             "name": "executed",
-            "type": "bool"
+            "type": "bool",
+            "internalType": "bool"
           },
           {
-            "internalType": "bool",
             "name": "cancelled",
-            "type": "bool"
+            "type": "bool",
+            "internalType": "bool"
           },
           {
-            "internalType": "bool",
             "name": "liquidityReclaimed",
-            "type": "bool"
+            "type": "bool",
+            "internalType": "bool"
           }
-        ],
-        "internalType": "struct DecisionMarketsGovernance.Proposal",
-        "name": "",
-        "type": "tuple"
+        ]
       }
     ],
-    "stateMutability": "view",
-    "type": "function"
+    "stateMutability": "view"
   },
   {
-    "inputs": [],
+    "type": "function",
     "name": "governanceToken",
-    "outputs": [
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
     "inputs": [],
-    "name": "proposalCount",
     "outputs": [
       {
-        "internalType": "uint256",
         "name": "",
-        "type": "uint256"
+        "type": "address",
+        "internalType": "address"
       }
     ],
-    "stateMutability": "view",
-    "type": "function"
+    "stateMutability": "view"
   },
   {
+    "type": "function",
+    "name": "initialize",
     "inputs": [
       {
-        "components": [
-          {
-            "internalType": "address",
-            "name": "target",
-            "type": "address"
-          },
-          {
-            "internalType": "uint256",
-            "name": "value",
-            "type": "uint256"
-          },
-          {
-            "internalType": "bytes",
-            "name": "data",
-            "type": "bytes"
-          }
-        ],
-        "internalType": "struct DecisionMarketsGovernance.ProposalAction[]",
-        "name": "actions",
-        "type": "tuple[]"
+        "name": "daoName_",
+        "type": "string",
+        "internalType": "string"
       },
       {
-        "internalType": "string",
-        "name": "metadataURI",
-        "type": "string"
+        "name": "creator_",
+        "type": "address",
+        "internalType": "address"
       },
       {
-        "internalType": "uint256",
-        "name": "baseSeedAmount",
-        "type": "uint256"
-      }
-    ],
-    "name": "propose",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "payable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
-      }
-    ],
-    "name": "reclaimLiquidity",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "newToken",
-        "type": "address"
-      }
-    ],
-    "name": "setGovernanceToken",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "newTreasury",
-        "type": "address"
-      }
-    ],
-    "name": "setTreasury",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "proposalId",
-        "type": "uint256"
+        "name": "governanceToken_",
+        "type": "address",
+        "internalType": "address"
       },
       {
-        "internalType": "enum DecisionMarketsGovernance.Market",
-        "name": "market",
-        "type": "uint8"
+        "name": "treasury_",
+        "type": "address",
+        "internalType": "address"
       },
       {
-        "internalType": "enum DecisionMarketsGovernance.Side",
-        "name": "sideIn",
-        "type": "uint8"
+        "name": "wmon_",
+        "type": "address",
+        "internalType": "address"
       },
       {
-        "internalType": "uint256",
-        "name": "amountIn",
-        "type": "uint256"
+        "name": "conditionalTokenImplementation_",
+        "type": "address",
+        "internalType": "address"
       },
       {
-        "internalType": "uint256",
-        "name": "minAmountOut",
-        "type": "uint256"
-      }
-    ],
-    "name": "trade",
-    "outputs": [
+        "name": "conditionalVaultImplementation_",
+        "type": "address",
+        "internalType": "address"
+      },
       {
-        "internalType": "uint256",
-        "name": "amountOut",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "treasury",
-    "outputs": [
+        "name": "decisionMarketPairImplementation_",
+        "type": "address",
+        "internalType": "address"
+      },
       {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "components": [
-          {
-            "internalType": "uint32",
-            "name": "tradingPeriod",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint16",
-            "name": "thresholdBps",
-            "type": "uint16"
-          },
-          {
-            "internalType": "uint32",
-            "name": "timelockDelay",
-            "type": "uint32"
-          },
-          {
-            "internalType": "uint32",
-            "name": "executionPeriod",
-            "type": "uint32"
-          }
-        ],
+        "name": "config_",
+        "type": "tuple",
         "internalType": "struct DecisionMarketsGovernance.DecisionMarketsConfig",
-        "name": "newConfig",
-        "type": "tuple"
+        "components": [
+          {
+            "name": "tradingPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "thresholdBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "timelockDelay",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "executionPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
+          }
+        ]
       }
     ],
-    "name": "updateConfig",
     "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
+    "stateMutability": "nonpayable"
   },
   {
+    "type": "function",
+    "name": "proposalCount",
     "inputs": [],
-    "name": "wmon",
     "outputs": [
       {
-        "internalType": "address",
         "name": "",
-        "type": "address"
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
-    "stateMutability": "view",
-    "type": "function"
+    "stateMutability": "view"
   },
   {
-    "stateMutability": "payable",
-    "type": "receive"
+    "type": "function",
+    "name": "propose",
+    "inputs": [
+      {
+        "name": "actions",
+        "type": "tuple[]",
+        "internalType": "struct DecisionMarketsGovernance.ProposalAction[]",
+        "components": [
+          {
+            "name": "target",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "value",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "data",
+            "type": "bytes",
+            "internalType": "bytes"
+          }
+        ]
+      },
+      {
+        "name": "metadataURI",
+        "type": "string",
+        "internalType": "string"
+      },
+      {
+        "name": "baseSeedAmount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "payable"
+  },
+  {
+    "type": "function",
+    "name": "reclaimLiquidity",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setGovernanceToken",
+    "inputs": [
+      {
+        "name": "newToken",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setTreasury",
+    "inputs": [
+      {
+        "name": "newTreasury",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "trade",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "market",
+        "type": "uint8",
+        "internalType": "enum DecisionMarketsGovernance.Market"
+      },
+      {
+        "name": "sideIn",
+        "type": "uint8",
+        "internalType": "enum DecisionMarketsGovernance.Side"
+      },
+      {
+        "name": "amountIn",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "minAmountOut",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "amountOut",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "treasury",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "updateConfig",
+    "inputs": [
+      {
+        "name": "newConfig",
+        "type": "tuple",
+        "internalType": "struct DecisionMarketsGovernance.DecisionMarketsConfig",
+        "components": [
+          {
+            "name": "tradingPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "thresholdBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "timelockDelay",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "executionPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
+          }
+        ]
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "wmon",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "event",
+    "name": "ConfigUpdated",
+    "inputs": [],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "GovernanceTokenUpdated",
+    "inputs": [
+      {
+        "name": "previousToken",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "newToken",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "Initialized",
+    "inputs": [
+      {
+        "name": "version",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "LiquidityReclaimed",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "baseRecovered",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "quoteRecovered",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ProposalCancelled",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "caller",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ProposalCreated",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "proposer",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "metadataURI",
+        "type": "string",
+        "indexed": false,
+        "internalType": "string"
+      },
+      {
+        "name": "passPool",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "failPool",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ProposalExecuted",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ProposalFinalized",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "passed",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      },
+      {
+        "name": "passTWAP",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "failTWAP",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ProposalQueued",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "executeAfter",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "Traded",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "trader",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "market",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "enum DecisionMarketsGovernance.Market"
+      },
+      {
+        "name": "sideIn",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "enum DecisionMarketsGovernance.Side"
+      },
+      {
+        "name": "amountIn",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "amountOut",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "TreasuryUpdated",
+    "inputs": [
+      {
+        "name": "previousTreasury",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "newTreasury",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "error",
+    "name": "AlreadyFinalized",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "AlreadyReclaimed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "EmptyMetadataURI",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "EmptyProposalActions",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ExecutionFailed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "FailedDeployment",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InsufficientBalance",
+    "inputs": [
+      {
+        "name": "balance",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "needed",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "InvalidConfiguration",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidInitialization",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidProposalAction",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidValue",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NativeTransferFailed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotFinalized",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotInitializing",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ProposalAlreadyCancelled",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ProposalAlreadyExecuted",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ProposalDidNotPass",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ProposalExpired",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ProposalNotExecutable",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ProposalNotFound",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "TradingWindowClosed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "TradingWindowStillOpen",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "TransferFailed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "Unauthorized",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ZeroAddress",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ZeroSeedAmount",
+    "inputs": []
   }
 ]
