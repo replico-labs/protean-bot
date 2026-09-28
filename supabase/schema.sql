@@ -25,3 +25,22 @@ create table if not exists wallets (
 -- single row through Supabase's client-facing API - only the service
 -- role, held only by the backend, can touch this table at all.
 alter table wallets enable row level security;
+
+-- Slack: one row per workspace that installed the bot through
+-- "Add to Slack" (only used when SLACK_CLIENT_ID is set). The whole
+-- installation - including that workspace's bot token - is
+-- envelope-encrypted under the same KMS key as the wallets above.
+create table if not exists slack_installations (
+  install_key text primary key,          -- "T:<team id>", or "E:<enterprise id>" for org-wide installs
+  team_id text,
+  enterprise_id text,
+  encrypted_installation text not null,
+  encrypted_data_key text not null,
+  iv text not null,
+  auth_tag text not null,
+  updated_at timestamptz not null default now()
+);
+
+-- Same as wallets: RLS on with no policies, so only the backend's
+-- service_role key can read or write it.
+alter table slack_installations enable row level security;

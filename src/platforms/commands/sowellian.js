@@ -1,5 +1,5 @@
 import { isAddress, getAddress, zeroHash } from "viem";
-import { SWITCHBOARD_ORACLE_ADAPTER } from "../../config.js";
+import { switchboardOracleAdapter } from "../../config.js";
 import { getAdapter } from "../../governance/index.js";
 import { deployChainlinkOracle } from "../../governance/sowellian.js";
 import { VOTE_CHOICES } from "../../display.js";
@@ -78,8 +78,8 @@ export const SOWELLIAN_COMMANDS = {
 
       let oracleRaw = oracleInput;
       if (method === "oracle" && oracleInput?.toLowerCase() === "switchboard") {
-        if (!SWITCHBOARD_ORACLE_ADAPTER) throw new UserError("No Switchboard oracle adapter is configured on this bot - ask an admin to set SWITCHBOARD_ORACLE_ADAPTER, or pass an adapter address.");
-        oracleRaw = SWITCHBOARD_ORACLE_ADAPTER;
+        if (!switchboardOracleAdapter()) throw new UserError("No Switchboard oracle adapter is configured on this bot - ask an admin to set SWITCHBOARD_ORACLE_ADAPTER, or pass an adapter address.");
+        oracleRaw = switchboardOracleAdapter();
       }
       const valid =
         target && isAddress(target) && value && data &&

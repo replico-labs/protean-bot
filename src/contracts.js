@@ -2,7 +2,8 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { createWalletClient, http, formatEther, parseEther, getAddress, isAddress } from "viem";
-import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESS, monadTestnet, writeWithGasBuffer } from "./config.js";
+import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer } from "./config.js";
+import { currentNetwork, scaleBlockFields } from "./networks.js";
 import { recordGasTopup, isWalletStoreConfigured } from "./walletStore.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -178,8 +179,9 @@ export async function createDaoOnChain(name, symbol, initialSupplyWhole, maxSupp
   if (!walletClient || !operatorAccount) {
     throw new Error("OPERATOR_PRIVATE_KEY is not configured on this bot instance");
   }
+  const FACTORY_ADDRESS = FACTORY_ADDRESSES.tokenWeighted;
   if (!FACTORY_ADDRESS) {
-    throw new Error("FACTORY_ADDRESS is not configured on this bot instance");
+    throw new Error(`No tokenWeighted factory configured for ${currentNetwork().chain.name} on this bot instance`);
   }
 
   const hash = await writeWithGasBuffer(walletClient, {
@@ -191,7 +193,7 @@ export async function createDaoOnChain(name, symbol, initialSupplyWhole, maxSupp
       symbol,
       parseEther(String(initialSupplyWhole)),
       parseEther(String(maxSupplyWhole)),
-      DEFAULT_GOVERNANCE_CONFIG,
+      scaleBlockFields("tokenWeighted", DEFAULT_GOVERNANCE_CONFIG),
     ],
   });
 
@@ -218,12 +220,11 @@ export async function createDaoOnChain(name, symbol, initialSupplyWhole, maxSupp
 //////////////////////////////////////////////////////////////*/
 
 function walletClientFor(account) {
-  return createWalletClient({ account, chain: monadTestnet, transport: http() });
+  return createWalletClient({ account, chain: currentNetwork().chain, transport: http() });
 }
 
-const MIN_GAS_BALANCE = parseEther("0.005");
-const FIRST_GAS_TOPUP_AMOUNT = parseEther("0.1");
-const REPEAT_GAS_TOPUP_AMOUNT = parseEther("0.05");
+// Per network (networks.js): 0.005/0.1/0.05 MON on Monad, far smaller on
+// Base and HyperEVM where the native token is worth much more.
 
 /**
  * Tops up `account` with MON from the operator wallet if its balance is
@@ -279,14 +280,15 @@ export async function ensureGasFunded(account, forceFullTopup = false) {
   if (!walletClient || !operatorAccount) return;
 
   const balance = await publicClient.getBalance({ address: account.address });
-  if (balance >= MIN_GAS_BALANCE) return;
+  const { gas } = currentNetwork();
+  if (balance >= gas.min) return;
 
-  let topupAmount = FIRST_GAS_TOPUP_AMOUNT;
+  let topupAmount = gas.first;
   if (isWalletStoreConfigured()) {
     try {
       const topupNumber = await recordGasTopup(account.address);
       if (!forceFullTopup && topupNumber !== null && topupNumber > 1) {
-        topupAmount = REPEAT_GAS_TOPUP_AMOUNT;
+        topupAmount = gas.repeat;
       }
     } catch (err) {
       // Wallet-store lookup failing shouldn't block a user's real
@@ -315,7 +317,7 @@ export async function ensureGasFunded(account, forceFullTopup = false) {
   // short under different network conditions.
   for (let attempt = 0; attempt < 5; attempt++) {
     const updatedBalance = await publicClient.getBalance({ address: account.address });
-    if (updatedBalance >= MIN_GAS_BALANCE) return;
+    if (updatedBalance >= gas.min) return;
     await new Promise((resolve) => setTimeout(resolve, 300));
   }
 }
@@ -528,7 +530,7 @@ export async function deployWelcomeDistributor(client, tokenAddress, governanceA
 /**
  * Deploys a fresh NFTMarketplaceWrapper for a DAO - one per DAO, same
  * on-demand pattern as deployChainlinkOracle, not shared, since (unlike
- * a price adapter) this one temporarily holds real assets. Real,
+ * a price adapter) this one holds the DAO's NFTs. Real,
  * verified bytecode - extracted directly from compiling
  * NFTMarketplaceWrapper.sol against the actual installed OpenZeppelin
  * package, not assumed or hand-written.

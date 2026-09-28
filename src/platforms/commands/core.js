@@ -1,6 +1,6 @@
 import { isAddress, getAddress, formatEther } from "viem";
-import { monadTestnet } from "../../config.js";
-import { registerChat, recordChatLinker, getChatModel, unregisterChat, getChatNftWrapper, getChatGuardWrapper } from "../../db.js";
+import { currentNetwork, takeNetworkArg, runOnNetwork, getNetwork, ENABLED_NETWORKS, describeNetwork } from "../../networks.js";
+import { registerChat, recordChatLinker, getChatDAO, getChatModel, unregisterChat, getChatNftWrapper, getChatGuardWrapper } from "../../db.js";
 import { getProposalCount, getTreasuryBalance, getVotingPower } from "../../contracts.js";
 import { getAdapter, SUPPORTED_MODELS } from "../../governance/index.js";
 import { hasToken, getDaoInfo, getGovernanceTokenAddress, stakeTokens, unstakeTokens, isGovernanceModel, PROPOSAL_STATE_LABELS } from "../../governance/common.js";
@@ -19,26 +19,49 @@ export const CORE_COMMANDS = {
     options: [
       { name: "address", description: "Governance contract address", required: true },
       { name: "model", description: "Governance model (default tokenWeighted)", required: false, choices: SUPPORTED_MODELS },
+      { name: "network", description: "Network the DAO is on (default: this bot's default)", required: false, choices: ENABLED_NETWORKS },
     ],
     async run(ctx) {
-      const [address, modelRaw] = ctx.args;
+      let network, args;
+      try {
+        ({ network, rest: args } = takeNetworkArg(ctx.args));
+      } catch (err) {
+        throw new UserError(err.message);
+      }
+      const [address, modelRaw] = args;
       const model = modelRaw || "tokenWeighted";
       if (!address || !isAddress(address)) {
-        throw new UserError(`Usage: \`${ctx.cmd("register")} 0xYourGovernanceAddress [model]\`\nModels: ${SUPPORTED_MODELS.join(", ")}`);
+        throw new UserError(`Usage: \`${ctx.cmd("register")} 0xYourGovernanceAddress [model] [network]\`\nModels: ${SUPPORTED_MODELS.join(", ")}\nNetworks: ${ENABLED_NETWORKS.join(", ")}`);
       }
       if (!SUPPORTED_MODELS.includes(model)) throw new UserError(`Unknown model "${model}". Supported: ${SUPPORTED_MODELS.join(", ")}`);
       if (!mayManageLink(ctx)) throw new UserError("This channel is already linked. Only whoever linked it, or an admin, can change that.");
 
-      if (!(await isGovernanceModel(model, address))) {
-        throw new UserError(`Couldn't read a "${model}" DAO at that address on ${monadTestnet.name}. Double-check the address and model.`);
+      if (!(await runOnNetwork(network, () => isGovernanceModel(model, address)))) {
+        throw new UserError(`Couldn't read a "${model}" DAO at that address on ${getNetwork(network).chain.name}. Double-check the address, model and network.`);
       }
 
       // Linking proves nothing about who created the DAO, so the caller is
       // recorded as the channel's linker, never as its creator - creator
       // status unlocks tip, which spends operator-held tokens.
-      registerChat(ctx.chatId, getAddress(address), model, ctx.platform);
+      registerChat(ctx.chatId, getAddress(address), model, ctx.platform, undefined, network);
       recordChatLinker(ctx.chatId, ctx.userId, ctx.platform);
-      return reply(`✅ This channel is now linked to the ${model} DAO at \`${short(address)}\`.`);
+      return reply(`✅ This channel is now linked to the ${model} DAO at \`${short(address)}\` on ${getNetwork(network).chain.name}.`);
+    },
+  },
+
+  network: {
+    description: "Show which network this channel's DAO is on",
+    options: [],
+    async run(ctx) {
+      const linked = Boolean(getChatDAO(ctx.chatId, ctx.platform));
+      return reply(
+        [
+          linked ? `This channel's DAO is on ${describeNetwork()}.` : `No DAO linked here - commands use the default network, ${describeNetwork()}.`,
+          "",
+          `Networks enabled on this bot: ${ENABLED_NETWORKS.join(", ")}.`,
+          `Pick one when creating or linking a DAO, e.g. \`${ctx.cmd("createdao")} MyDAO MDAO 1000 10000 quadratic base\`.`,
+        ].join("\n")
+      );
     },
   },
 
@@ -82,7 +105,7 @@ export const CORE_COMMANDS = {
       const model = getChatModel(ctx.chatId, ctx.platform);
       const { treasuryAddress } = hasToken(model) ? await getDaoInfo(model, address) : await getAdapter(model).getDaoInfo(address);
       const balance = await getTreasuryBalance(treasuryAddress);
-      return reply(`🏦 Treasury \`${short(treasuryAddress)}\`\nBalance: *${balance} MON*`);
+      return reply(`🏦 Treasury \`${short(treasuryAddress)}\`\nBalance: *${balance} ${currentNetwork().nativeSymbol}*`);
     },
   },
 
@@ -341,7 +364,7 @@ export const CORE_COMMANDS = {
     description: "Execute a queued proposal",
     options: [
       { name: "id", description: "Proposal ID", required: true, type: "integer" },
-      { name: "value", description: "Native MON to send, if the actions need it", required: false },
+      { name: "value", description: "Native currency to send, if the actions need it", required: false },
     ],
     async run(ctx) {
       const address = requireDao(ctx);

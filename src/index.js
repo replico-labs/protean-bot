@@ -1,10 +1,12 @@
 import { Bot } from "grammy";
 import { run, sequentialize } from "@grammyjs/runner";
 import { isAddress, getAddress, parseEther, formatUnits } from "viem";
-import { BOT_TOKEN, monadTestnet, publicClient, SORTITION_RANDOMNESS_SOURCE, SWITCHBOARD_ORACLE_ADAPTER, walletClient } from "./config.js";
+import { BOT_TOKEN, publicClient, sortitionRandomnessSource, switchboardOracleAdapter, walletClient } from "./config.js";
+import { currentNetwork, explorerAddressLine, isNativeTokenWord, runOnNetwork, takeNetworkArg, describeNetwork, ENABLED_NETWORKS, getNetwork } from "./networks.js";
 import {
   registerChat,
   getChatDAO,
+  getChatNetwork,
   getChatModel,
   getChatCreator,
   registerToken,
@@ -103,6 +105,11 @@ const bot = new Bot(BOT_TOKEN);
  * user arriving before the first one finishes.
  */
 bot.use(sequentialize((ctx) => ctx.from?.id?.toString()));
+
+// Every update runs on its chat's network (networks.js): a group linked
+// to a Base DAO reads and writes Base, one linked to Monad reads Monad.
+// Groups with no DAO yet, and DMs, use the bot's default network.
+bot.use((ctx, next) => runOnNetwork(ctx.chat ? getChatNetwork(ctx.chat.id) : currentNetwork().id, next));
 
 /**
  * Tracks users mid-way through a privacy-preserving /back flow: they
@@ -359,12 +366,13 @@ const MODEL_HELP_BLOCKS = {
 bot.command("help", async (ctx) => {
   const lines = [
     "*Setup*",
-    "/createdao `<name> <symbol> <initialSupply> <maxSupply> [model]` — the main \"spin up a new DAO\" command: deploys a token, treasury, and governance contract, all linked to this chat. Models: " + SUPPORTED_MODELS.filter((m) => m !== "board").join(", "),
-    "/createboarddao `<name> <signer1> <signer2> ...` — for a Board (multisig) DAO specifically — no token at all, so it's a separate command",
-    "/register `<governance_address> [model]` — already have a DAO deployed elsewhere? Link it to this chat instead of creating a new one (admin)",
+    "/createdao `<name> <symbol> <initialSupply> <maxSupply> [model] [network]` — the main \"spin up a new DAO\" command: deploys a token, treasury, and governance contract, all linked to this chat. Models: " + SUPPORTED_MODELS.filter((m) => m !== "board").join(", "),
+    "/createboarddao `<name> <signer1> <signer2> ... [network]` — for a Board (multisig) DAO specifically — no token at all, so it's a separate command",
+    "/network — which chain this chat's DAO is on, and which networks this bot supports",
+    "/register `<governance_address> [model] [network]` — already have a DAO deployed elsewhere? Link it to this chat instead of creating a new one (admin)",
     "/unregister — unlink whatever DAO is connected here (admin) — doesn't touch the DAO itself, just this chat's connection to it",
     "/deploywelcomedistributor `<amountPerClaim> <distributionCap>` — solves \"everyone's tokens are stuck in the operator wallet\": deploys a contract new members can claim from (creator only)",
-    "/deploynftwrapper — one per DAO: deploys the contract that lets this DAO's treasury participate in NFT marketplaces like OpenSea (creator only)",
+    "/deploynftwrapper — one per DAO: deploys the contract that holds this DAO's NFTs and lists them on marketplaces like OpenSea — NFTs go here, never to the treasury (creator only)",
     "/setdistributor `<address>` — link an already-deployed welcome distributor so /claim actually works (admin)",
     "",
     "*Your wallet*",
@@ -386,7 +394,7 @@ bot.command("help", async (ctx) => {
       "/treasuryassets — every token the treasury holds, all at once, not just this DAO's own",
       "/registertoken `<ticker> <tokenAddress>` — teach the bot a shortcut so `/tip`/`/send`/`/tokenbalance` can use a ticker instead of a raw address (creator only)",
       "/tip `<amount> <recipient> [tokenAddressOrTicker]` — distribute tokens from the DAO's own operator-held supply (creator only) — this is how newly-created tokens actually reach people",
-      "/send `<amount> <recipient> [tokenAddressOrTicker]` — send tokens YOU personally hold to anyone, no restrictions — add `MON` at the end to send native currency instead of a token",
+      "/send `<amount> <recipient> [tokenAddressOrTicker]` — send tokens YOU personally hold to anyone, no restrictions — add the native symbol (`MON`, `ETH`, `HYPE`) or `native` at the end to send native currency instead of a token",
       "/proposals — see every proposal this DAO has, with current status",
       "/proposal `<id>` — full detail on one specific proposal"
     );
@@ -492,7 +500,7 @@ bot.command("createdao", async (ctx) => {
         "",
         `Models: ${Object.keys(CREATE_DAO_FUNCTIONS).join(", ")} (defaults to tokenWeighted). Board has no token at all - use /createboarddao instead.`,
         "",
-        "Network can go anywhere after the model (`monad`, `hyperliquid`, or `base`) - only `monad` is actually live right now, the others are recognized but not deployable yet.",
+        `Network can go anywhere after the model (e.g. \`base\`, \`hyperevm\`) - defaults to this bot's default network. Enabled here: ${ENABLED_NETWORKS.join(", ")}.`,
         "",
         "⚠️ Name and symbol must be single words (no spaces) for now.",
       ].join("\n"),
@@ -508,94 +516,88 @@ bot.command("createdao", async (ctx) => {
 
   // Network is detected anywhere in the trailing args, not a fixed
   // position - a network name (a plain word) can never collide with a
-  // council address (always 0x-prefixed hex), so this is safe
-  // regardless of how many council addresses follow it. Only "monad"
-  // is actually deployable right now; Hyperliquid and Base are
-  // recognized and rejected with a clear reason, not silently ignored,
-  // so this same syntax keeps working once either goes live without
-  // another command-format change.
-  const KNOWN_NETWORKS = ["monad", "hyperliquid", "base"];
-  let network = "monad";
-  let rest = restArgs;
-  const networkIndex = restArgs.findIndex((arg) => KNOWN_NETWORKS.includes(arg.toLowerCase()));
-  if (networkIndex !== -1) {
-    network = restArgs[networkIndex].toLowerCase();
-    rest = [...restArgs.slice(0, networkIndex), ...restArgs.slice(networkIndex + 1)];
-  }
-  if (network !== "monad") {
-    await ctx.reply(`"${network}" isn't deployed yet - only Monad is available right now. Your DAO will need to wait until it's live there.`);
-    return;
-  }
-
-  if (!Number.isFinite(initialSupply) || !Number.isFinite(maxSupply) || initialSupply <= 0 || maxSupply <= 0) {
-    await ctx.reply("Initial supply and max supply must be positive numbers.");
-    return;
-  }
-  if (initialSupply > maxSupply) {
-    await ctx.reply("Initial supply can't exceed max supply.");
-    return;
-  }
-
-  const createFn = CREATE_DAO_FUNCTIONS[model];
-  if (!createFn) {
-    await ctx.reply(
-      model === "board"
-        ? "Board has no token at all - use `/createboarddao <name> <signer1> <signer2> ...` instead."
-        : `Unknown model "${model}". Supported: ${Object.keys(CREATE_DAO_FUNCTIONS).join(", ")}, board (via /createboarddao)`,
-      { parse_mode: "Markdown" }
-    );
-    return;
-  }
-
-  let extra = {};
-  if (model === "delegate") {
-    if (rest.length === 0 || !rest.every((s) => isAddress(s, { strict: false }))) {
-      await ctx.reply("Delegate needs a starting council: `/createdao <name> <symbol> <initialSupply> <maxSupply> delegate <address...>`", { parse_mode: "Markdown" });
-      return;
-    }
-    extra = { council: rest };
-  } else if (model === "sortition") {
-    if (!SORTITION_RANDOMNESS_SOURCE) {
-      await ctx.reply("This bot has no randomness source configured yet - ask an admin to set SORTITION_RANDOMNESS_SOURCE.");
-      return;
-    }
-    if (rest.length === 0 || !rest.every((s) => isAddress(s, { strict: false }))) {
-      await ctx.reply("Sortition needs a starting council: `/createdao <name> <symbol> <initialSupply> <maxSupply> sortition <address...>`", { parse_mode: "Markdown" });
-      return;
-    }
-    extra = { randomnessSource: SORTITION_RANDOMNESS_SOURCE, council: rest };
-  }
-
-  const statusMsg = await ctx.reply("⏳ Creating DAO on-chain — this takes a moment…");
-
+  // council address (always 0x-prefixed hex).
+  let network, rest;
   try {
-    const result = await createFn(name, symbol, initialSupply, maxSupply, extra);
-
-    // Auto-link this chat to the new DAO, saving a manual /register step.
-    registerChat(ctx.chat.id, result.governance, model, "telegram", ctx.from.id, network);
-
-    const lines = [
-      `✅ *${name}* (${model}) created and linked to this group.`,
-      "",
-      `Governance: \`${short(result.governance)}\``,
-      hasToken(model) ? `Token (staking wrapper): \`${short(result.governanceToken)}\`` : null,
-      hasToken(model) ? `Underlying token: \`${short(result.underlyingToken)}\`` : null,
-      `Treasury: \`${short(result.treasury)}\``,
-      "",
-      `⚠️ The entire initial supply (${initialSupply} ${symbol}) is currently held by the bot's operator wallet, not any individual — this is a temporary shortcut until DAO creation moves to protean-connect. Someone will need to receive and distribute it manually for now.`,
-    ].filter(Boolean);
-
-    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, lines.join("\n"), {
-      parse_mode: "Markdown",
-    });
+    ({ network, rest } = takeNetworkArg(restArgs));
   } catch (err) {
-    console.error(err);
-    await ctx.api.editMessageText(
-      ctx.chat.id,
-      statusMsg.message_id,
-      `Couldn't create the DAO: ${err.message}`
-    );
+    await ctx.reply(err.message);
+    return;
   }
+
+  // Everything from here - config checks, the factory call - runs on the chosen network.
+  return runOnNetwork(network, async () => {
+
+    if (!Number.isFinite(initialSupply) || !Number.isFinite(maxSupply) || initialSupply <= 0 || maxSupply <= 0) {
+      await ctx.reply("Initial supply and max supply must be positive numbers.");
+      return;
+    }
+    if (initialSupply > maxSupply) {
+      await ctx.reply("Initial supply can't exceed max supply.");
+      return;
+    }
+
+    const createFn = CREATE_DAO_FUNCTIONS[model];
+    if (!createFn) {
+      await ctx.reply(
+        model === "board"
+          ? "Board has no token at all - use `/createboarddao <name> <signer1> <signer2> ...` instead."
+          : `Unknown model "${model}". Supported: ${Object.keys(CREATE_DAO_FUNCTIONS).join(", ")}, board (via /createboarddao)`,
+        { parse_mode: "Markdown" }
+      );
+      return;
+    }
+
+    let extra = {};
+    if (model === "delegate") {
+      if (rest.length === 0 || !rest.every((s) => isAddress(s, { strict: false }))) {
+        await ctx.reply("Delegate needs a starting council: `/createdao <name> <symbol> <initialSupply> <maxSupply> delegate <address...>`", { parse_mode: "Markdown" });
+        return;
+      }
+      extra = { council: rest };
+    } else if (model === "sortition") {
+      if (!sortitionRandomnessSource()) {
+        await ctx.reply("This bot has no randomness source configured yet - ask an admin to set SORTITION_RANDOMNESS_SOURCE.");
+        return;
+      }
+      if (rest.length === 0 || !rest.every((s) => isAddress(s, { strict: false }))) {
+        await ctx.reply("Sortition needs a starting council: `/createdao <name> <symbol> <initialSupply> <maxSupply> sortition <address...>`", { parse_mode: "Markdown" });
+        return;
+      }
+      extra = { randomnessSource: sortitionRandomnessSource(), council: rest };
+    }
+
+    const statusMsg = await ctx.reply("⏳ Creating DAO on-chain — this takes a moment…");
+
+    try {
+      const result = await createFn(name, symbol, initialSupply, maxSupply, extra);
+
+      // Auto-link this chat to the new DAO, saving a manual /register step.
+      registerChat(ctx.chat.id, result.governance, model, "telegram", ctx.from.id, network);
+
+      const lines = [
+        `✅ *${name}* (${model}) created on ${currentNetwork().chain.name} and linked to this group.`,
+        "",
+        `Governance: \`${short(result.governance)}\``,
+        hasToken(model) ? `Token (staking wrapper): \`${short(result.governanceToken)}\`` : null,
+        hasToken(model) ? `Underlying token: \`${short(result.underlyingToken)}\`` : null,
+        `Treasury: \`${short(result.treasury)}\``,
+        "",
+        `⚠️ The entire initial supply (${initialSupply} ${symbol}) is currently held by the bot's operator wallet, not any individual — this is a temporary shortcut until DAO creation moves to protean-connect. Someone will need to receive and distribute it manually for now.`,
+      ].filter(Boolean);
+
+      await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, lines.join("\n"), {
+        parse_mode: "Markdown",
+      });
+    } catch (err) {
+      console.error(err);
+      await ctx.api.editMessageText(
+        ctx.chat.id,
+        statusMsg.message_id,
+        `Couldn't create the DAO: ${err.message}`
+      );
+    }
+  });
 });
 
 /*//////////////////////////////////////////////////////////////
@@ -608,7 +610,7 @@ bot.command("createboarddao", async (ctx) => {
   if (args.length < 2) {
     await ctx.reply(
       [
-        "Usage: `/createboarddao <name> <signer1> <signer2> ...`",
+        "Usage: `/createboarddao <name> <signer1> <signer2> ... [network]`",
         "",
         "Example: `/createboarddao ArkBoard 0xAaa... 0xBbb... 0xCcc...`",
         "",
@@ -619,8 +621,15 @@ bot.command("createboarddao", async (ctx) => {
     return;
   }
 
-  const [name, ...signers] = args;
-  if (!signers.every((s) => isAddress(s, { strict: false }))) {
+  const [name, ...signerArgs] = args;
+  let network, signers;
+  try {
+    ({ network, rest: signers } = takeNetworkArg(signerArgs));
+  } catch (err) {
+    await ctx.reply(err.message);
+    return;
+  }
+  if (signers.length === 0 || !signers.every((s) => isAddress(s, { strict: false }))) {
     await ctx.reply("All signer addresses must be valid.");
     return;
   }
@@ -628,11 +637,11 @@ bot.command("createboarddao", async (ctx) => {
   const statusMsg = await ctx.reply("⏳ Creating DAO on-chain — this takes a moment…");
 
   try {
-    const result = await createBoardDAO(name, signers);
-    registerChat(ctx.chat.id, result.governance, "board", "telegram", ctx.from.id);
+    const result = await runOnNetwork(network, () => createBoardDAO(name, signers));
+    registerChat(ctx.chat.id, result.governance, "board", "telegram", ctx.from.id, network);
 
     const lines = [
-      `✅ *${name}* (board) created and linked to this group.`,
+      `✅ *${name}* (board) created on ${getNetwork(network).chain.name} and linked to this group.`,
       "",
       `Governance: \`${short(result.governance)}\``,
       `Treasury: \`${short(result.treasury)}\``,
@@ -647,17 +656,41 @@ bot.command("createboarddao", async (ctx) => {
 });
 
 /*//////////////////////////////////////////////////////////////
+                            /network
+//////////////////////////////////////////////////////////////*/
+
+bot.command("network", async (ctx) => {
+  const linked = ctx.chat && getChatDAO(ctx.chat.id);
+  await ctx.reply(
+    [
+      linked ? `This group's DAO is on ${describeNetwork()}.` : `No DAO linked here - commands use the default network, ${describeNetwork()}.`,
+      "",
+      `Networks enabled on this bot: ${ENABLED_NETWORKS.join(", ")}.`,
+      "Pick one when creating or linking a DAO, e.g. `/createdao MyDAO MDAO 1000 10000 quadratic base` or `/register 0x... tokenWeighted base`.",
+    ].join("\n"),
+    { parse_mode: "Markdown" }
+  );
+});
+
+/*//////////////////////////////////////////////////////////////
                             /register
 //////////////////////////////////////////////////////////////*/
 
 bot.command("register", async (ctx) => {
-  const args = ctx.match?.trim().split(/\s+/) ?? [];
+  const allArgs = ctx.match?.trim().split(/\s+/).filter(Boolean) ?? [];
+  let network, args;
+  try {
+    ({ network, rest: args } = takeNetworkArg(allArgs));
+  } catch (err) {
+    await ctx.reply(err.message);
+    return;
+  }
   const [address, modelRaw] = args;
   const model = modelRaw || "tokenWeighted";
 
   if (!address || !isAddress(address)) {
     await ctx.reply(
-      `Usage: \`/register 0xYourGovernanceAddress [model]\`\n\nSupported models: ${SUPPORTED_MODELS.join(", ")} (defaults to tokenWeighted if omitted)`,
+      `Usage: \`/register 0xYourGovernanceAddress [model] [network]\`\n\nSupported models: ${SUPPORTED_MODELS.join(", ")} (defaults to tokenWeighted if omitted)\nNetworks enabled here: ${ENABLED_NETWORKS.join(", ")} (defaults to ${currentNetwork().id})`,
       { parse_mode: "Markdown" }
     );
     return;
@@ -671,15 +704,15 @@ bot.command("register", async (ctx) => {
   // Does this actually look like a governance contract of the claimed
   // model? A read only a real deployment of that specific model answers
   // (governanceToken() alone can't tell models apart, and Board has none).
-  if (!(await isGovernanceModel(model, address))) {
+  if (!(await runOnNetwork(network, () => isGovernanceModel(model, address)))) {
     await ctx.reply(
-      `Couldn't read a "${model}" DAO at that address on ${monadTestnet.name}. Double-check the address and model.`
+      `Couldn't read a "${model}" DAO at that address on ${getNetwork(network).chain.name}. Double-check the address, model and network.`
     );
     return;
   }
 
-  registerChat(ctx.chat.id, address, model);
-  await ctx.reply(`✅ This group is now linked to the ${model} DAO at \`${short(address)}\`.`, {
+  registerChat(ctx.chat.id, address, model, "telegram", undefined, network);
+  await ctx.reply(`✅ This group is now linked to the ${model} DAO at \`${short(address)}\` on ${getNetwork(network).chain.name}.`, {
     parse_mode: "Markdown",
   });
 });
@@ -780,7 +813,7 @@ bot.command("deploynftwrapper", async (ctx) => {
     await ctx.api.editMessageText(
       ctx.chat.id,
       statusMsg.message_id,
-      `✅ Deployed at \`${short(wrapperAddress)}\`.\n\nThis wrapper is now linked to this DAO. Governance-gated only - approving listings, sending NFTs to it, and sweeping assets back to Treasury all need to go through a passed \`/propose\`, same as any other treasury action.`,
+      `✅ Deployed at \`${short(wrapperAddress)}\`.\n\nThis wrapper is now linked to this DAO and is where its NFTs live - send NFTs here, never to the Treasury (the Treasury can't receive them). Listing, sending NFTs out and sweeping sale proceeds (native/ERC20) back to Treasury all go through passed proposals - see \`/listactions\`.`,
       { parse_mode: "Markdown" }
     );
   } catch (err) {
@@ -1193,7 +1226,7 @@ bot.command("migratewallet", async (ctx) => {
       await ctx.api.editMessageText(
         ctx.chat.id,
         statusMsg.message_id,
-        `Your old wallet's balance (${formatEther(nativeBalance)} MON) is too small to cover gas for a transfer. ` +
+        `Your old wallet's balance (${formatEther(nativeBalance)} ${currentNetwork().nativeSymbol}) is too small to cover gas for a transfer. ` +
           `New wallet ready: \`${short(newAddress)}\`.`,
         { parse_mode: "Markdown" }
       );
@@ -1210,7 +1243,7 @@ bot.command("migratewallet", async (ctx) => {
     await ctx.api.editMessageText(
       ctx.chat.id,
       statusMsg.message_id,
-      `✅ Moved ${formatEther(sendAmount)} MON to your new wallet \`${short(newAddress)}\`. Every command now uses this wallet.\n\n` +
+      `✅ Moved ${formatEther(sendAmount)} ${currentNetwork().nativeSymbol} to your new wallet \`${short(newAddress)}\`. Every command now uses this wallet.\n\n` +
         `⚠️ This only sweeps native MON - if you hold ERC20 tokens under the old address ` +
         `(\`${short(oldAccount.address)}\`), move those manually too.`,
       { parse_mode: "Markdown" }
@@ -1238,10 +1271,10 @@ bot.command("contribute", async (ctx) => {
     const message = [
       `💰 *Contribute to ${daoName}*`,
       "",
-      "Send MON (or any supported token) directly to the treasury:",
+      `Send ${currentNetwork().nativeSymbol} (or any supported token) directly to the treasury:`,
       `\`${treasuryAddress}\``,
       "",
-      `Explorer: ${monadTestnet.blockExplorers.default.url}/address/${treasuryAddress}`,
+      explorerAddressLine(treasuryAddress),
       "",
       "⚠️ Funds sent here become DAO-controlled — moving them back out requires a passed governance proposal, not a unilateral withdrawal.",
     ].join("\n");
@@ -1312,7 +1345,7 @@ bot.command("treasury", async (ctx) => {
     const adapter = getAdapter(model);
     const { treasuryAddress } = hasToken(model) ? await getDaoInfo(model, address) : await adapter.getDaoInfo(address);
     const balance = await getTreasuryBalance(treasuryAddress);
-    await ctx.reply(`🏦 Treasury \`${short(treasuryAddress)}\`\nBalance: *${balance} MON*`, {
+    await ctx.reply(`🏦 Treasury \`${short(treasuryAddress)}\`\nBalance: *${balance} ${currentNetwork().nativeSymbol}*`, {
       parse_mode: "Markdown",
     });
   } catch (err) {
@@ -1442,7 +1475,7 @@ bot.command("send", async (ctx) => {
 
   if (!amountRaw || Number.isNaN(Number(amountRaw)) || Number(amountRaw) <= 0 || !recipientRaw || !isAddress(recipientRaw)) {
     await ctx.reply(
-      "Usage: `/send <amount> <recipientAddress> [tokenAddressOrTicker]`\n\nSends tokens (or native MON) you're currently holding to someone else - your own wallet, your own balance, no approval needed from the DAO's creator. The token slot is optional: defaults to this DAO's own token, also accepts `MON` for native currency, or any ticker registered with `/registertoken`. This will fail if you don't hold enough to cover the amount.",
+      "Usage: `/send <amount> <recipientAddress> [tokenAddressOrTicker]`\n\nSends tokens (or native MON) you're currently holding to someone else - your own wallet, your own balance, no approval needed from the DAO's creator. The token slot is optional: defaults to this DAO's own token, also accepts the native symbol (`MON`, `ETH`, `HYPE`) or `native` for native currency, or any ticker registered with `/registertoken`. This will fail if you don't hold enough to cover the amount.",
       { parse_mode: "Markdown" }
     );
     return;
@@ -1452,12 +1485,12 @@ bot.command("send", async (ctx) => {
   // even has a governance token at all (Board has none) - handled
   // entirely separately from the token-transfer path below, since it
   // needs a plain sendTransaction, not an ERC20 call.
-  const isNativeMon = tokenRef?.toUpperCase() === "MON";
+  const isNativeMon = isNativeTokenWord(tokenRef);
 
   if (!isNativeMon) {
     const model = getChatModel(ctx.chat.id);
     if (!hasToken(model)) {
-      await ctx.reply(`This DAO uses ${model} governance, which has no token - there's nothing to send. Try \`/send ${amountRaw} ${recipientRaw} MON\` to send native currency instead.`, {
+      await ctx.reply(`This DAO uses ${model} governance, which has no token - there's nothing to send. Try \`/send ${amountRaw} ${recipientRaw} ${currentNetwork().nativeSymbol}\` to send native currency instead.`, {
         parse_mode: "Markdown",
       });
       return;
@@ -1483,7 +1516,7 @@ bot.command("send", async (ctx) => {
     await ctx.api.editMessageText(
       ctx.chat.id,
       statusMsg.message_id,
-      `✅ Sent ${amountRaw}${isNativeMon ? " MON" : ""} to \`${short(recipientRaw)}\`.\nTx: \`${short(hash)}\``,
+      `✅ Sent ${amountRaw}${isNativeMon ? ` ${currentNetwork().nativeSymbol}` : ""} to \`${short(recipientRaw)}\`.\nTx: \`${short(hash)}\``,
       { parse_mode: "Markdown" }
     );
   } catch (err) {
@@ -2031,10 +2064,10 @@ bot.command("proposecriteria", async (ctx) => {
   let oracleRaw = oracleRawInput;
   let switchboardShorthandError = null;
   if (method === "oracle" && oracleRawInput?.toLowerCase() === "switchboard") {
-    if (!SWITCHBOARD_ORACLE_ADAPTER) {
+    if (!switchboardOracleAdapter()) {
       switchboardShorthandError = "No Switchboard oracle adapter configured on this bot - ask an admin to set SWITCHBOARD_ORACLE_ADAPTER, or pass a real adapter address directly.";
     } else {
-      oracleRaw = SWITCHBOARD_ORACLE_ADAPTER;
+      oracleRaw = switchboardOracleAdapter();
     }
   }
 
@@ -2303,7 +2336,7 @@ bot.command("execute", async (ctx) => {
   const [id, valueRaw] = args;
   if (!id || !/^\d+$/.test(id)) {
     await ctx.reply(
-      "Usage: `/execute 3 [nativeValue]` — runs a queued proposal's actions once its timelock has passed. Omit nativeValue unless the proposal's actions require sending MON.",
+      "Usage: `/execute 3 [nativeValue]` — runs a queued proposal's actions once its timelock has passed. Omit nativeValue unless the proposal's actions require sending native currency.",
       { parse_mode: "Markdown" }
     );
     return;

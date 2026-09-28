@@ -3,6 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { getAddress, parseEther } from "viem";
 import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer } from "../config.js";
+import { currentNetwork, networkEnvName } from "../networks.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -228,7 +229,7 @@ export async function createDAO(name, initialSigners) {
   }
   const factoryAddress = FACTORY_ADDRESSES.board;
   if (!factoryAddress) {
-    throw new Error("BOARD_FACTORY_ADDRESS is not configured on this bot instance");
+    throw new Error(`${networkEnvName(currentNetwork().id, "BOARD_FACTORY_ADDRESS")} is not configured on this bot instance`);
   }
   if (!initialSigners || initialSigners.length === 0) {
     throw new Error("initialSigners is required - at least one address must be supplied");

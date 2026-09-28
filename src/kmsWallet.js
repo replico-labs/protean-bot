@@ -54,35 +54,9 @@ export async function createEncryptedWallet() {
 
   const privateKey = generatePrivateKey();
   const account = privateKeyToAccount(privateKey);
+  const { ciphertext, encryptedDataKey, iv, authTag } = await encryptSecret(privateKey);
 
-  // One data key per wallet, itself encrypted ("wrapped") by the single
-  // shared KMS master key - this is what keeps cost flat regardless of
-  // user count: only one thing (the master key) ever lives inside KMS
-  // itself, billed at $1/month total, not per wallet.
-  const { Plaintext: dataKeyPlaintext, CiphertextBlob: dataKeyCiphertext } = await getKmsClient().send(
-    new GenerateDataKeyCommand({ KeyId: KMS_KEY_ID, KeySpec: "AES_256" })
-  );
-
-  const iv = crypto.randomBytes(12); // 96-bit IV, the standard size for GCM
-  const cipher = crypto.createCipheriv("aes-256-gcm", dataKeyPlaintext, iv);
-  const encryptedPrivateKey = Buffer.concat([
-    cipher.update(privateKey, "utf8"),
-    cipher.final(),
-  ]);
-  const authTag = cipher.getAuthTag();
-
-  // Best-effort only: JS gives no hard guarantee of zeroing memory the
-  // way lower-level languages can, but there's no reason to keep a
-  // reference to the plaintext data key any longer than this function
-  // body - it goes out of scope the moment this function returns.
-
-  return {
-    address: account.address,
-    encryptedPrivateKey: encryptedPrivateKey.toString("base64"),
-    encryptedDataKey: Buffer.from(dataKeyCiphertext).toString("base64"),
-    iv: iv.toString("base64"),
-    authTag: authTag.toString("base64"),
-  };
+  return { address: account.address, encryptedPrivateKey: ciphertext, encryptedDataKey, iv, authTag };
 }
 
 /**
@@ -99,6 +73,58 @@ export async function decryptWallet(record) {
     throw new Error("KMS_KEY_ID is not configured on this bot instance");
   }
 
+  const privateKey = await decryptSecret({ ...record, ciphertext: record.encryptedPrivateKey });
+  return privateKeyToAccount(privateKey);
+}
+
+/**
+ * Envelope-encrypts any secret string (a wallet key, a Slack workspace's
+ * bot token) under the shared KMS master key. Returns base64 fields,
+ * ready to store as plain text columns.
+ *
+ * @returns {Promise<{ciphertext: string, encryptedDataKey: string, iv: string, authTag: string}>}
+ */
+export async function encryptSecret(plaintext) {
+  if (!KMS_KEY_ID) {
+    throw new Error("KMS_KEY_ID is not configured on this bot instance");
+  }
+
+  // One data key per secret, itself encrypted ("wrapped") by the single
+  // shared KMS master key - this is what keeps cost flat regardless of
+  // user count: only one thing (the master key) ever lives inside KMS
+  // itself, billed at $1/month total, not per secret.
+  const { Plaintext: dataKeyPlaintext, CiphertextBlob: dataKeyCiphertext } = await getKmsClient().send(
+    new GenerateDataKeyCommand({ KeyId: KMS_KEY_ID, KeySpec: "AES_256" })
+  );
+
+  const iv = crypto.randomBytes(12); // 96-bit IV, the standard size for GCM
+  const cipher = crypto.createCipheriv("aes-256-gcm", dataKeyPlaintext, iv);
+  const ciphertext = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+
+  // Best-effort only: JS gives no hard guarantee of zeroing memory the
+  // way lower-level languages can, but there's no reason to keep a
+  // reference to the plaintext data key any longer than this function
+  // body - it goes out of scope the moment this function returns.
+
+  return {
+    ciphertext: ciphertext.toString("base64"),
+    encryptedDataKey: Buffer.from(dataKeyCiphertext).toString("base64"),
+    iv: iv.toString("base64"),
+    authTag: authTag.toString("base64"),
+  };
+}
+
+/**
+ * Reverses encryptSecret.
+ *
+ * @param {{ciphertext: string, encryptedDataKey: string, iv: string, authTag: string}} record
+ */
+export async function decryptSecret(record) {
+  if (!KMS_KEY_ID) {
+    throw new Error("KMS_KEY_ID is not configured on this bot instance");
+  }
+
   // KeyId is passed explicitly here, not just relied on implicitly from
   // the ciphertext blob - AWS's own guidance is to always pin Decrypt
   // calls to the expected key, specifically to prevent a substitution
@@ -111,17 +137,8 @@ export async function decryptWallet(record) {
     })
   );
 
-  const decipher = crypto.createDecipheriv(
-    "aes-256-gcm",
-    dataKeyPlaintext,
-    Buffer.from(record.iv, "base64")
-  );
+  const decipher = crypto.createDecipheriv("aes-256-gcm", dataKeyPlaintext, Buffer.from(record.iv, "base64"));
   decipher.setAuthTag(Buffer.from(record.authTag, "base64"));
 
-  const privateKey = Buffer.concat([
-    decipher.update(Buffer.from(record.encryptedPrivateKey, "base64")),
-    decipher.final(),
-  ]).toString("utf8");
-
-  return privateKeyToAccount(privateKey);
+  return Buffer.concat([decipher.update(Buffer.from(record.ciphertext, "base64")), decipher.final()]).toString("utf8");
 }

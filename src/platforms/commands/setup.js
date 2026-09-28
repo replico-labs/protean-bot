@@ -1,5 +1,6 @@
 import { isAddress, getAddress } from "viem";
-import { walletClient, SORTITION_RANDOMNESS_SOURCE } from "../../config.js";
+import { walletClient, sortitionRandomnessSource } from "../../config.js";
+import { ENABLED_NETWORKS, takeNetworkArg, runOnNetwork, currentNetwork, getNetwork, networkEnvName } from "../../networks.js";
 import {
   registerChat,
   recordChatLinker,
@@ -66,10 +67,20 @@ const CREATE_DAO_FUNCTIONS = {
   delegate: (n, s, i, m, extra) => createDelegateDAO(n, s, i, m, extra.council),
   sortition: (n, s, i, m, extra) => createSortitionDAO(n, s, i, m, extra.randomnessSource, extra.council),
 };
-const KNOWN_NETWORKS = ["monad", "hyperliquid", "base"];
+/** Discord choices / help for the optional network argument. */
+const NETWORK_OPTION = { name: "network", description: "Network (default: this bot's default)", required: false, choices: ENABLED_NETWORKS };
+
+/** A user-facing error for a network word that is known but not enabled. */
+function networkArg(args) {
+  try {
+    return takeNetworkArg(args);
+  } catch (err) {
+    throw new UserError(err.message);
+  }
+}
 
 /** After creating a DAO the caller is both its creator and the channel's linker. */
-function linkNewDao(ctx, governance, model, network = "monad") {
+function linkNewDao(ctx, governance, model, network = currentNetwork().id) {
   registerChat(ctx.chatId, governance, model, ctx.platform, ctx.userId, network);
   recordChatLinker(ctx.chatId, ctx.userId, ctx.platform, { keepCreator: true });
 }
@@ -102,7 +113,7 @@ export { attemptClaim };
 export const SETUP_COMMANDS = {
   createdao: {
     section: "Setup",
-    usage: "<name> <symbol> <initialSupply> <maxSupply> [model] [council...]",
+    usage: "<name> <symbol> <initialSupply> <maxSupply> [model] [network] [council...]",
     description: "Create a new DAO and link it to this channel",
     options: [
       { name: "name", description: "DAO name (one word)", required: true },
@@ -110,14 +121,19 @@ export const SETUP_COMMANDS = {
       { name: "initial_supply", description: "Initial token supply (whole tokens)", required: true },
       { name: "max_supply", description: "Maximum token supply (whole tokens)", required: true },
       { name: "model", description: "Governance model (default tokenWeighted)", required: false, choices: Object.keys(CREATE_DAO_FUNCTIONS) },
+      NETWORK_OPTION,
       { name: "council", description: "delegate/sortition only: starting council addresses, space-separated", required: false, rest: true },
     ],
     async run(ctx) {
-      const [name, symbol, initialSupplyStr, maxSupplyStr, modelArg, ...restArgs] = ctx.args;
+      const [name, symbol, initialSupplyStr, maxSupplyStr, ...tail] = ctx.args;
+      // The network word can be anywhere after the supplies (Discord drops
+      // omitted options, so positions shift) - take it out first.
+      const { network, rest: afterNetwork } = networkArg(tail);
+      const [modelArg, ...rest] = afterNetwork;
       if (!maxSupplyStr) {
         throw new UserError(
           [
-            `Usage: \`${ctx.cmd("createdao")} <name> <symbol> <initialSupply> <maxSupply> [model] [council...]\``,
+            `Usage: \`${ctx.cmd("createdao")} <name> <symbol> <initialSupply> <maxSupply> [model] [network] [council...]\``,
             `Example: \`${ctx.cmd("createdao")} ArkDAO ARK 1000000 10000000\``,
             `Models: ${Object.keys(CREATE_DAO_FUNCTIONS).join(", ")} (default tokenWeighted). Delegate and sortition also need starting council addresses. For a token-less multisig use \`${ctx.cmd("createboarddao")}\`.`,
           ].join("\n")
@@ -128,14 +144,6 @@ export const SETUP_COMMANDS = {
       const initialSupply = Number(initialSupplyStr);
       const maxSupply = Number(maxSupplyStr);
 
-      let network = "monad";
-      let rest = restArgs;
-      const networkIndex = restArgs.findIndex((a) => KNOWN_NETWORKS.includes(a.toLowerCase()));
-      if (networkIndex !== -1) {
-        network = restArgs[networkIndex].toLowerCase();
-        rest = [...restArgs.slice(0, networkIndex), ...restArgs.slice(networkIndex + 1)];
-      }
-      if (network !== "monad") throw new UserError(`"${network}" isn't deployed yet - only Monad is available right now.`);
       if (!Number.isFinite(initialSupply) || !Number.isFinite(maxSupply) || initialSupply <= 0 || maxSupply <= 0) throw new UserError("Initial supply and max supply must be positive numbers.");
       if (initialSupply > maxSupply) throw new UserError("Initial supply can't exceed max supply.");
 
@@ -144,26 +152,29 @@ export const SETUP_COMMANDS = {
         throw new UserError(model === "board" ? `Board has no token - use \`${ctx.cmd("createboarddao")}\` instead.` : `Unknown model "${model}". Supported: ${Object.keys(CREATE_DAO_FUNCTIONS).join(", ")}`);
       }
 
-      let extra = {};
-      if (model === "delegate" || model === "sortition") {
-        if (rest.length === 0 || !rest.every((a) => isAddress(a, { strict: false }))) {
-          throw new UserError(`${model} needs a starting council: \`${ctx.cmd("createdao")} <name> <symbol> <initialSupply> <maxSupply> ${model} <address...>\``);
-        }
-        if (model === "sortition" && !SORTITION_RANDOMNESS_SOURCE) throw new UserError("This bot has no randomness source configured yet - ask an admin to set SORTITION_RANDOMNESS_SOURCE.");
-        extra = model === "delegate" ? { council: rest } : { randomnessSource: SORTITION_RANDOMNESS_SOURCE, council: rest };
-      }
-
       let result;
       try {
-        result = await createFn(name, symbol, initialSupply, maxSupply, extra);
+        // Config checks and the factory call run on the chosen network.
+        result = await runOnNetwork(network, async () => {
+          let extra = {};
+          if (model === "delegate" || model === "sortition") {
+            if (rest.length === 0 || !rest.every((a) => isAddress(a, { strict: false }))) {
+              throw new UserError(`${model} needs a starting council: \`${ctx.cmd("createdao")} <name> <symbol> <initialSupply> <maxSupply> ${model} <address...>\``);
+            }
+            if (model === "sortition" && !sortitionRandomnessSource()) throw new UserError(`This bot has no randomness source configured for ${currentNetwork().chain.name} yet - ask an admin to set ${networkEnvName(network, "SORTITION_RANDOMNESS_SOURCE")}.`);
+            extra = model === "delegate" ? { council: rest } : { randomnessSource: sortitionRandomnessSource(), council: rest };
+          }
+          return createFn(name, symbol, initialSupply, maxSupply, extra);
+        });
       } catch (err) {
+        if (err instanceof UserError) throw err;
         // Same as Telegram: surface the full message, creation errors are config problems worth seeing.
         throw new UserError(`Couldn't create the DAO: ${err.shortMessage || err.message}`);
       }
       linkNewDao(ctx, result.governance, model, network);
       return reply(
         [
-          `✅ *${name}* (${model}) created and linked to this channel.`,
+          `✅ *${name}* (${model}) created on ${getNetwork(network).chain.name} and linked to this channel.`,
           "",
           `Governance: \`${short(result.governance)}\``,
           hasToken(model) ? `Token (staking wrapper): \`${short(result.governanceToken)}\`` : null,
@@ -180,25 +191,27 @@ export const SETUP_COMMANDS = {
 
   createboarddao: {
     section: "Setup",
-    usage: "<name> <signer1> <signer2> ...",
+    usage: "<name> <signer1> <signer2> ... [network]",
     description: "Create a Board (multisig) DAO and link it here",
     options: [
       { name: "name", description: "DAO name (one word)", required: true },
       { name: "signers", description: "Signer addresses, space-separated", required: true, rest: true },
+      NETWORK_OPTION,
     ],
     async run(ctx) {
-      const [name, ...signers] = ctx.args;
+      const [name, ...signerArgs] = ctx.args;
+      const { network, rest: signers } = networkArg(signerArgs);
       if (!name || signers.length === 0) throw new UserError(`Usage: \`${ctx.cmd("createboarddao")} <name> <signer1> <signer2> ...\``);
       if (!signers.every((s) => isAddress(s, { strict: false }))) throw new UserError("All signer addresses must be valid.");
       assertMayRelink(ctx);
       let result;
       try {
-        result = await createBoardDAO(name, signers);
+        result = await runOnNetwork(network, () => createBoardDAO(name, signers));
       } catch (err) {
         throw new UserError(`Couldn't create the DAO: ${err.shortMessage || err.message}`);
       }
-      linkNewDao(ctx, result.governance, "board");
-      return reply(`✅ *${name}* (board) created and linked to this channel.\n\nGovernance: \`${short(result.governance)}\`\nTreasury: \`${short(result.treasury)}\`\nSigners: ${signers.length}`);
+      linkNewDao(ctx, result.governance, "board", network);
+      return reply(`✅ *${name}* (board) created on ${getNetwork(network).chain.name} and linked to this channel.\n\nGovernance: \`${short(result.governance)}\`\nTreasury: \`${short(result.treasury)}\`\nSigners: ${signers.length}`);
     },
   },
 
@@ -284,7 +297,7 @@ export const SETUP_COMMANDS = {
       const { treasuryAddress } = await getDaoInfo(getChatModel(ctx.chatId, ctx.platform), address);
       const { wrapperAddress } = await deployNftWrapper(walletClient, address, treasuryAddress);
       registerNftWrapper(ctx.chatId, wrapperAddress, ctx.platform);
-      return reply(`✅ Deployed at \`${short(wrapperAddress)}\` and linked to this DAO. It's governance-gated: approving listings and moving NFTs all go through passed proposals.`);
+      return reply(`✅ Deployed at \`${short(wrapperAddress)}\` and linked to this DAO. It's where this DAO's NFTs live - send NFTs here, never to the Treasury (it can't receive them). Listing, sending NFTs out and sweeping proceeds back to Treasury all go through passed proposals.`);
     },
   },
 

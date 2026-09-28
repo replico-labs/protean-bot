@@ -3,6 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { getAddress, parseEther } from "viem";
 import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer } from "../config.js";
+import { scaleBlockFields, currentNetwork, networkEnvName } from "../networks.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -303,7 +304,7 @@ export async function createDAO(name, symbol, initialSupplyWhole, maxSupplyWhole
   }
   const factoryAddress = FACTORY_ADDRESSES.delegate;
   if (!factoryAddress) {
-    throw new Error("DELEGATE_FACTORY_ADDRESS is not configured on this bot instance");
+    throw new Error(`${networkEnvName(currentNetwork().id, "DELEGATE_FACTORY_ADDRESS")} is not configured on this bot instance`);
   }
   if (!initialCouncil || initialCouncil.length === 0) {
     throw new Error("initialCouncil is required - at least one address must be supplied");
@@ -311,7 +312,7 @@ export async function createDAO(name, symbol, initialSupplyWhole, maxSupplyWhole
 
   const councilSize = initialCouncil.length;
   const config = {
-    ...DEFAULT_CONFIG_WITHOUT_COUNCIL_SIZE,
+    ...scaleBlockFields("delegate", DEFAULT_CONFIG_WITHOUT_COUNCIL_SIZE),
     councilSize,
     councilQuorum: Math.ceil((councilSize + 1) / 2),
   };

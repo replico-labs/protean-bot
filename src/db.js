@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { resolveNetworkId, currentNetwork, DEFAULT_NETWORK } from "./networks.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = path.join(__dirname, "..", "data", "chats.json");
@@ -54,22 +55,27 @@ function key(chatId, platform) {
  * since the bot has no real basis for saying who "created" that one.
  */
 /**
- * `network` records which chain this DAO actually lives on - Monad,
- * Hyperliquid, or Base. Defaults to "monad" for every existing chat
- * registered before this field existed, since that's the only network
- * this bot has ever actually deployed to. Genuinely functional for
- * Monad today; Hyperliquid and Base can be recorded here once a real
- * factory exists on either, but nothing downstream (wallet clients,
- * governance adapters) is wired to act on those values yet - see
- * config.js and contracts.js, both still hardcoded to Monad.
+ * `network` records which chain this DAO lives on (a networks.js id:
+ * "monad-testnet", "base", "hyperevm", ...). Every command in the chat
+ * then runs on that network. Defaults to whatever network the current
+ * call is running on. Chats registered before networks existed stored
+ * "monad", which resolveNetworkId reads as Monad testnet.
  */
-export function registerChat(chatId, governanceAddress, model = "tokenWeighted", platform = "telegram", creatorPlatformUserId = undefined, network = "monad") {
+export function registerChat(chatId, governanceAddress, model = "tokenWeighted", platform = "telegram", creatorPlatformUserId = undefined, network = currentNetwork().id) {
   const db = readDb();
   const k = key(chatId, platform);
   const creatorField = creatorPlatformUserId !== undefined
     ? { creatorPlatformUserId: String(creatorPlatformUserId) }
     : {};
-  db[k] = { ...db[k], governanceAddress, model, platform, ...creatorField, network, registeredAt: Date.now() };
+  let previous = db[k] ?? {};
+  // Wrappers, distributors and registered tickers are contracts on the
+  // old DAO's chain - carrying them to another chain would point commands
+  // at addresses that don't exist there (or are someone else's).
+  if (previous.governanceAddress && (resolveNetworkId(previous.network) ?? DEFAULT_NETWORK) !== network) {
+    const { tokens, distributorAddress, wrapperAddress, guardWrapperAddress, ...rest } = previous;
+    previous = rest;
+  }
+  db[k] = { ...previous, governanceAddress, model, platform, ...creatorField, network, registeredAt: Date.now() };
   writeDb(db);
 }
 
@@ -91,15 +97,21 @@ export function getAllRegisteredDaos() {
       platform,
       governanceAddress: entry.governanceAddress,
       model: entry.model ?? "tokenWeighted",
+      network: resolveNetworkId(entry.network) ?? DEFAULT_NETWORK,
     });
   }
   return daos;
 }
 
-/** Which network this chat's DAO lives on - "monad" for every DAO registered so far. */
+/**
+ * Which network this chat's DAO lives on, as a networks.js id. Chats with
+ * no DAO (and DMs) use the bot's default network.
+ */
 export function getChatNetwork(chatId, platform = "telegram") {
   const db = readDb();
-  return db[key(chatId, platform)]?.network ?? "monad";
+  const entry = db[key(chatId, platform)];
+  if (!entry?.governanceAddress) return DEFAULT_NETWORK;
+  return resolveNetworkId(entry.network) ?? DEFAULT_NETWORK;
 }
 
 /**
@@ -232,6 +244,31 @@ export function unregisterChat(chatId, platform = "telegram") {
 }
 
 /**
+ * Slack only: which workspace a linked channel belongs to. With the
+ * multi-workspace install each workspace has its own bot token, and the
+ * event listener only knows the channel ID, so it looks the workspace up
+ * here. Recorded on every /protean call in a linked channel.
+ */
+export function recordSlackTeam(channelId, teamId) {
+  const db = readDb();
+  const k = key(channelId, "slack");
+  if (!db[k] || !teamId || db[k].slackTeamId === teamId) return;
+  db[k].slackTeamId = teamId;
+  writeDb(db);
+}
+
+export function getSlackTeam(channelId) {
+  return readDb()[key(channelId, "slack")]?.slackTeamId ?? null;
+}
+
+/** Linked Slack channels whose workspace isn't recorded yet (linked before the multi-workspace install). */
+export function getSlackChannelsWithoutTeam() {
+  return Object.entries(readDb())
+    .filter(([k, entry]) => k.startsWith("slack:") && !entry?.slackTeamId)
+    .map(([k]) => k.slice("slack:".length));
+}
+
+/**
  * Link a chat to a deployed OpportunityMarket - orthogonal to DAO
  * registration above, not a replacement for it. A chat can have both a
  * governance DAO and an opportunity market linked at once; these are
@@ -271,12 +308,21 @@ export function unregisterMarket(chatId, platform = "telegram") {
  * registered it.
  */
 export function getGovernanceAddressesByModel(model) {
+  return [...new Set(getGovernanceDaosByModel(model).map((d) => d.governanceAddress))];
+}
+
+/**
+ * Same, with each DAO's network - the keepers use this to act on each DAO
+ * on its own chain. Deduplicated per (network, address).
+ */
+export function getGovernanceDaosByModel(model) {
   const db = readDb();
-  const addresses = new Set();
+  const seen = new Map();
   for (const chat of Object.values(db)) {
     if (chat.model === model && chat.governanceAddress) {
-      addresses.add(chat.governanceAddress);
+      const network = resolveNetworkId(chat.network) ?? DEFAULT_NETWORK;
+      seen.set(`${network}:${chat.governanceAddress.toLowerCase()}`, { governanceAddress: chat.governanceAddress, network });
     }
   }
-  return [...addresses];
+  return [...seen.values()];
 }

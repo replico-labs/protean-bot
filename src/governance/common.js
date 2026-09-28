@@ -2,7 +2,8 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { createWalletClient, http, getAddress, parseEther, parseAbi, encodeFunctionData } from "viem";
-import { publicClient, monadTestnet, writeWithGasBuffer } from "../config.js";
+import { publicClient, writeWithGasBuffer } from "../config.js";
+import { currentNetwork } from "../networks.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -19,7 +20,7 @@ function loadAbi(name) {
  * pass it to whichever adapter function they need.
  */
 export function walletClientFor(account) {
-  return createWalletClient({ account, chain: monadTestnet, transport: http() });
+  return createWalletClient({ account, chain: currentNetwork().chain, transport: http() });
 }
 
 const abis = {

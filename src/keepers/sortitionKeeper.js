@@ -1,7 +1,8 @@
 import { CrossbarClient } from "@switchboard-xyz/common";
 import { zeroHash } from "viem";
-import { publicClient, walletClient, operatorAccount, monadTestnet } from "../config.js";
-import { getGovernanceAddressesByModel } from "../db.js";
+import { publicClient, walletClient, operatorAccount } from "../config.js";
+import { currentNetwork, runOnNetwork, resolveNetworkId, DEFAULT_NETWORK, networkEnv, networkEnvName } from "../networks.js";
+import { getGovernanceDaosByModel } from "../db.js";
 
 /**
  * Switchboard randomness keeper for SortitionGovernance.
@@ -129,7 +130,7 @@ async function checkAndSettleOne(governanceAddress, switchboardAddress, crossbar
   console.log(`[sortitionKeeper] Settling round ${round} for ${governanceAddress}, requestId ${requestId}…`);
 
   const { encoded } = await crossbar.resolveEVMRandomness({
-    chainId: monadTestnet.id,
+    chainId: currentNetwork().chain.id,
     randomnessId: requestId,
     timestamp: Number(randomness.rollTimestamp),
     minStalenessSeconds: Number(randomness.minSettlementDelay),
@@ -152,10 +153,11 @@ async function checkAndSettleOne(governanceAddress, switchboardAddress, crossbar
 }
 
 async function pollOnce(switchboardAddress, crossbar) {
-  const daos = getGovernanceAddressesByModel("sortition");
+  // Each keeper process serves one network (KEEPER_NETWORK).
+  const daos = getGovernanceDaosByModel("sortition").filter((d) => d.network === currentNetwork().id);
   if (daos.length === 0) return;
 
-  for (const governanceAddress of daos) {
+  for (const { governanceAddress } of daos) {
     try {
       await checkAndSettleOne(governanceAddress, switchboardAddress, crossbar);
     } catch (err) {
@@ -178,21 +180,24 @@ export async function startSortitionKeeper(switchboardAddress) {
 
   // Run once immediately, then on the interval - don't wait a full
   // cycle before the first check after startup.
+  const networkId = currentNetwork().id;
   await pollOnce(switchboardAddress, crossbar);
   setInterval(() => {
-    pollOnce(switchboardAddress, crossbar);
+    runOnNetwork(networkId, () => pollOnce(switchboardAddress, crossbar));
   }, POLL_INTERVAL_MS);
 }
 
 // Allow running this file directly (`node src/keepers/sortitionKeeper.js`)
 // as its own standalone process, separate from the main bot.
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const switchboardAddress = process.env.SWITCHBOARD_ADDRESS;
+  // One process per network: KEEPER_NETWORK=base reads BASE_SWITCHBOARD_ADDRESS etc.
+  const network = resolveNetworkId(process.env.KEEPER_NETWORK) ?? DEFAULT_NETWORK;
+  const switchboardAddress = networkEnv(network, "SWITCHBOARD_ADDRESS");
   if (!switchboardAddress) {
-    console.error("SWITCHBOARD_ADDRESS env var is required to run the keeper standalone.");
+    console.error(`${networkEnvName(network, "SWITCHBOARD_ADDRESS")} env var is required to run the keeper for ${network}.`);
     process.exit(1);
   }
-  startSortitionKeeper(switchboardAddress).catch((err) => {
+  runOnNetwork(network, () => startSortitionKeeper(switchboardAddress)).catch((err) => {
     console.error("[sortitionKeeper] Fatal error:", err);
     process.exit(1);
   });

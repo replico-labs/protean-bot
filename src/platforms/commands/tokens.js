@@ -1,5 +1,6 @@
 import { isAddress, getAddress, parseEther } from "viem";
-import { walletClient, monadTestnet, publicClient } from "../../config.js";
+import { walletClient, publicClient } from "../../config.js";
+import { explorerAddressLine, isNativeTokenWord, currentNetwork } from "../../networks.js";
 import { getChatModel, getChatCreator, registerToken, getRegisteredTokens } from "../../db.js";
 import { tipTokens, getTokenBalance, getTokenSymbol, getUnderlyingTokenAddress } from "../../contracts.js";
 import { getAdapter } from "../../governance/index.js";
@@ -43,10 +44,10 @@ export const TOKEN_COMMANDS = {
         [
           `💰 *Contribute to ${daoName}*`,
           "",
-          "Send MON (or any supported token) directly to the treasury:",
+          `Send ${currentNetwork().nativeSymbol} (or any supported token) directly to the treasury:`,
           `\`${treasuryAddress}\``,
           "",
-          `Explorer: ${monadTestnet.blockExplorers.default.url}/address/${treasuryAddress}`,
+          explorerAddressLine(treasuryAddress),
           "",
           "⚠️ Funds sent here become DAO-controlled — moving them out requires a passed proposal.",
         ].join("\n")
@@ -80,20 +81,20 @@ export const TOKEN_COMMANDS = {
 
   send: {
     section: "Tokens",
-    usage: "<amount> <recipient> [token|MON]",
-    description: "Send tokens or MON you hold to anyone",
+    usage: "<amount> <recipient> [token|native]",
+    description: "Send tokens or native currency you hold to anyone",
     options: [
-      { name: "amount", description: "Amount (whole tokens or MON)", required: true },
+      { name: "amount", description: "Amount (whole tokens or native currency)", required: true },
       { name: "recipient", description: "Recipient address", required: true },
-      { name: "token", description: "Token address, registered ticker, or MON (default: this DAO's token)", required: false },
+      { name: "token", description: "Token address, registered ticker, or native/MON/ETH/HYPE (default: this DAO's token)", required: false },
     ],
     async run(ctx) {
       const address = requireDao(ctx);
-      const { amountRaw, recipientRaw, tokenRef } = parseAmountAndRecipient(ctx, "send", " — add `MON` to send native currency.");
-      const isNativeMon = tokenRef?.toUpperCase() === "MON";
+      const { amountRaw, recipientRaw, tokenRef } = parseAmountAndRecipient(ctx, "send", " — add the native symbol (`MON`, `ETH`, `HYPE`) or `native` to send native currency.");
+      const isNativeMon = isNativeTokenWord(tokenRef);
       if (!isNativeMon) {
         const model = getChatModel(ctx.chatId, ctx.platform);
-        if (!hasToken(model)) throw new UserError(`This DAO uses ${model} governance, which has no token. Try \`${ctx.cmd("send")} ${amountRaw} ${recipientRaw} MON\` to send native currency.`);
+        if (!hasToken(model)) throw new UserError(`This DAO uses ${model} governance, which has no token. Try \`${ctx.cmd("send")} ${amountRaw} ${recipientRaw} ${currentNetwork().nativeSymbol}\` to send native currency.`);
       }
       const { client } = await userClient(ctx);
       let hash;
@@ -104,7 +105,7 @@ export const TOKEN_COMMANDS = {
         const tokenAddress = await resolveToken(ctx, address, tokenRef);
         ({ hash } = await tipTokens(client, tokenAddress, recipientRaw, amountRaw));
       }
-      return reply(`✅ Sent ${amountRaw}${isNativeMon ? " MON" : ""} to \`${short(recipientRaw)}\`.\nTx: \`${short(hash)}\``);
+      return reply(`✅ Sent ${amountRaw}${isNativeMon ? ` ${currentNetwork().nativeSymbol}` : ""} to \`${short(recipientRaw)}\`.\nTx: \`${short(hash)}\``);
     },
   },
 

@@ -3,6 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { getAllRegisteredDaos } from "./db.js";
 import { publicClient } from "./config.js";
+import { runOnNetwork } from "./networks.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // One state file per platform process: Telegram keeps the original file
@@ -131,7 +132,11 @@ async function checkDao(notify, dao, currentBlock, state) {
   const watchableEvents = abi.filter((item) => item.type === "event" && INTERESTING_EVENT_NAMES.includes(item.name));
   if (watchableEvents.length === 0) return;
 
-  const stateKey = `${dao.platform}:${dao.chatId}:${dao.governanceAddress}`;
+  // Block numbers only mean something on one chain, so the key includes
+  // the network - except Monad testnet, which keeps the key it had before
+  // networks existed so existing progress isn't thrown away.
+  const baseKey = `${dao.platform}:${dao.chatId}:${dao.governanceAddress}`;
+  const stateKey = dao.network === "monad-testnet" ? baseKey : `${dao.network}:${baseKey}`;
   const lastProcessed = state[stateKey]?.lastProcessedBlock;
 
   // First time seeing this DAO: start from a recent window rather than
@@ -199,11 +204,23 @@ export function startEventListener(target, pollIntervalMs = 20_000) {
       const daos = getAllRegisteredDaos().filter((dao) => dao.platform === platform);
       if (daos.length === 0) return;
 
-      const currentBlock = await publicClient.getBlockNumber();
       const state = readState(statePath);
+      // One pass per network: each has its own block height and RPC.
+      const byNetwork = new Map();
+      for (const dao of daos) byNetwork.set(dao.network, [...(byNetwork.get(dao.network) ?? []), dao]);
 
-      for (const dao of daos) {
-        await checkDao(notify, dao, currentBlock, state);
+      for (const [network, networkDaos] of byNetwork) {
+        try {
+          await runOnNetwork(network, async () => {
+            const currentBlock = await publicClient.getBlockNumber();
+            for (const dao of networkDaos) {
+              await checkDao(notify, dao, currentBlock, state);
+            }
+          });
+        } catch (err) {
+          // One unreachable network must not stop notifications for the others.
+          console.error(`Event listener: ${network} pass failed:`, err.message);
+        }
       }
 
       writeState(statePath, state);

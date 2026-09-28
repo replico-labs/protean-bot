@@ -3,6 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { getAddress, parseEther } from "viem";
 import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer } from "../config.js";
+import { scaleBlockFields, currentNetwork, networkEnvName } from "../networks.js";
 import { CrossbarClient } from "@switchboard-xyz/common";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -286,7 +287,7 @@ export async function createDAO(name, symbol, initialSupplyWhole, maxSupplyWhole
   }
   const factoryAddress = FACTORY_ADDRESSES.sortition;
   if (!factoryAddress) {
-    throw new Error("SORTITION_FACTORY_ADDRESS is not configured on this bot instance");
+    throw new Error(`${networkEnvName(currentNetwork().id, "SORTITION_FACTORY_ADDRESS")} is not configured on this bot instance`);
   }
   if (!randomnessSource) {
     throw new Error("randomnessSource is required - a real, already-deployed IRandomnessSource address");
@@ -297,7 +298,7 @@ export async function createDAO(name, symbol, initialSupplyWhole, maxSupplyWhole
 
   const councilSize = initialCouncil.length;
   const config = {
-    ...DEFAULT_CONFIG_WITHOUT_COUNCIL_SIZE,
+    ...scaleBlockFields("sortition", DEFAULT_CONFIG_WITHOUT_COUNCIL_SIZE),
     councilSize,
     councilQuorum: Math.ceil((councilSize + 1) / 2),
   };

@@ -1,7 +1,8 @@
 import { CrossbarClient, EVMUtils } from "@switchboard-xyz/common";
 import { getAddress } from "viem";
 import { publicClient, walletClient, operatorAccount, writeWithGasBuffer } from "../config.js";
-import { getGovernanceAddressesByModel } from "../db.js";
+import { getGovernanceDaosByModel } from "../db.js";
+import { runOnNetwork, currentNetwork, resolveNetworkId, DEFAULT_NETWORK, networkEnv, networkEnvName } from "../networks.js";
 
 /**
  * Switchboard price-feed keeper for SowellianGovernance's oracle track.
@@ -52,7 +53,12 @@ import { getGovernanceAddressesByModel } from "../db.js";
 
 const POLL_INTERVAL_MS = 60_000;
 const CROSSBAR_URL = process.env.CROSSBAR_URL || "https://crossbar.switchboard.xyz";
-const SWITCHBOARD_NETWORK = process.env.SWITCHBOARD_NETWORK || "testnet";
+// Crossbar's network name: "testnet" or "mainnet". Per network, e.g.
+// BASE_SWITCHBOARD_NETWORK; defaults from whether the chain is a testnet.
+function switchboardNetwork() {
+  const n = currentNetwork();
+  return networkEnv(n.id, "SWITCHBOARD_NETWORK") || (n.chain.testnet ? "testnet" : "mainnet");
+}
 const REFRESH_SECONDS = Number(process.env.SWITCHBOARD_REFRESH_SECONDS || 300);
 
 // SowellianGovernance enums, in declaration order from the current source.
@@ -174,7 +180,7 @@ async function isSwitchboardAdapter(adapterAddress, switchboardAddress) {
  * single updateFee for the whole payload.
  */
 async function pushFeedUpdate(switchboardAddress, crossbar, feedIds) {
-  const quote = await crossbar.fetchOracleQuote(feedIds.map(feedHash), SWITCHBOARD_NETWORK);
+  const quote = await crossbar.fetchOracleQuote(feedIds.map(feedHash), switchboardNetwork());
   const encoded = quote.encoded || EVMUtils.convertToEVMUpdateData(quote);
   if (!encoded) throw new Error("Crossbar returned no encoded update");
 
@@ -239,7 +245,9 @@ async function pollOnce(switchboardAddress, crossbar, standingFeedIds) {
 }
 
 async function pollCycle(switchboardAddress, crossbar, standingFeedIds) {
-  for (const governanceAddress of getGovernanceAddressesByModel("sowellian")) {
+  // Each keeper process serves one network (KEEPER_NETWORK).
+  const daos = getGovernanceDaosByModel("sowellian").filter((d) => d.network === currentNetwork().id);
+  for (const { governanceAddress } of daos) {
     try {
       await checkDao(getAddress(governanceAddress), switchboardAddress, crossbar);
     } catch (err) {
@@ -270,28 +278,32 @@ export async function startSwitchboardPriceKeeper(switchboardAddress, standingFe
   const crossbar = new CrossbarClient(CROSSBAR_URL);
 
   console.log(
-    `[switchboardPriceKeeper] Started, polling every ${POLL_INTERVAL_MS / 1000}s, Switchboard ${sbAddress}, network ${SWITCHBOARD_NETWORK}` +
+    `[switchboardPriceKeeper] Started, polling every ${POLL_INTERVAL_MS / 1000}s, Switchboard ${sbAddress}, chain ${currentNetwork().id}, Crossbar network ${switchboardNetwork()}` +
       (standingFeedIds.length ? `, refreshing ${standingFeedIds.length} standing feed(s) every ${REFRESH_SECONDS}s` : "")
   );
 
+  // Captured once: the interval callback re-enters the same network.
+  const networkId = currentNetwork().id;
   await pollOnce(sbAddress, crossbar, standingFeedIds);
   setInterval(() => {
-    pollOnce(sbAddress, crossbar, standingFeedIds);
+    runOnNetwork(networkId, () => pollOnce(sbAddress, crossbar, standingFeedIds));
   }, POLL_INTERVAL_MS);
 }
 
 // Allow running this file directly as its own standalone process.
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const switchboardAddress = process.env.SWITCHBOARD_ADDRESS;
+  // One process per network: KEEPER_NETWORK=base reads BASE_SWITCHBOARD_ADDRESS etc.
+  const network = resolveNetworkId(process.env.KEEPER_NETWORK) ?? DEFAULT_NETWORK;
+  const switchboardAddress = networkEnv(network, "SWITCHBOARD_ADDRESS");
   if (!switchboardAddress) {
-    console.error("SWITCHBOARD_ADDRESS env var is required to run the keeper standalone.");
+    console.error(`${networkEnvName(network, "SWITCHBOARD_ADDRESS")} env var is required to run the keeper for ${network}.`);
     process.exit(1);
   }
-  const standingFeedIds = (process.env.SWITCHBOARD_FEED_IDS || "")
+  const standingFeedIds = (networkEnv(network, "SWITCHBOARD_FEED_IDS") || "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
-  startSwitchboardPriceKeeper(switchboardAddress, standingFeedIds).catch((err) => {
+  runOnNetwork(network, () => startSwitchboardPriceKeeper(switchboardAddress, standingFeedIds)).catch((err) => {
     console.error("[switchboardPriceKeeper] Fatal error:", err);
     process.exit(1);
   });

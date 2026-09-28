@@ -3,6 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { getAddress, parseEther } from "viem";
 import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer } from "../config.js";
+import { currentNetwork, networkEnvName } from "../networks.js";
 import { ensureAllowance } from "./common.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -260,7 +261,7 @@ export async function createDAO(name, symbol, initialSupplyWhole, maxSupplyWhole
   }
   const factoryAddress = FACTORY_ADDRESSES.decisionMarkets;
   if (!factoryAddress) {
-    throw new Error("DECISION_MARKETS_FACTORY_ADDRESS is not configured on this bot instance");
+    throw new Error(`${networkEnvName(currentNetwork().id, "DECISION_MARKETS_FACTORY_ADDRESS")} is not configured on this bot instance`);
   }
 
   const factory = { address: getAddress(factoryAddress), abi: factoryAbi };

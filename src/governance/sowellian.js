@@ -3,6 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { getAddress, parseEther, zeroHash } from "viem";
 import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer } from "../config.js";
+import { scaleBlockFields, currentNetwork, networkEnvName } from "../networks.js";
 import { ensureAllowance } from "./common.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -379,7 +380,7 @@ export async function createDAO(name, symbol, initialSupplyWhole, maxSupplyWhole
   }
   const factoryAddress = FACTORY_ADDRESSES.sowellian;
   if (!factoryAddress) {
-    throw new Error("SOWELLIAN_FACTORY_ADDRESS is not configured on this bot instance");
+    throw new Error(`${networkEnvName(currentNetwork().id, "SOWELLIAN_FACTORY_ADDRESS")} is not configured on this bot instance`);
   }
 
   const factory = { address: getAddress(factoryAddress), abi: factoryAbi };
@@ -387,7 +388,7 @@ export async function createDAO(name, symbol, initialSupplyWhole, maxSupplyWhole
   const hash = await writeWithGasBuffer(walletClient, {
     ...factory,
     functionName: "createDAO",
-    args: [name, symbol, parseEther(String(initialSupplyWhole)), parseEther(String(maxSupplyWhole)), DEFAULT_CONFIG],
+    args: [name, symbol, parseEther(String(initialSupplyWhole)), parseEther(String(maxSupplyWhole)), scaleBlockFields("sowellian", DEFAULT_CONFIG)],
   });
   await publicClient.waitForTransactionReceipt({ hash });
 

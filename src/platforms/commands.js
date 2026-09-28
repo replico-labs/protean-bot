@@ -1,4 +1,5 @@
-import { getChatDAO, getChatModel, getChatMarket, getChatGuardWrapper } from "../db.js";
+import { getChatDAO, getChatModel, getChatMarket, getChatGuardWrapper, getChatNetwork } from "../db.js";
+import { runOnNetwork } from "../networks.js";
 import { hasToken } from "../governance/common.js";
 import { UserError, reply } from "./helpers.js";
 import { CORE_COMMANDS } from "./commands/core.js";
@@ -41,7 +42,8 @@ export { UserError };
 
 // Help metadata for the core commands, which predate the per-command fields.
 const CORE_META = {
-  register: ["Setup", "<governanceAddress> [model]"],
+  register: ["Setup", "<governanceAddress> [model] [network]"],
+  network: ["Setup", ""],
   unregister: ["Setup", ""],
   wallet: ["Your wallet", ""],
   balance: ["Your wallet", "[address]"],
@@ -129,7 +131,8 @@ export async function runCommand(name, ctx) {
   const command = COMMANDS[name];
   if (!command) return reply(`Unknown command \`${name}\`. Try \`${ctx.cmd("help")}\`.`, { ephemeral: true });
   try {
-    return await command.run({ ...ctx, command: name });
+    // Every command runs on its channel's network (networks.js).
+    return await runOnNetwork(getChatNetwork(ctx.chatId, ctx.platform), () => command.run({ ...ctx, command: name }));
   } catch (err) {
     if (err instanceof UserError) return reply(err.message, { ephemeral: true });
     console.error(`[${ctx.platform}] ${name} failed:`, err);

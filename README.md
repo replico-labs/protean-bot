@@ -1,47 +1,88 @@
-# Protean — DAO Governance Telegram Bot
+# Protean — DAO Governance Bot for Telegram, Discord and Slack
 
-Turns a Telegram group into a fully functioning DAO. Deploy a governance system under any of ten models, get a wallet, stake, propose, vote, trade decision markets, and place confidential bets — all without leaving the chat.
+Turns a group chat into a fully functioning DAO. Deploy a governance system under any of ten models, get a wallet, stake, propose, vote, trade decision markets, and place confidential bets — all without leaving the chat. Runs on Telegram, Discord and Slack, and on Monad, Base and HyperEVM.
 
 Contracts live in the companion repo, [`Spaces`](https://github.com/replico-labs/Spaces). See its README for deployed addresses per network.
 
 ## Status
 
-Every command is wired to real, deployed contracts on Monad testnet (Opportunity Markets on Ethereum Sepolia). The contract suite passes 468/468 tests. The bot itself has been verified structurally — real ABIs, real SDK interfaces, mocked network responses — but **has not yet been run end-to-end against the live deployment through real Telegram sessions**. See [What's not fully verified yet](#whats-not-fully-verified-yet) before relying on it for anything real.
+- **Contracts:** 539/539 Foundry tests pass (see Spaces).
+- **Live on Monad testnet:** the full create → propose → vote → queue → execute loop has run through Telegram for token-weighted and Board DAOs, with real receipts.
+- **Tested end to end on local chains** (anvil, with the real contracts deployed from source): every model's full lifecycle through the Discord and Slack handlers — the same command code Telegram uses for the shared paths — about 230 checks, including a GuardWrapper handover with a treasury payout confirmed by signers. The network layer has its own two-chain test: one bot process serving a "Monad" chain and a "Base" chain at once.
+- **Not yet run live:** the other eight models on Monad testnet, anything on Base or HyperEVM (no factories deployed there yet), real Discord and Slack workspaces, the FHE relayer round-trip, and Switchboard's Crossbar round-trip. See [What's not verified yet](#whats-not-verified-yet).
 
 ## How wallets work
 
-Every Telegram user gets their own independently generated wallet, created automatically the first time they need one — no external wallet app, no connect step.
+Every user gets their own independently generated wallet, created automatically the first time they need one — no external wallet app, no connect step. One wallet per user per chat platform; the same address works on every EVM network.
 
 Each private key is **envelope-encrypted with AWS KMS** (AES-256-GCM, with a per-user data key wrapped by one symmetric KMS key) and stored in Supabase. The plaintext key only exists in memory for the instant a transaction is signed. A leaked database alone reveals nothing usable; decryption requires KMS access too.
 
 This is still a **custodial** model — the bot's backend can decrypt any user's key. It trades some decentralization for zero-friction onboarding.
 
-**Legacy wallets.** Earlier versions derived every wallet from a single `MASTER_WALLET_SEED`. If a user still has funds under that old address, the bot refuses to silently create a second wallet for them and asks them to run `/migratewallet` first, which sweeps native MON across (ERC20 tokens must be moved manually — the command says so).
+New wallets start empty, so the operator wallet sends a small gas top-up before a user's first transaction (and again when they run low). The amount is per network: 0.1 MON on Monad, 0.0002 ETH on Base, 0.01 HYPE on HyperEVM by default.
+
+**Legacy wallets.** Earlier versions derived every Telegram wallet from a single `MASTER_WALLET_SEED`. If a user still has funds under that old address, the bot refuses to silently create a second wallet and asks them to run `/migratewallet` first, which sweeps the native balance across (ERC20 tokens must be moved manually — the command says so).
+
+## Networks
+
+| Network | id | Chain | Gas token | Notes |
+|---|---|---|---|---|
+| Monad testnet | `monad-testnet` | 10143 | MON | the default; all ten factories deployed |
+| Monad mainnet | `monad-mainnet` | 143 | MON | |
+| Base | `base` | 8453 | ETH | contracts must be built with Spaces' `size-limited` profile |
+| Base Sepolia | `base-sepolia` | 84532 | ETH | same |
+| HyperEVM | `hyperevm` | 999 | HYPE | same, plus big blocks for factory deploys |
+| HyperEVM testnet | `hyperevm-testnet` | 998 | HYPE | same |
+
+**Each chat's DAO lives on one network**, chosen when it's created or linked:
+
+```
+/createdao ArkDAO ARK 1000000 10000000 quadratic base
+/createboarddao ArkBoard 0xA... 0xB... hyperevm
+/register 0xGovernance... tokenWeighted base
+```
+
+The network word can go anywhere after the model; without one, the bot's default network is used. From then on every command in that chat reads and writes that chain. `/network` shows which one. Chats registered before networks existed are Monad testnet.
+
+**Enabling a network** takes, per network: an entry in `NETWORKS`, factory addresses under that network's prefix (`BASE_FACTORY_ADDRESS`, `BASE_QUADRATIC_FACTORY_ADDRESS`, ...), and native gas in the operator wallet. An RPC is optional (`BASE_RPC_URL`; viem's public RPC otherwise). See `.env.example`.
+
+What changes between networks, handled automatically:
+
+- **Block-counted voting periods are rescaled.** Several governance periods are counted in blocks, and the defaults were written for Monad's 400 ms blocks: 50,400 blocks is ~5.6 h on Monad but ~28 h on Base. New DAOs get their block-counted fields scaled to the same wall-clock length (10,080 on Base, 20,160 on HyperEVM). Periods counted in seconds (timelocks, execution windows, Sowellian's challenge period) are unchanged.
+- **Gas.** Every write estimates gas and adds a 50% buffer, because Monad charges the full gas limit, not gas used. On HyperEVM the buffer is capped at the 2M small-block limit; a transaction that genuinely needs more fails with an explanation, since its sender would have to switch to big blocks. Every model's DAO creation fits under 2M (the heaviest, Delegate, is ~1.29M).
+- **The native token.** `/send 1 0x... ETH` on Base, `HYPE` on HyperEVM, `MON` on Monad — or `native` anywhere.
+
+Opportunity Markets are separate and always on Ethereum Sepolia; Zama's FHE coprocessor doesn't exist on Monad, Base or HyperEVM.
 
 ## Commands
 
-`/help` is model-aware: it only shows commands that apply to the governance model the current group uses.
+`/help` is model-aware: it only shows commands that apply to the current chat's governance model and linked wrappers/markets.
 
 ### Setup
-- `/createdao <name> <symbol> <initialSupply> <maxSupply> [model] [council...]` — deploy a DAO and link it here. Models: `tokenWeighted` (default), `quadratic`, `liquid`, `optimistic`, `delegate`, `sortition`, `conviction`, `sowellian`, `decisionMarkets`. `delegate` and `sortition` take the starting council as trailing addresses; sortition's randomness source comes from the bot's config automatically.
-- `/createboarddao <name> <signer1> <signer2> ...` — deploy a Board (multisig) DAO; no token at all
-- `/register <address> [model]` / `/unregister` — link or unlink an existing DAO (admin)
-- `/setdistributor <address>` — link a welcome-token distributor (admin)
+- `/createdao <name> <symbol> <initialSupply> <maxSupply> [model] [network] [council...]` — deploy a DAO and link it here. Models: `tokenWeighted` (default), `quadratic`, `liquid`, `optimistic`, `delegate`, `sortition`, `conviction`, `sowellian`, `decisionMarkets`. `delegate` and `sortition` take the starting council as trailing addresses; sortition's randomness source comes from the bot's config.
+- `/createboarddao <name> <signer1> <signer2> ... [network]` — deploy a Board (multisig) DAO; no token at all
+- `/register <address> [model] [network]` / `/unregister` — link or unlink an existing DAO. `/register` checks the address really is that model's contract on that network.
+- `/network` — which chain this chat's DAO is on, and which networks the bot supports
+- `/deploywelcomedistributor <amountPerClaim> <cap>` / `/setdistributor <address>` — welcome tokens for new members; `/claim` (also automatic on join)
+- `/deploynftwrapper` — the DAO's NFT wrapper (see [NFTs](#nfts))
+- `/deployguardwrapper <requiredApprovals> <tenureSeconds> <signer...>` / `/registerguardwrapper <address>` / `/handovertowrapper <address>` — a security council (see [Guard wrapper](#guard-wrapper))
 
-### Wallet
-- `/wallet` — your wallet address
-- `/migratewallet` — move funds from a legacy derived wallet to your KMS wallet
-- `/claim` — claim welcome tokens (also automatic on join, if a distributor is linked)
-
-### DAO info
-- `/dao` — name, token, treasury, full model-specific config
-- `/treasury` · `/contribute` · `/balance [address]`
-
-### Proposals (shared across models)
-- `/proposals` · `/proposal <id>` — list, or full detail rendered correctly for each model's own vote shape
-- `/propose <target> <value> <data> <description>` · `/queue <id>` · `/execute <id>` · `/cancel <id>`
-- `/vote <id> for|against|abstain [reason]`
+### Wallet and tokens
+- `/wallet` · `/migratewallet` · `/balance [address]`
+- `/tip <amount> <recipient> [token]` — hand out the DAO's operator-held supply (creator only)
+- `/send <amount> <recipient> [token|native]` — send tokens or native currency you hold
+- `/tokenbalance [token] [address|treasury]` · `/registertoken <ticker> <address>` · `/treasuryassets`
 - `/stake <amount>` · `/unstake <amount>`
+
+### The DAO
+- `/dao` — name, token, treasury, full model-specific config
+- `/treasury` · `/contribute` (treasury address, sent privately)
+- `/proposals` · `/proposal <id>` — list, or full detail rendered for each model's own vote shape
+
+### Proposing and deciding
+- `/listactions` · `/proposeaction <actionId> <args...> <description>` — the verified action library: every native governance, Treasury, token and wrapper admin function, encoded for you. After a GuardWrapper handover, Treasury and token actions are routed through the wrapper automatically.
+- `/propose <target> <value> <data> <description>` — raw calldata, for anything else
+- `/vote <id> for|against|abstain [reason]` · `/queue <id>` · `/execute <id> [nativeValue]` · `/cancel <id>`
 
 ### Model-specific
 | Model | Commands |
@@ -55,20 +96,59 @@ This is still a **custodial** model — the bot's backend can decrypt any user's
 | Sowellian | `/proposecriteria`, `/deploychainlinkoracle`, `/castapprovalvote`, `/finalizeapproval`, `/takeposition`, `/resolveviaoracle`, `/proposeresolution`, `/challengeresolution`, `/finalizeunchallenged`, `/castadjudicationvote`, `/finalizeadjudication`, `/claimposition` |
 | Decision Markets | `/proposemarket`, `/split`, `/trade`, `/merge`, `/finalizeproposal`, `/redeem`, `/unwrap`, `/reclaimliquidity` |
 
+Bonds and seeds (Optimistic challenges, Sowellian bonds and positions, Decision Markets seeds and trades) are approved automatically before the contract pulls them.
+
+### Guard wrapper
+- `/guardwrapper` — signers, threshold, tenure
+- `/instruction <id>` · `/confirminstruction <id>` · `/rejectinstruction <id>` · `/revokeconfirmation <id>`
+
 ### Sowellian oracle proposals
 ```
 /proposecriteria <target> <value> <data> oracle <adapter|switchboard> <feedId|-> <targetValue> min|max <measurementPeriodSeconds> <description>
 ```
-- **Switchboard:** type the literal word `switchboard` (uses `SWITCHBOARD_ORACLE_ADAPTER`) and pass the real 32-byte Switchboard `feedId`. One adapter serves every feed.
+- **Switchboard:** type the literal word `switchboard` (uses the network's `SWITCHBOARD_ORACLE_ADAPTER`) and pass the real 32-byte Switchboard `feedId`. One adapter serves every feed.
 - **Chainlink:** run `/deploychainlinkoracle <chainlinkFeedAddress>` first, then pass the returned adapter address and `-` as the feed ID. Chainlink needs one adapter per feed, because each Chainlink feed is its own contract.
 - **Human track:** `human - -` in the oracle and feed slots.
 
 ### Opportunity Markets (Ethereum Sepolia, FHE-encrypted)
 - `/createmarket <underlyingToken>` · `/registermarket <address>` · `/unregistermarket`
 - `/listopportunity <metadataURI>` · `/deposit <amount>` · `/back <opportunityId> <amount>` (confidential)
-- `/mybalance` · `/mybet <index>` · `/allbets` (deployer only)
+- `/mybalance` · `/mybet <index>` · `/allbets` · `/analytics` (deployer only)
 - `/fundrewardpool` · `/resolve <id>` · `/cancelmarket` (deployer only)
 - `/reclaimstake` · `/computereward` · `/revealwinningtotal` · `/withdraw` · `/withdrawreward`
+
+`/registermarket` only accepts addresses the configured `OpportunityMarketFactory` reports as its own (`isMarket`).
+
+## NFTs
+
+The Treasury can't receive NFTs (it has no ERC721/ERC1155 receiver hooks), so **a DAO's NFTs live in its NFT wrapper** (`/deploynftwrapper`):
+
+- Send NFTs to the wrapper's address, never to the Treasury.
+- Governance lists them (`nftwrapper-approve-order-hash`), sends them out (`nftwrapper-transfer-erc721` / `-erc1155`, which refuse the Treasury as a recipient), or calls a marketplace directly (`nftwrapper-execute`).
+- Sale proceeds go back to the Treasury with `nftwrapper-sweep-native` / `-erc20`.
+- Every one of those is a proposal (`/proposeaction`). To buy an NFT, first move funds from the Treasury to the wrapper (`treasury-transfer-eth` / `-erc20`).
+
+## Discord and Slack
+
+Every Telegram command also runs on Discord and Slack, except `/start` (use `help`) and `/migratewallet` (legacy seed wallets only ever existed for Telegram IDs). Each platform runs as its own process sharing the same `data/` volume, wallet store and chain config as the Telegram bot. Neither needs `TELEGRAM_BOT_TOKEN`.
+
+```bash
+npm run discord   # DISCORD_BOT_TOKEN, DISCORD_APPLICATION_ID, optional DISCORD_GUILD_ID
+npm run slack     # SLACK_APP_TOKEN + either SLACK_BOT_TOKEN (one workspace) or the "Add to Slack" settings below
+```
+
+- **Discord** registers 98 native slash commands on startup (Discord allows 100 per bot). `/register` and `/unregister` default to members with *Manage Server*. Long replies are split across messages.
+- **Slack** uses one command, `/protean <subcommand>` (e.g. `/protean vote 3 for`). Create the app from [`docs/slack-app-manifest.yml`](docs/slack-app-manifest.yml). Joining a channel with a welcome distributor sends the newcomer their tokens, as on Telegram.
+- **Slack in any workspace:** with `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`, `SLACK_STATE_SECRET` and `SLACK_PUBLIC_URL` set, the Slack process also serves an "Add to Slack" link at `<SLACK_PUBLIC_URL>/slack/install` (on `PORT`, so the service needs a public domain). Each workspace's bot token is stored encrypted under the wallets' KMS key, in Supabase's `slack_installations` table (`supabase/schema.sql`); uninstalling deletes it. Install into your own workspace through the same link, then activate public distribution. Without `SLACK_CLIENT_ID` it runs in one workspace on `SLACK_BOT_TOKEN`. Slack doesn't list Socket Mode apps in its App Directory, so share the link directly.
+- **Privacy:** anything Telegram sends by DM (bets, confidential balances, rewards, handover proposals, the treasury address from `contribute`) is shown only to the caller: an ephemeral reply on Discord (which also hides the options typed), an ephemeral response on Slack. So `back` takes its opportunity and amount directly — they never appear in the channel.
+- **Link vs creator:** whoever runs `register` becomes the channel's *linker* (can relink/unlink); whoever runs `createdao`/`createboarddao` is the DAO's *creator* (can also `tip`, deploy wrappers and distributors). Registering an existing DAO never grants creator rights. Server/workspace admins can always relink.
+- **Errors** name the contract's reason, e.g. `AlreadyConfirmed`.
+
+Command logic lives in `src/platforms/commands/` (grouped as core, setup, tokens, models, sowellian, markets, opportunity); `discord.js` and `slack.js` only handle transport.
+
+## Notifications
+
+Every platform's process polls its linked DAOs (every 20 s) and posts proposal created / queued / executed / cancelled, plus model-specific events, to the linked chat. Each network is polled separately, and ranges are fetched in ≤90-block chunks (Monad testnet caps `eth_getLogs` at 100 blocks), saving progress after each chunk.
 
 ## Setup
 
@@ -81,89 +161,54 @@ npm start
 
 | Variable | Required for | Notes |
 |---|---|---|
-| `TELEGRAM_BOT_TOKEN` | everything | from BotFather |
-| `RPC_URL` | everything | Monad testnet public RPC by default |
-| `OPERATOR_PRIVATE_KEY` | `/createdao`, `/claim`, gas top-ups | a funded hot wallet — see Security |
-| `FACTORY_ADDRESS` + `<MODEL>_FACTORY_ADDRESS` | `/createdao` per model | a model with no address set can't be created, but can still be `/register`ed |
-| `SORTITION_RANDOMNESS_SOURCE` | `/createdao ... sortition` | deployed `SwitchboardRandomnessAdapter` |
-| `SWITCHBOARD_ORACLE_ADAPTER` | `switchboard` shorthand in `/proposecriteria` | deployed `SwitchboardPriceFeedAdapter` (optional) |
-| `SWITCHBOARD_ADDRESS` | both keepers | Switchboard's own proxy, not our adapter |
+| `TELEGRAM_BOT_TOKEN` | the Telegram bot | from BotFather |
+| `RPC_URL` | optional | Monad testnet; viem's public RPC by default |
+| `NETWORKS`, `DEFAULT_NETWORK` | more than one network | see [Networks](#networks) |
+| `OPERATOR_PRIVATE_KEY` | `/createdao`, `/claim`, gas top-ups, keepers | a funded hot wallet on every enabled network — see Security |
+| `FACTORY_ADDRESS` + `<MODEL>_FACTORY_ADDRESS` | `/createdao` per model | per network with a prefix (`BASE_FACTORY_ADDRESS`); a model with no address can't be created there, but can still be `/register`ed |
+| `SORTITION_RANDOMNESS_SOURCE` | `/createdao ... sortition` | deployed `SwitchboardRandomnessAdapter`, per network |
+| `SWITCHBOARD_ORACLE_ADAPTER` | `switchboard` shorthand in `/proposecriteria` | deployed `SwitchboardPriceFeedAdapter` (optional), per network |
+| `SWITCHBOARD_ADDRESS` | keepers | Switchboard's own proxy, not our adapter, per network |
 | `KMS_KEY_ID`, `AWS_REGION`, AWS credentials | KMS wallets | symmetric KMS key |
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | KMS wallets | service_role key — RLS allows nothing else |
 | `MASTER_WALLET_SEED` | legacy wallets only | keep set only while old wallets still hold funds |
 | `OPPORTUNITY_MARKET_RPC_URL`, `OPPORTUNITY_MARKET_FACTORY_ADDRESS` | Opportunity Markets | Sepolia |
+| `DISCORD_*`, `SLACK_*` | Discord / Slack | see above |
 
-### Running the sortition keeper
+### Keepers
 
-`startSortition()` only *requests* randomness. Switchboard is pull-based: after the settlement delay, someone must fetch the signed result and submit it. Any user can do this manually with `/settlesortition`, or you can run the background keeper so it happens automatically:
+Switchboard is pull-based: someone has to submit randomness settlements and price updates. Two standalone keepers do it, paying gas from the operator wallet. Neither needs a chat token. **Each keeper process serves one network** — set `KEEPER_NETWORK` (default: the default network) and that network's `SWITCHBOARD_ADDRESS`; run one per network that has Sortition or Sowellian DAOs.
 
-```bash
-npm run keeper:sortition
-```
-
-Run it as its own long-lived process alongside the bot (a second Railway service, pm2, systemd). It polls every 30 seconds and pays gas from the operator wallet.
-
-### Running the Switchboard price-feed keeper
-
-Sowellian oracle-track proposals resolve with `resolveViaOracle()`, which rejects feed data older than the DAO's `maxOracleStaleness`. Switchboard feeds are pull-based, so nothing refreshes them on its own. This keeper finds proposals whose measurement period has ended and whose oracle is the Switchboard adapter, pushes a fresh signed update from Crossbar, and resolves them:
-
-```bash
-npm run keeper:switchboard
-```
-
-It polls every 60 seconds, skips Chainlink-backed proposals, and pays gas plus Switchboard's per-update fee from the operator wallet. Optional: `SWITCHBOARD_FEED_IDS` (comma-separated feed IDs to keep fresh on a timer), `SWITCHBOARD_REFRESH_SECONDS` (default 300), `SWITCHBOARD_NETWORK` (`testnet` default, or `mainnet`), `CROSSBAR_URL`.
-
-Both keepers only need `OPERATOR_PRIVATE_KEY`, `SWITCHBOARD_ADDRESS` and `RPC_URL`; neither needs `TELEGRAM_BOT_TOKEN`.
+- **Sortition randomness** — `npm run keeper:sortition`. `startSortition()` only *requests* randomness; after the settlement delay the keeper fetches the signed result and settles it (anyone can also do this with `/settlesortition`). Polls every 30 s.
+- **Sowellian price feeds** — `npm run keeper:switchboard`. Finds oracle-track proposals whose measurement period has ended and whose oracle is the Switchboard adapter, pushes a fresh signed update from Crossbar, and resolves them in the same cycle (so the data is inside `maxOracleStaleness`). Skips Chainlink, which updates itself. Polls every 60 s. Optional: `SWITCHBOARD_FEED_IDS` (feeds to keep fresh on a timer), `SWITCHBOARD_REFRESH_SECONDS` (default 300), `SWITCHBOARD_NETWORK` (Crossbar's `testnet`/`mainnet`; defaults from the chain), `CROSSBAR_URL`.
 
 ## Security — read before deploying anywhere real
 
 - **Never paste private keys into chats, commands, or shell history.** Use `export PRIVATE_KEY=...` and reference `$PRIVATE_KEY`. Any key that has appeared in plaintext should be treated as burned.
-- **`OPERATOR_PRIVATE_KEY`** pays gas for `/createdao`, `/claim`, keeper settlement, and small first-transaction top-ups for user wallets. Keep it funded, but not over-funded.
+- **`OPERATOR_PRIVATE_KEY`** pays gas for `/createdao`, `/claim`, keeper transactions, and user top-ups — on every enabled network. Keep it funded, but not over-funded; on mainnets especially, set the top-up amounts deliberately (`<PREFIX>_GAS_TOPUP_FIRST` etc.).
 - **KMS IAM scope.** The bot's AWS credentials should only be able to `Decrypt` and `GenerateDataKey` on the one key — not manage or delete it.
 - **`SUPABASE_SERVICE_ROLE_KEY`** bypasses Row Level Security by design. Treat it like a database root password.
 - **`MASTER_WALLET_SEED`** (legacy) can derive every old wallet's key. Remove it once no old wallet holds funds.
 
-## Discord and Slack
-
-Every Telegram command also runs on Discord and Slack, except `/start` (use `help`) and `/migratewallet` (legacy seed wallets only ever existed for Telegram IDs). Each platform runs as its own process sharing the same `data/` volume, wallet store and chain config as the Telegram bot. Neither needs `TELEGRAM_BOT_TOKEN`.
-
-```bash
-npm run discord   # DISCORD_BOT_TOKEN, DISCORD_APPLICATION_ID, optional DISCORD_GUILD_ID
-npm run slack     # SLACK_BOT_TOKEN, SLACK_APP_TOKEN (Socket Mode - no public URL needed)
-```
-
-- **Discord** registers 97 native slash commands on startup (Discord allows 100 per bot). `/register` and `/unregister` default to members with *Manage Server*. Long replies are split across messages.
-- **Slack** uses one command, `/protean <subcommand>` (e.g. `/protean vote 3 for`). Create the app from [`docs/slack-app-manifest.yml`](docs/slack-app-manifest.yml). Joining a channel with a welcome distributor sends the newcomer their tokens, as on Telegram.
-- **Privacy:** anything Telegram sends by DM (bets, confidential balances, rewards, handover proposals, the treasury address from `contribute`) is shown only to the caller: an ephemeral reply on Discord (which also hides the options typed), an ephemeral response on Slack. So `back` takes its opportunity and amount directly - they never appear in the channel.
-- One channel links to one DAO. Each user gets their own wallet per platform.
-- **Link vs creator:** whoever runs `register` becomes the channel's *linker* (can relink/unlink); whoever runs `createdao`/`createboarddao` is the DAO's *creator* (can also `tip`, deploy wrappers and distributors). Registering an existing DAO never grants creator rights. Server/workspace admins can always relink.
-- Notifications for proposal created/queued/executed/cancelled post to linked channels.
-
-`help` shows only the commands that apply to the channel's DAO model and linked wrappers/markets. Command logic lives in `src/platforms/commands/` (grouped as core, setup, tokens, models, sowellian, markets, opportunity); `discord.js` and `slack.js` only handle transport.
-
 ## Known limitations
 
-- **`/createdao` mints the initial supply to the operator wallet**, not the person who ran the command, and records the operator as `creator` (cosmetic — no permissions are gated on it). Distributing that supply to the community is currently a manual step.
-- **`/propose` takes raw target/value/calldata** — unforgiving for non-technical users until the transaction compiler exists.
+- **`/createdao` mints the initial supply to the operator wallet**, not the person who ran the command, and records the operator as `creator` on-chain. `/tip` and welcome distributors are how it reaches members.
 - **Chainlink coverage is limited.** Not every metric has a Chainlink feed on every chain; Switchboard covers far more.
-- **WMON is never auto-unwrapped.** Redeeming or reclaiming on a Decision Markets quote side returns WMON; `/unwrap` converts it back to MON.
+- **Wrapped native is never auto-unwrapped.** Redeeming or reclaiming on a Decision Markets quote side returns the wrapped token; `/unwrap` converts it back.
+- **`data/chats.json` is a flat file.** Fine for now; swap for a database before scaling.
 
-## What's not fully verified yet
+## What's not verified yet
 
-Verified: every file compiles, every command calls a real exported function with the right argument shapes, contract tests pass. Not yet verified against live infrastructure:
-
-- The full create → propose → vote → queue → execute loop through real Telegram sessions
+- The other eight governance models through real Telegram sessions on Monad testnet (they pass on local chains through the shared command code)
+- Anything on Base or HyperEVM — no factories deployed there yet
+- Real Discord and Slack workspaces
 - The FHE relayer round-trip for confidential bets and decryption (Opportunity Markets)
-- Switchboard's Crossbar round-trip for sortition settlement
-- A real oracle-track Sowellian resolution
-
-A reasonable first live test: `/wallet` → `/createdao` → `/stake` → `/propose` → `/vote` → `/queue` → `/execute`.
+- Switchboard's Crossbar round-trip for sortition settlement and price updates
 
 ## Not built yet
 
-- **Transaction compiler** — structured actions (transfer, swap, approve) compiled to calldata, wrapped through `Treasury.execute()`
-- **Event listener** — proactive chat messages for on-chain events; everything today is pull-based
-- **`/deploydistributor`**, in-chat tipping, and group-wide gas sponsorship with spending limits
+- **External protocol actions** — DEXs, perps, lending, liquid staking, NFT marketplaces and launchpads on each network, as verified actions (and wrapper contracts where a protocol can't be called directly from the Treasury). Built one protocol at a time, each verified against the protocol's own deployment before any code is written.
+- Group-wide gas sponsorship with spending limits
 
 ## Architecture
 
@@ -171,23 +216,45 @@ A reasonable first live test: `/wallet` → `/createdao` → `/stake` → `/prop
 src/
 ├── index.js              Telegram command handlers, model-aware /help
 ├── platforms/            Discord + Slack front-ends over a shared command core
-├── config.js             chain, viem clients, operator wallet, factory + oracle addresses
-├── contracts.js          original-model reads/writes, gas top-ups
-├── db.js                 chat ↔ DAO / model / market links (flat JSON — swap before scaling)
+├── networks.js           network registry, per-call network context, block scaling, per-network gas
+├── config.js             viem clients and settings that follow the current network, operator wallet
+├── contracts.js          token-weighted reads/writes, gas top-ups, wrapper/distributor deploys
+├── governance/           one adapter per model + shared helpers (common.js, index.js registry)
+├── actionLibrary.js      verified native actions for /proposeaction
+├── proposalBuilder.js    action encoding + GuardWrapper routing, shared by every platform
+├── wrapper.js            GuardWrapper reads/writes
+├── eventListener.js      chat notifications, per platform and per network
+├── db.js                 chat ↔ DAO / model / network / wrapper / market links (flat JSON)
 ├── walletResolver.js     KMS-first wallet resolution, legacy migration guard
 ├── kmsWallet.js          KMS envelope encryption
 ├── walletStore.js        Supabase persistence for encrypted keys
 ├── wallet.js             legacy seed-derived wallets
-├── governance/           one adapter per model + shared helpers (common.js, index.js registry)
 ├── opportunityMarket/    Sepolia config, market actions, FHE encryption, user + public decrypt
 ├── keepers/              standalone Switchboard keepers (sortition randomness, Sowellian price feeds)
-└── abis/                 compiled ABIs (and adapter bytecode for on-demand deployment)
+└── abis/                 compiled ABIs (and bytecode for on-demand deployment)
 supabase/schema.sql       wallets table, RLS enabled
+docs/slack-app-manifest.yml
 ```
+
+`src/abis/*.json` is copied from Spaces' Foundry output. **Whenever a contract changes, re-extract and copy its ABI/artifact here** — the bot has no compiler and silently keeps using the old one otherwise.
 
 ## Deploying persistently
 
-The bot uses long polling, so it needs a long-lived process — not serverless. Railway or Render work: `npm install` to build, `npm start` to run, env vars set in the dashboard. Run the sortition keeper as a second service with `npm run keeper:sortition`.
+The bots use long polling / sockets, so they need long-lived processes — not serverless. The bots and keepers all use `data/` (the keepers read it to find DAOs), so they must share one persistent volume. Railway attaches a volume to a single service, so there run them together in one service, leaving out any you haven't configured:
+
+```bash
+sh -c "npm start & npm run discord & npm run slack & KEEPER_NETWORK=monad-testnet npm run keeper:sortition & wait"
+```
+
+With "Add to Slack" enabled, give that service a public domain; Railway's `PORT` is where the install page listens. The commands:
+
+| Service | Command |
+|---|---|
+| Telegram bot | `npm start` |
+| Discord bot | `npm run discord` |
+| Slack bot | `npm run slack` |
+| Sortition keeper (per network) | `KEEPER_NETWORK=<id> npm run keeper:sortition` |
+| Price-feed keeper (per network) | `KEEPER_NETWORK=<id> npm run keeper:switchboard` |
 
 ## Try it live
 
