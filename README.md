@@ -92,13 +92,20 @@ Opportunity Markets are separate and always on Ethereum Sepolia; Zama's FHE copr
 | Model | Commands |
 |---|---|
 | Board | `/confirm <id>`, `/revoke <id>` |
-| Liquid | `/delegate <address>`, `/undelegate` |
+| Liquid | `/delegate <address>`, `/undelegate`, `/resolvedelegations <id> [address]` |
 | Optimistic | `/challenge <id>` |
 | Conviction | `/support <id>`, `/withdrawsupport`, `/mysupport` |
 | Delegate | `/startelection`, `/declarecandidacy`, `/voteinelection`, `/finalizeelection`, `/initiaterecall`, `/voterecall`, `/finalizerecall`, `/council` |
 | Sortition | `/registereligible`, `/withdraweligibility`, `/startsortition`, `/settlesortition`, `/finalizesortition`, `/council` |
 | Sowellian | `/proposecriteria`, `/deploychainlinkoracle`, `/castapprovalvote`, `/finalizeapproval`, `/takeposition`, `/resolveviaoracle`, `/proposeresolution`, `/challengeresolution`, `/finalizeunchallenged`, `/castadjudicationvote`, `/finalizeadjudication`, `/claimposition` |
 | Decision Markets | `/proposemarket`, `/split`, `/trade`, `/merge`, `/finalizeproposal`, `/redeem`, `/unwrap`, `/reclaimliquidity` |
+
+**Liquid delegation.** A delegate's vote counts only their own tokens. Each delegator's weight is added by a separate on-chain call, `resolveDelegatedVote`, which anyone can make while voting is open. The bot makes these calls for you:
+- **When a delegate votes through `/vote`,** it resolves everyone behind them, up to 5 delegation hops, and replies with how much weight was added.
+- **The event listener** does the same for every vote seen on-chain (including votes cast outside the bot), and for anyone who delegates while a proposal is open.
+- **`/resolvedelegations <id> [address]`** runs it on demand.
+
+The operator wallet pays for these calls. Someone who votes directly before being resolved keeps their own vote.
 
 Bonds and seeds (Optimistic challenges, Sowellian bonds and positions, Decision Markets seeds and trades) are approved automatically before the contract pulls them.
 

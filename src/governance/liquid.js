@@ -169,6 +169,109 @@ export async function getDirectDelegators(governanceAddress, account) {
   return publicClient.readContract({ ...gov, functionName: "getDirectDelegators", args: [getAddress(account)] });
 }
 
+/*//////////////////////////////////////////////////////////////
+                    DELEGATED VOTE RESOLUTION
+//////////////////////////////////////////////////////////////*/
+
+// LiquidGovernance.MAX_CHAIN_DEPTH: resolveDelegatedVote follows a
+// delegator's chain at most this many hops to find a voter.
+const MAX_CHAIN_DEPTH = 5;
+const ACTIVE = 1; // ProposalState.Active
+const ZERO = "0x0000000000000000000000000000000000000000";
+
+/**
+ * A delegate's vote only carries their own weight. Each delegator's weight
+ * is added separately, by resolveDelegatedVote(proposalId, delegator) -
+ * permissionless, and only while voting is open. These helpers find
+ * everyone behind a voter and resolve them.
+ */
+export async function isProposalActive(governanceAddress, proposalId) {
+  const gov = contractFor(governanceAddress);
+  try {
+    return Number(await publicClient.readContract({ ...gov, functionName: "state", args: [BigInt(proposalId)] })) === ACTIVE;
+  } catch {
+    return false;
+  }
+}
+
+/** Open proposals among the most recent `lookback`. */
+export async function activeProposalIds(governanceAddress, lookback = 25) {
+  const gov = contractFor(governanceAddress);
+  const count = Number(await publicClient.readContract({ ...gov, functionName: "proposalCount" }));
+  const ids = [];
+  for (let id = count; id >= 1 && id > count - lookback; id--) if (await isProposalActive(governanceAddress, id)) ids.push(id);
+  return ids;
+}
+
+/** Everyone delegating to `root`, directly or through others, up to MAX_CHAIN_DEPTH hops - nearest first. */
+export async function delegatorsBehind(governanceAddress, root) {
+  const seen = new Set([getAddress(root)]);
+  const found = [];
+  let frontier = [getAddress(root)];
+  for (let depth = 0; depth < MAX_CHAIN_DEPTH && frontier.length; depth++) {
+    const next = [];
+    for (const addr of frontier) {
+      for (const d of await getDirectDelegators(governanceAddress, addr)) {
+        const delegator = getAddress(d);
+        if (seen.has(delegator)) continue; // delegation cycles are possible on-chain
+        seen.add(delegator);
+        next.push(delegator);
+        found.push(delegator);
+      }
+    }
+    frontier = next;
+  }
+  return found;
+}
+
+async function receipt(governanceAddress, proposalId, account) {
+  const gov = contractFor(governanceAddress);
+  return publicClient.readContract({ ...gov, functionName: "getVoteReceipt", args: [BigInt(proposalId), getAddress(account)] });
+}
+
+const EXPECTED_SKIP = /AlreadyVoted|DelegateHasNotVoted|NotDelegated|ProposalNotActive/;
+
+/**
+ * Resolves the delegated votes of everyone behind `root` on `proposalId`
+ * (and `root` itself with includeRoot, for someone who just delegated).
+ * Skips anyone who has already voted or whose chain has no voter yet.
+ * Returns { resolved, weight, failed }. `client` signs and pays - the
+ * operator wallet for automatic sweeps.
+ */
+export async function resolveDelegationsBehind({ client, governanceAddress, proposalId, root, includeRoot = false }) {
+  const result = { resolved: 0, weight: 0n, failed: 0 };
+  if (!(await isProposalActive(governanceAddress, proposalId))) return result;
+  const candidates = [...(includeRoot ? [getAddress(root)] : []), ...(await delegatorsBehind(governanceAddress, root))];
+  for (const delegator of candidates) {
+    if ((await receipt(governanceAddress, proposalId, delegator)).hasVoted) continue;
+    const gov = contractFor(governanceAddress);
+    const tip = await publicClient.readContract({ ...gov, functionName: "delegatedTo", args: [delegator] });
+    if (getAddress(tip) === ZERO) continue;
+    try {
+      await resolveDelegatedVote(client, governanceAddress, proposalId, delegator);
+      result.resolved++;
+      result.weight += (await receipt(governanceAddress, proposalId, delegator)).weight;
+    } catch (err) {
+      const why = `${err.shortMessage || ""} ${err.message}`;
+      if (!EXPECTED_SKIP.test(why)) {
+        result.failed++;
+        console.error(`[liquid] couldn't resolve ${delegator} on proposal ${proposalId}:`, err.shortMessage || err.message);
+      }
+    }
+  }
+  return result;
+}
+
+// Automatic sweeps share one queue per process, so the operator wallet
+// never sends two resolutions at once (nonce clashes) and overlapping
+// triggers for the same voter find the work already done.
+let sweepQueue = Promise.resolve();
+export function queueSweep(job) {
+  const run = sweepQueue.then(job, job);
+  sweepQueue = run.catch(() => {});
+  return run;
+}
+
 /** Read-only: walks the delegation chain from `account` to its final tip. */
 export async function delegateChainTip(governanceAddress, account) {
   const gov = contractFor(governanceAddress);

@@ -2,7 +2,9 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { getAllRegisteredDaos } from "./db.js";
-import { publicClient } from "./config.js";
+import { formatEther } from "viem";
+import { publicClient, walletClient } from "./config.js";
+import { resolveDelegationsBehind, activeProposalIds, queueSweep } from "./governance/liquid.js";
 import { runOnNetwork } from "./networks.js";
 import { readJson, writeJsonAtomic } from "./jsonFile.js";
 
@@ -122,7 +124,10 @@ async function checkDao(notify, dao, currentBlock, state) {
   const abi = loadAbi(abiName);
   if (!abi) return;
 
-  const watchableEvents = abi.filter((item) => item.type === "event" && INTERESTING_EVENT_NAMES.includes(item.name));
+  // Liquid DAOs: votes and delegations trigger delegated-vote sweeps (not
+  // chat posts). Needs the operator wallet, which pays for them.
+  const sweepEvents = dao.model === "liquid" && walletClient ? LIQUID_SWEEP_EVENTS : [];
+  const watchableEvents = abi.filter((item) => item.type === "event" && (INTERESTING_EVENT_NAMES.includes(item.name) || sweepEvents.includes(item.name)));
   if (watchableEvents.length === 0) return;
 
   // Block numbers only mean something on one chain, so the key includes
@@ -159,6 +164,10 @@ async function checkDao(notify, dao, currentBlock, state) {
       });
 
       for (const log of logs) {
+        if (sweepEvents.includes(log.eventName)) {
+          scheduleLiquidSweep(notify, dao, log.eventName, log.args ?? {});
+          continue;
+        }
         const message = formatEvent(log.eventName, log.args ?? {});
         try {
           await notify(dao.chatId, message);
@@ -175,6 +184,46 @@ async function checkDao(notify, dao, currentBlock, state) {
 
     chunkStart = chunkEnd + 1n;
   }
+}
+
+/*//////////////////////////////////////////////////////////////
+              LIQUID: RESOLVING DELEGATED VOTES
+//////////////////////////////////////////////////////////////*/
+
+const LIQUID_SWEEP_EVENTS = ["VoteCast", "DelegateChanged"];
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+
+/**
+ * In Liquid governance a delegate's vote carries only their own weight;
+ * each delegator's is added by a separate resolveDelegatedVote call while
+ * voting is open. Every vote (VoteCast) sweeps everyone behind that voter,
+ * and every new delegation (DelegateChanged) resolves the delegator - and
+ * anyone behind them - on each open proposal. Runs on the process's single
+ * sweep queue, paid by the operator wallet; posts only when votes were added.
+ */
+function scheduleLiquidSweep(notify, dao, eventName, args) {
+  queueSweep(() =>
+    runOnNetwork(dao.network, async () => {
+      const jobs =
+        eventName === "VoteCast"
+          ? [{ proposalId: args.proposalId, root: args.voter, includeRoot: false }]
+          : args.newDelegate && args.newDelegate !== ZERO_ADDRESS
+            ? (await activeProposalIds(dao.governanceAddress)).map((proposalId) => ({ proposalId, root: args.account, includeRoot: true }))
+            : [];
+      for (const job of jobs) {
+        const r = await resolveDelegationsBehind({ client: walletClient, governanceAddress: dao.governanceAddress, ...job });
+        if (r.resolved > 0) {
+          const who = eventName === "VoteCast" ? `behind \`${short(job.root)}\`` : `after \`${short(job.root)}\` delegated`;
+          const text = `🗳️ Added ${r.resolved} delegated vote${r.resolved === 1 ? "" : "s"} (${trimAmount(r.weight)} voting power) ${who} on proposal #${job.proposalId}.`;
+          await notify(dao.chatId, text).catch((err) => console.error(`Event listener: couldn't notify chat ${dao.chatId}:`, err.message));
+        }
+      }
+    })
+  ).catch((err) => console.error(`Event listener: delegated-vote sweep failed for ${dao.governanceAddress}:`, err.shortMessage || err.message));
+}
+
+function trimAmount(wei) {
+  return String(Number(Number(formatEther(wei)).toPrecision(6)));
 }
 
 /**

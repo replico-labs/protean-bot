@@ -44,7 +44,7 @@ import {
 } from "./contracts.js";
 import { getAdapter, SUPPORTED_MODELS } from "./governance/index.js";
 import { createDAO as createQuadraticDAO } from "./governance/quadratic.js";
-import { createDAO as createLiquidDAO } from "./governance/liquid.js";
+import { createDAO as createLiquidDAO, resolveDelegationsBehind as resolveLiquidDelegations, queueSweep as queueLiquidSweep } from "./governance/liquid.js";
 import { createDAO as createOptimisticDAO } from "./governance/optimistic.js";
 import { createDAO as createDelegateDAO } from "./governance/delegate.js";
 import { createDAO as createBoardDAO } from "./governance/board.js";
@@ -285,6 +285,7 @@ const MODEL_HELP_BLOCKS = {
     "/cancel `<id>` — withdraw your own proposal before execution",
     "/delegate `<address>` — too busy to vote on everything? Hand your voting power to someone you trust — you can still vote yourself any time",
     "/undelegate — take your voting power back from whoever you delegated to",
+    "/resolvedelegations `<id> [address]` — add the votes of everyone delegating to you (or an address) to a proposal; the bot also does this automatically when a delegate votes",
   ],
   optimistic: [
     "/propose `<target> <value> <data> <description>` — propose an action that passes automatically after its challenge window, unless someone disputes it",
@@ -2334,9 +2335,27 @@ bot.command("vote", async (ctx) => {
     await ctx.api.editMessageText(
       ctx.chat.id,
       statusMsg.message_id,
-      `✅ Voted *${choice}* on proposal #${id}.${weightNote}`,
+      `✅ Voted *${choice}* on proposal #${id}.${weightNote}${model === "liquid" ? "\n\nAdding the votes of anyone who delegates to you…" : ""}`,
       { parse_mode: "Markdown" }
     );
+
+    // Liquid: a delegate's vote carries only their own weight until each
+    // delegator is resolved. Start that now, in the background so this
+    // user's next command isn't held up, and report what it added.
+    if (model === "liquid") {
+      const network = getChatNetwork(ctx.chat.id);
+      queueLiquidSweep(() =>
+        runOnNetwork(network, () => resolveLiquidDelegations({ client: walletClient ?? client, governanceAddress: address, proposalId: id, root: account.address }))
+      )
+        .then((r) =>
+          ctx.reply(
+            r.resolved > 0
+              ? `🗳️ Added ${r.resolved} delegated vote${r.resolved === 1 ? "" : "s"} (${formatEther(r.weight)} voting power) to your ${choice} vote on #${id}.`
+              : `No delegated votes waiting behind you on #${id}${r.failed ? ` (${r.failed} couldn't be added - they'll be retried as votes come in)` : ""}.`
+          )
+        )
+        .catch((err) => console.error("[liquid] sweep after vote failed:", err.shortMessage || err.message));
+    }
   } catch (err) {
     console.error(err);
     await ctx.api.editMessageText(
@@ -2600,6 +2619,40 @@ bot.command("delegate", async (ctx) => {
   } catch (err) {
     console.error(err);
     await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `Couldn't delegate: ${err.shortMessage || err.message}`);
+  }
+});
+
+bot.command("resolvedelegations", async (ctx) => {
+  const address = await requireDAO(ctx);
+  if (!address) return;
+  const model = getChatModel(ctx.chat.id);
+  if (model !== "liquid") {
+    await ctx.reply(`This DAO uses ${model} governance, which has no delegation.`);
+    return;
+  }
+  const [idRaw, rootRaw] = (ctx.match?.trim() ?? "").split(/\s+/).filter(Boolean);
+  const id = Number(idRaw);
+  if (!Number.isInteger(id) || id < 1 || (rootRaw && !isAddress(rootRaw))) {
+    await ctx.reply("Usage: `/resolvedelegations <proposalId> [address]` — adds the votes of everyone delegating to that address (default: you) to the proposal.", { parse_mode: "Markdown" });
+    return;
+  }
+  if (!rootRaw && !isWalletStoreConfigured()) {
+    await ctx.reply("Give an address: `/resolvedelegations <proposalId> 0xDelegate`.", { parse_mode: "Markdown" });
+    return;
+  }
+  const root = rootRaw ?? (await getUserAddress(ctx.from.id));
+  const statusMsg = await ctx.reply("⏳ Adding delegated votes…");
+  try {
+    const signer = walletClient ?? walletClientFor(await getOrCreateUserAccount(ctx.from.id));
+    const r = await queueLiquidSweep(() => resolveLiquidDelegations({ client: signer, governanceAddress: address, proposalId: id, root }));
+    const text =
+      r.resolved > 0
+        ? `🗳️ Added ${r.resolved} delegated vote${r.resolved === 1 ? "" : "s"} (${formatEther(r.weight)} voting power) behind \`${short(root)}\` on #${id}.`
+        : `Nothing to add on #${id}: everyone delegating to \`${short(root)}\` has already voted or been counted, their chain has no voter yet, or voting isn't open.${r.failed ? ` ${r.failed} couldn't be added - see the logs.` : ""}`;
+    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, text, { parse_mode: "Markdown" });
+  } catch (err) {
+    console.error(err);
+    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `Couldn't add delegated votes: ${err.shortMessage || err.message}`);
   }
 });
 

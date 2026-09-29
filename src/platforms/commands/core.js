@@ -356,14 +356,16 @@ export const CORE_COMMANDS = {
       const reason = reasonParts.length ? reasonParts.join(" ") : undefined;
 
       const { client } = await userClient(ctx);
-      const { weight } = await getAdapter(getChatModel(ctx.chatId, ctx.platform)).vote(client, address, id, VOTE_CHOICES[choice], reason);
+      const model = getChatModel(ctx.chatId, ctx.platform);
+      const { weight } = await getAdapter(model).vote(client, address, id, VOTE_CHOICES[choice], reason);
       const weightNote =
         weight === undefined
           ? ""
           : weight === 0n
             ? "\n\n⚠️ This vote carried *zero weight* — your tokens likely weren't staked before this proposal's snapshot block."
             : `\nWeight: ${formatEther(weight)}`;
-      return reply(`✅ Voted *${choice}* on proposal #${id}.${weightNote}`);
+      const liquidNote = model === "liquid" ? `\n\nVotes delegated to you are added automatically within a minute (or run \`${ctx.cmd("resolvedelegations")} ${id}\`).` : "";
+      return reply(`✅ Voted *${choice}* on proposal #${id}.${weightNote}${liquidNote}`);
     },
   },
 

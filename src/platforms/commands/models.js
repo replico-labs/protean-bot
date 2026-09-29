@@ -1,4 +1,6 @@
-import { isAddress } from "viem";
+import { isAddress, formatEther } from "viem";
+import { walletClient } from "../../config.js";
+import { resolveDelegationsBehind, queueSweep } from "../../governance/liquid.js";
 import { settleSortitionRandomness } from "../../governance/sortition.js";
 import { isWalletStoreConfigured } from "../../walletStore.js";
 import { VOTE_CHOICES } from "../../display.js";
@@ -58,6 +60,26 @@ export const MODEL_COMMANDS = {
     notSupported: "This DAO uses {model} governance, which has no delegation.",
     done: () => "✅ Voting power returned to you directly.",
   }),
+  resolvedelegations: {
+    section: "Deciding",
+    models: ["liquid"],
+    usage: "<id> [address]",
+    description: "Add the votes of everyone delegating to an address (default: you) to a proposal",
+    options: [
+      { name: "id", description: "Proposal ID", required: true, type: "integer" },
+      { name: "address", description: "Whose delegators to resolve (default: you)", required: false },
+    ],
+    async run(ctx) {
+      const { address } = requireModel(ctx, "liquid", "This DAO uses {model} governance, which has no delegation.");
+      const id = parseId(ctx.args[0], `${ctx.cmd("resolvedelegations")} <id> [address]`);
+      const root = ctx.args[1] ?? (await callerAddress(ctx));
+      if (!isAddress(root)) throw new UserError("That doesn't look like a valid address.");
+      const signer = walletClient ?? (await userClient(ctx)).client;
+      const r = await queueSweep(() => resolveDelegationsBehind({ client: signer, governanceAddress: address, proposalId: id, root }));
+      if (r.resolved === 0) return reply(`Nothing to add on #${id}: everyone delegating to \`${short(root)}\` has already voted or been counted, their chain has no voter yet, or voting isn't open.${r.failed ? ` ${r.failed} couldn't be added - see the logs.` : ""}`);
+      return reply(`🗳️ Added ${r.resolved} delegated vote${r.resolved === 1 ? "" : "s"} (${formatEther(r.weight)} voting power) behind \`${short(root)}\` on #${id}.`);
+    },
+  },
 
   // --- Optimistic ---
   challenge: adapterWrite({
