@@ -276,15 +276,19 @@ export async function getCouncil(governanceAddress) {
 // from initialCouncil's length below, same reasoning as the Solidity
 // script: a separately-entered number could drift out of sync with the
 // actual list, so there's nothing to keep in sync by construction.
+// TEMPORARY FAST-TEST VALUES - revert each line to the value in its comment
+// before any real Delegate DAO is created. Only affects DAOs created after
+// this change (/createdao ... delegate); existing DAOs keep their config.
+// Block counts are for Monad (~0.4s); scaleBlockFields keeps ~5 min elsewhere.
 const DEFAULT_CONFIG_WITHOUT_COUNCIL_SIZE = {
-  termLength: 60n * 60n,
+  termLength: 15n * 60n, // TEMP: 15 minutes. Was 60n * 60n (1 hour).
   candidacyThreshold: 0n,
-  candidacyPeriod: 50_400,
-  electionVotingPeriod: 50_400,
+  candidacyPeriod: 750, // TEMP: ~5 min. Was 50_400 (~5.6h).
+  electionVotingPeriod: 750, // TEMP: ~5 min. Was 50_400 (~5.6h).
   councilApprovalThresholdBps: 6_000,
   votingDelay: 1,
-  votingPeriod: 50_400,
-  timelockDelay: 60n * 60n * 24n,
+  votingPeriod: 750, // TEMP: ~5 min council votes. Was 50_400 (~5.6h).
+  timelockDelay: 60n, // TEMP: 1 minute queue. Was 60n * 60n * 24n (24 hours).
   executionPeriod: 60n * 60n * 24n * 7n,
   recallQuorumBps: 1_000,
   recallApprovalThresholdBps: 6_000,
