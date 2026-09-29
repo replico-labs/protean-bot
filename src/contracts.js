@@ -4,7 +4,7 @@ import { fileURLToPath } from "url";
 import { createWalletClient, http, formatEther, parseEther, getAddress, isAddress } from "viem";
 import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer } from "./config.js";
 import { currentNetwork, scaleBlockFields } from "./networks.js";
-import { recordGasTopup, isWalletStoreConfigured } from "./walletStore.js";
+import { ensureCanAfford } from "./gasSponsor.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -223,103 +223,19 @@ function walletClientFor(account) {
   return createWalletClient({ account, chain: currentNetwork().chain, transport: http() });
 }
 
-// Per network (networks.js): 0.005/0.1/0.05 MON on Monad, far smaller on
-// Base and HyperEVM where the native token is worth much more.
-
 /**
- * Tops up `account` with MON from the operator wallet if its balance is
- * below a threshold. Derived wallets start with zero MON and can't pay
- * gas for their own first transaction without this - the operator
- * wallet effectively sponsors a small amount of gas per user.
- *
- * Tiered for this testnet: a user's very first top-up is larger
- * (0.1 MON) than every one after it (0.05 MON), on the assumption that
- * the first top-up needs to cover getting properly set up, while later
- * ones are just keeping an already-active user going. Falls back to
- * the first-time amount, every time, for a wallet whose top-up history
- * can't be tracked - Supabase not configured, or the address has no
- * record there at all (a legacy derived wallet, see wallet.js) - rather
- * than fail the whole transaction over a wallet-store lookup on what is
- * otherwise a real transaction the user is trying to complete.
- *
- * Silently does nothing if the account already has enough, or if no
- * operator wallet is configured (caller's own transaction will then just
- * fail with an insufficient-funds error, which is an honest failure mode).
- */
-/**
- * Tops up `account` with MON from the operator wallet if its balance is
- * below a threshold. Derived wallets start with zero MON and can't pay
- * gas for their own first transaction without this - the operator
- * wallet effectively sponsors a small amount of gas per user.
- *
- * Tiered for this testnet: a user's very first top-up is larger
- * (0.1 MON) than every one after it (0.05 MON) by default. Some
- * actions cost meaningfully more gas than a typical repeat action -
- * observed directly in testing: a propose() call carrying an embedded
- * action needed 0.0703 MON, more than the flat 0.05 MON repeat amount
- * could cover, causing repeated genuine failures (not a timing race -
- * every retry got topped up with the same insufficient amount).
- * `forceFullTopup` lets a caller that knows its action is heavier than
- * typical (propose() being the confirmed case) request the full
- * first-time amount regardless of this account's top-up history,
- * without changing the default tiering for lighter, more common
- * actions like tips or plain transfers.
- *
- * Falls back to the first-time amount, every time, for a wallet whose
- * top-up history can't be tracked - Supabase not configured, or the
- * address has no record there at all (a legacy derived wallet, see
- * wallet.js) - rather than fail the whole transaction over a
- * wallet-store lookup on what is otherwise a real transaction the user
- * is trying to complete.
- *
- * Silently does nothing if the account already has enough, or if no
- * operator wallet is configured (caller's own transaction will then just
- * fail with an insufficient-funds error, which is an honest failure mode).
+ * Makes sure `account` holds at least the network's minimum gas balance
+ * (or its full first-time allowance with `forceFullTopup`), topped up from
+ * the operator wallet. See gasSponsor.js for the per-transaction funding
+ * that actually guarantees a transaction can be paid for.
  */
 export async function ensureGasFunded(account, forceFullTopup = false) {
-  if (!walletClient || !operatorAccount) return;
-
-  const balance = await publicClient.getBalance({ address: account.address });
+  // Kept for existing callers as a cheap "has some gas" pre-check. The real
+  // guarantee is per transaction: writeWithGasBuffer and sendNativeSponsored
+  // fund each one for its own up-front cost (gasSponsor.js), which is what
+  // stops a wallet being judged funded while every transaction is rejected.
   const { gas } = currentNetwork();
-  if (balance >= gas.min) return;
-
-  let topupAmount = gas.first;
-  if (isWalletStoreConfigured()) {
-    try {
-      const topupNumber = await recordGasTopup(account.address);
-      if (!forceFullTopup && topupNumber !== null && topupNumber > 1) {
-        topupAmount = gas.repeat;
-      }
-    } catch (err) {
-      // Wallet-store lookup failing shouldn't block a user's real
-      // transaction - fall back to the first-time amount and continue.
-      console.error("[ensureGasFunded] Couldn't record top-up history, using first-time amount:", err.message);
-    }
-  }
-
-  const hash = await walletClient.sendTransaction({
-    to: account.address,
-    value: topupAmount,
-  });
-  await publicClient.waitForTransactionReceipt({ hash });
-
-  // A confirmed receipt means the top-up is mined, but on a
-  // high-throughput chain that doesn't always mean every subsequent
-  // RPC call sees the updated balance immediately - observed directly
-  // in testing: a first-ever transaction submitted right after a
-  // top-up's receipt confirmed still failed with "insufficient
-  // balance" at the node, even though the top-up amount was nearly 7x
-  // what the transaction actually needed. A short, bounded poll here
-  // is more reliable than a fixed delay: it returns as soon as the
-  // balance is genuinely visible (no wasted time in the common case
-  // where it already is), and adapts to however long propagation
-  // actually takes rather than guessing a duration that might be too
-  // short under different network conditions.
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const updatedBalance = await publicClient.getBalance({ address: account.address });
-    if (updatedBalance >= gas.min) return;
-    await new Promise((resolve) => setTimeout(resolve, 300));
-  }
+  await ensureCanAfford(account.address, forceFullTopup ? gas.first : gas.min);
 }
 
 /**

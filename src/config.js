@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { privateKeyToAccount } from "viem/accounts";
 import { currentNetwork, networkEnv, attachOperator, operatorClientFor } from "./networks.js";
+import { ensureCanAfford, feesFor, estimateWithFunding } from "./gasSponsor.js";
 
 /**
  * Everything below that touches a chain follows whichever network the
@@ -149,7 +150,7 @@ export function switchboardOracleAdapter() {
  * runaway inflation this bot has now observed directly in production.
  */
 export async function writeWithGasBuffer(client, contractParams) {
-  const estimate = await publicClient.estimateContractGas({ ...contractParams, account: client.account });
+  const estimate = await estimateWithFunding(client, contractParams);
   let gas = (estimate * 150n) / 100n;
 
   // HyperEVM only fits transactions up to 2M gas in its fast small blocks;
@@ -166,5 +167,10 @@ export async function writeWithGasBuffer(client, contractParams) {
     }
     gas = smallBlockGasLimit;
   }
-  return client.writeContract({ ...contractParams, gas });
+
+  // Monad takes gas x maxFeePerGas up front, so fund the wallet for exactly
+  // that (read fresh, never cached) and send with the same fees.
+  const { fees, gasCost } = await feesFor(gas);
+  await ensureCanAfford(client.account.address, gasCost, contractParams.value ?? 0n);
+  return client.writeContract({ ...contractParams, gas, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas });
 }

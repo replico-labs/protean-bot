@@ -4,6 +4,7 @@ import { fileURLToPath } from "url";
 import { getAddress, parseEther } from "viem";
 import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer } from "../config.js";
 import { currentNetwork, networkEnvName } from "../networks.js";
+import { ensureCanAfford, feesFor } from "../gasSponsor.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -93,12 +94,17 @@ export async function execute(client, governanceAddress, proposalId, valueWhole 
   // guidance to set gas explicitly when it's fairly constant, since
   // executeTransaction's call depth (governance clone -> implementation
   // -> treasury clone -> implementation -> recipient) doesn't vary.
+  const value = parseEther(String(valueWhole));
+  const { fees, gasCost } = await feesFor(400_000n);
+  await ensureCanAfford(client.account.address, gasCost, value);
   const hash = await client.writeContract({
     ...gov,
     functionName: "executeTransaction",
     args: [BigInt(proposalId)],
-    value: parseEther(String(valueWhole)),
+    value,
     gas: 400_000n,
+    maxFeePerGas: fees.maxFeePerGas,
+    maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
   });
   await publicClient.waitForTransactionReceipt({ hash });
   return { hash };

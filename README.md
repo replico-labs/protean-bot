@@ -19,7 +19,10 @@ Each private key is **envelope-encrypted with AWS KMS** (AES-256-GCM, with a per
 
 This is still a **custodial** model — the bot's backend can decrypt any user's key. It trades some decentralization for zero-friction onboarding.
 
-New wallets start empty, so the operator wallet sends a small gas top-up before a user's first transaction (and again when they run low). The amount is per network: 0.1 MON on Monad, 0.0002 ETH on Base, 0.01 HYPE on HyperEVM by default.
+The operator wallet pays users' gas, never the amounts they send.
+- **On creation:** a new wallet gets its starting gas as soon as it's created, on the chat's network. That's 0.1 MON on Monad, 0.0002 ETH on Base and 0.01 HYPE on HyperEVM by default.
+- **Before each transaction:** the bot reads the wallet's balance fresh from the chain. If the balance can't cover that transaction's up-front cost, the operator tops up the shortfall (at least the network's repeat amount) before signing. Monad charges gas limit × max fee up front, so this is checked against the fees the transaction is actually sent with.
+- **Other networks:** a wallet is funded on first use there.
 
 **Legacy wallets.** Earlier versions derived every Telegram wallet from a single `MASTER_WALLET_SEED`. If a user still has funds under that old address, the bot refuses to silently create a second wallet and asks them to run `/migratewallet` first, which sweeps the native balance across (ERC20 tokens must be moved manually — the command says so).
 
@@ -269,7 +272,8 @@ src/
 ├── platforms/            Discord + Slack front-ends over a shared command core
 ├── networks.js           network registry, per-call network context, block scaling, per-network gas
 ├── config.js             viem clients and settings that follow the current network, operator wallet
-├── contracts.js          token-weighted reads/writes, gas top-ups, wrapper/distributor deploys
+├── contracts.js          token-weighted reads/writes, wrapper/distributor deploys
+├── gasSponsor.js         gas sponsorship: funding at wallet creation and per transaction
 ├── governance/           one adapter per model + shared helpers (common.js, index.js registry)
 ├── actionLibrary.js      verified native actions for /proposeaction
 ├── proposalBuilder.js    action encoding + GuardWrapper routing, shared by every platform

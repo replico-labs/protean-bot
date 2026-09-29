@@ -1,6 +1,7 @@
 import { findWalletRecord, createWalletRecord, getWalletAccount, isWalletStoreConfigured } from "./walletStore.js";
 import { deriveUserWallet, isWalletDerivationConfigured } from "./wallet.js";
 import { publicClient } from "./config.js";
+import { fundNewWallet } from "./gasSponsor.js";
 
 /**
  * Resolves a user's signing account - the KMS-backed wallet if one
@@ -42,7 +43,11 @@ export async function getOrCreateUserAccount(platformUserId, platform = "telegra
   }
 
   await createWalletRecord(platform, platformUserId);
-  return getWalletAccount(platform, platformUserId);
+  const account = await getWalletAccount(platform, platformUserId);
+  // Send the new wallet its starting gas now, so its first transaction
+  // never waits on (or fails for want of) a top-up.
+  await fundNewWallet(account.address);
+  return account;
 }
 
 /**

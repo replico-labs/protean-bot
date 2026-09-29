@@ -250,7 +250,7 @@ export const CORE_COMMANDS = {
       if (getChatNftWrapper(ctx.chatId, ctx.platform)) section("NFT wrapper", listActionsForModel("nftWrapper"));
       if (getChatGuardWrapper(ctx.chatId, ctx.platform)) section("Guard wrapper", listActionsForModel("guardWrapper"));
       lines.push(...integrationListLines(getChatNetwork(ctx.chatId, ctx.platform)).slice(1), "");
-      lines.push(`Use \`${ctx.cmd("proposeaction")} <actionId> <args...> <description>\` to propose one, and \`${ctx.cmd("actioninfo")} <actionId>\` for an action's options.`);
+      lines.push(`Use \`${ctx.cmd("proposeaction")} <actionId> <args...> <description>\` to propose one, and \`${ctx.cmd("actioninfo")} <actionId>\` to see what any of them does and what its arguments mean.`);
       return reply(lines.join("\n"), { ephemeral: true });
     },
   },
@@ -300,11 +300,15 @@ export const CORE_COMMANDS = {
   },
 
   actioninfo: {
-    description: "Usage, options and address sources for an external action",
+    description: "What an action does, its arguments and their units",
     ephemeralByDefault: true,
     options: [{ name: "action", description: "Action ID from listactions", required: true }],
     async run(ctx) {
-      const text = actionInfoText(ctx.args[0], getChatNetwork(ctx.chatId, ctx.platform), ctx.cmd("proposeaction"));
+      const text = actionInfoText(ctx.args[0], getChatNetwork(ctx.chatId, ctx.platform), ctx.cmd("proposeaction"), {
+        model: getChatModel(ctx.chatId, ctx.platform),
+        nftWrapperAddress: getChatNftWrapper(ctx.chatId, ctx.platform),
+        guardWrapperAddress: getChatGuardWrapper(ctx.chatId, ctx.platform),
+      });
       if (!text) throw new UserError(`Usage: \`${ctx.cmd("actioninfo")} <actionId>\` — see \`${ctx.cmd("listactions")}\`.`);
       return reply(text, { ephemeral: true });
     },

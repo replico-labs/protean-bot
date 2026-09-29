@@ -249,7 +249,7 @@ export const ACTION_LIBRARY = [
   //////////////////////////////////////////////////////////////*/
   {
     id: "treasury-transfer-eth",
-    label: "Send native MON from Treasury",
+    label: "Send native currency (MON/ETH/HYPE) from Treasury",
     appliesTo: "treasury",
     targetKind: "treasury",
     functionName: "transferETH",
@@ -379,7 +379,7 @@ export const ACTION_LIBRARY = [
   },
   {
     id: "nftwrapper-sweep-native",
-    label: "Sweep stuck native MON from the NFT wrapper",
+    label: "Sweep native currency (e.g. sale proceeds) from the NFT wrapper to Treasury",
     appliesTo: "nftWrapper",
     targetKind: "fixedAddress",
     functionName: "sweepNative",
@@ -388,7 +388,7 @@ export const ACTION_LIBRARY = [
   },
   {
     id: "nftwrapper-sweep-erc20",
-    label: "Sweep a stuck ERC20 from the NFT wrapper",
+    label: "Sweep an ERC20 from the NFT wrapper to Treasury",
     appliesTo: "nftWrapper",
     targetKind: "fixedAddress",
     functionName: "sweepERC20",

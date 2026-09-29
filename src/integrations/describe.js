@@ -1,5 +1,8 @@
 import { integrationActionsFor, getIntegrationAction, integrationUsage } from "./index.js";
 import { getNetwork } from "../networks.js";
+import { getAction } from "../actionLibrary.js";
+import { actionArgSpec } from "../proposalBuilder.js";
+import { ACTION_HELP, fieldHelp, actionTargetText, actionAppliesText } from "../actionLibraryHelp.js";
 
 /**
  * Chat text for external-protocol actions, shared by Telegram and the
@@ -24,8 +27,39 @@ export function integrationListLines(networkId) {
   return lines;
 }
 
-/** Full help for one external action: usage, options, where its addresses came from. Null if unknown. */
-export function actionInfoText(actionId, networkId, proposeCommand) {
+/**
+ * Full help for one native library action: what it does, what it calls,
+ * who it applies to, and every argument with its units. `chat` (optional)
+ * adds the chat's own model and wrapper addresses.
+ */
+function libraryActionInfoText(action, proposeCommand, chat = {}) {
+  const { names } = actionArgSpec(action);
+  const isTuple = action.params.length === 1 && action.params[0].type === "tuple";
+  const model = Array.isArray(action.appliesTo) && action.appliesTo.length === 1 ? action.appliesTo[0] : chat.model;
+  const lines = [
+    `*${action.label}*`,
+    "",
+    `\`${proposeCommand} ${action.id} ${names.join(" ")} <description>\``,
+    "",
+    ACTION_HELP[action.id] ?? "",
+    "",
+    `Calls \`${action.functionName}\` on ${actionTargetText(action)}. Applies to ${actionAppliesText(action)}.`,
+    "",
+    isTuple ? "*Fields, in order:*" : "*Arguments:*",
+  ];
+  for (const name of names) lines.push(`• \`${name}\` — ${fieldHelp(model, name) ?? "see the contract"}`);
+  const wrapper = action.appliesTo === "nftWrapper" ? chat.nftWrapperAddress : action.appliesTo === "guardWrapper" ? chat.guardWrapperAddress : null;
+  if (wrapper) lines.push("", `This chat's ${action.appliesTo === "nftWrapper" ? "NFT" : "guard"} wrapper: \`${wrapper}\``);
+  if (action.appliesTo === "treasury" || action.appliesTo === "token") {
+    lines.push("", "After a GuardWrapper handover, the bot routes this through the wrapper for its signers to confirm.");
+  }
+  return lines.filter((l, i, all) => !(l === "" && all[i - 1] === "")).join("\n");
+}
+
+/** Full help for any action - native library or external protocol. Null if unknown. */
+export function actionInfoText(actionId, networkId, proposeCommand, chat) {
+  const native = getAction(actionId);
+  if (native) return libraryActionInfoText(native, proposeCommand, chat);
   const action = getIntegrationAction(actionId);
   if (!action) return null;
   const deployment = action.protocol.deployments[networkId];

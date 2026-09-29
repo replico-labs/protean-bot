@@ -1,4 +1,4 @@
-import { isAddress, getAddress, parseEther } from "viem";
+import { isAddress, getAddress, parseEther, formatEther } from "viem";
 import { walletClient, publicClient } from "../../config.js";
 import { explorerAddressLine, isNativeTokenWord, currentNetwork } from "../../networks.js";
 import { getChatModel, getChatCreator, registerToken, getRegisteredTokens } from "../../db.js";
@@ -8,6 +8,7 @@ import { hasToken, getDaoInfo } from "../../governance/common.js";
 import { isWalletStoreConfigured } from "../../walletStore.js";
 import { short } from "../../format.js";
 import { UserError, reply, privateReply, requireDao, requireCreator, userClient, resolveToken, callerAddress, NO_WALLETS } from "../helpers.js";
+import { sendNativeSponsored } from "../../gasSponsor.js";
 
 /** Treasury contributions and token movement - ported from index.js. */
 
@@ -99,7 +100,7 @@ export const TOKEN_COMMANDS = {
       const { client } = await userClient(ctx);
       let hash;
       if (isNativeMon) {
-        hash = await client.sendTransaction({ to: getAddress(recipientRaw), value: parseEther(amountRaw) });
+        hash = await sendNativeSponsored(client, getAddress(recipientRaw), parseEther(amountRaw));
         await publicClient.waitForTransactionReceipt({ hash });
       } else {
         const tokenAddress = await resolveToken(ctx, address, tokenRef);
@@ -119,8 +120,10 @@ export const TOKEN_COMMANDS = {
     ],
     async run(ctx) {
       const address = requireDao(ctx);
-      const model = requireTokenModel(ctx, "there's no balance to check");
       const [tokenRef, holderRaw] = ctx.args;
+      // "MON" / "ETH" / "HYPE" / "native" asks for the native balance, which every DAO model has.
+      const native = tokenRef !== undefined && isNativeTokenWord(tokenRef);
+      const model = native ? getChatModel(ctx.chatId, ctx.platform) : requireTokenModel(ctx, "there's no balance to check");
       let holder = holderRaw;
       if (holder?.toLowerCase() === "treasury") {
         holder = (await getDaoInfo(model, address)).treasuryAddress;
@@ -131,8 +134,9 @@ export const TOKEN_COMMANDS = {
         if (!isWalletStoreConfigured()) throw new UserError(`No address given, and wallets aren't set up. Use \`${ctx.cmd("tokenbalance")} [token] 0xSomeAddress|treasury\`.`);
         holder = await callerAddress(ctx);
       }
-      const tokenAddress = await resolveToken(ctx, address, tokenRef);
-      const balance = await getTokenBalance(tokenAddress, holder);
+      const balance = native
+        ? `${formatEther(await publicClient.getBalance({ address: holder }))} ${currentNetwork().nativeSymbol}`
+        : await getTokenBalance(await resolveToken(ctx, address, tokenRef), holder);
       return reply(`*${short(holder)}*\nBalance: ${balance}`);
     },
   },

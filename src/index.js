@@ -79,6 +79,7 @@ import { back as opportunityBack } from "./opportunityMarket/encryptedBet.js";
 import { formatMarketAnalytics } from "./opportunityMarket/analyticsText.js";
 import { getBalance as opportunityGetBalance, getBet as opportunityGetBet, getAllBets as opportunityGetAllBets, getMarketAnalytics as opportunityGetAnalytics } from "./opportunityMarket/decrypt.js";
 import { revealAndCompleteWinningTotal, revealAndCompleteWithdrawal } from "./opportunityMarket/publicReveal.js";
+import { sendNativeSponsored } from "./gasSponsor.js";
 
 // Checked here rather than in config.js, so the keepers and the Discord
 // and Slack entrypoints (which share config.js) don't need a Telegram token.
@@ -411,7 +412,7 @@ bot.command("help", async (ctx) => {
     lines.push(
       "/listactions — ready-made actions this DAO can propose, including swaps, lending, staking and more on this network's protocols",
       "/proposeaction `<actionId> <args...> <description>` — propose one of them; the bot encodes every step",
-      "/actioninfo `<actionId>` — an action's arguments, options and where its contract addresses were checked"
+      "/actioninfo `<actionId>` — what any action does, its arguments and their units (and, for protocol actions, where addresses were checked)"
     );
   } else {
     lines.push("", "_This group isn't linked to a DAO yet - run /register or /createdao to see DAO commands here._");
@@ -1514,7 +1515,7 @@ bot.command("send", async (ctx) => {
 
     let hash;
     if (isNativeMon) {
-      hash = await client.sendTransaction({ to: getAddress(recipientRaw), value: parseEther(amountRaw) });
+      hash = await sendNativeSponsored(client, getAddress(recipientRaw), parseEther(amountRaw));
       await publicClient.waitForTransactionReceipt({ hash });
     } else {
       const tokenAddress = await resolveToken(ctx, address, tokenRef);
@@ -1542,13 +1543,14 @@ bot.command("tokenbalance", async (ctx) => {
   if (!address) return;
 
   const model = getChatModel(ctx.chat.id);
-  if (!hasToken(model)) {
-    await ctx.reply(`This DAO uses ${model} governance, which has no token - there's no balance to check.`);
-    return;
-  }
-
   const parts = (ctx.match?.trim() ?? "").split(/\s+/).filter(Boolean);
   const [tokenRef, holderRaw] = parts;
+  // "MON" / "ETH" / "HYPE" / "native" asks for the native balance, which every DAO model has.
+  const native = tokenRef !== undefined && isNativeTokenWord(tokenRef);
+  if (!native && !hasToken(model)) {
+    await ctx.reply(`This DAO uses ${model} governance, which has no token. Try \`/tokenbalance ${currentNetwork().nativeSymbol}\` for your ${currentNetwork().nativeSymbol} balance.`, { parse_mode: "Markdown" });
+    return;
+  }
 
   let holder = holderRaw;
   if (holder?.toLowerCase() === "treasury") {
@@ -1570,8 +1572,9 @@ bot.command("tokenbalance", async (ctx) => {
   }
 
   try {
-    const tokenAddress = await resolveToken(ctx, address, tokenRef);
-    const balance = await getTokenBalance(tokenAddress, holder);
+    const balance = native
+      ? `${formatEther(await publicClient.getBalance({ address: holder }))} ${currentNetwork().nativeSymbol}`
+      : await getTokenBalance(await resolveToken(ctx, address, tokenRef), holder);
     const hint = holderRaw ? "" : "\n\n_Tip: `/tokenbalance [token] <address>` checks anyone else's, or `treasury` for the DAO's own holdings._";
     await ctx.reply(`*${short(holder)}*\nBalance: ${balance}${hint}`, { parse_mode: "Markdown" });
   } catch (err) {
@@ -1924,7 +1927,7 @@ bot.command("listactions", async (ctx) => {
   }
   lines.push(...integrationListLines(getChatNetwork(ctx.chat.id)));
 
-  lines.push("", "Use `/proposeaction <actionId> <arg1> <arg2> ... <description>` to propose one, and `/actioninfo <actionId>` for an action's options.");
+  lines.push("", "Use `/proposeaction <actionId> <arg1> <arg2> ... <description>` to propose one, and `/actioninfo <actionId>` to see what any of them does and what its arguments mean.");
   await ctx.reply(lines.join("\n"), { parse_mode: "Markdown" });
 });
 
@@ -2051,7 +2054,11 @@ async function proposeIntegrationTelegram(ctx, address, actionId, words) {
 
 bot.command("actioninfo", async (ctx) => {
   const actionId = ctx.match?.trim();
-  const text = actionInfoText(actionId, getChatNetwork(ctx.chat.id), "/proposeaction");
+  const text = actionInfoText(actionId, getChatNetwork(ctx.chat.id), "/proposeaction", {
+    model: getChatModel(ctx.chat.id),
+    nftWrapperAddress: getChatNftWrapper(ctx.chat.id),
+    guardWrapperAddress: getChatGuardWrapper(ctx.chat.id),
+  });
   await ctx.reply(text ?? "Usage: `/actioninfo <actionId>` — run /listactions to see them.", { parse_mode: "Markdown" });
 });
 
