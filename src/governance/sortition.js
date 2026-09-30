@@ -5,6 +5,7 @@ import { getAddress, parseEther } from "viem";
 import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer } from "../config.js";
 import { scaleBlockFields, currentNetwork, networkEnvName } from "../networks.js";
 import { CrossbarClient } from "@switchboard-xyz/common";
+import { time } from "console";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -262,12 +263,14 @@ export async function getEligiblePool(governanceAddress) {
 // deliberately. councilSize derived from initialCouncil's length, same
 // reasoning as delegate.js's createDAO.
 const DEFAULT_CONFIG_WITHOUT_COUNCIL_SIZE = {
-  termLength: 60n * 60n * 24n * 30n,
+  // termLength: 60n * 60n * 24n * 30n,
+  termLength: 60n * 60n * 24n * 2n,
   eligibilityThreshold: 0n,
   councilApprovalThresholdBps: 6_000,
   votingDelay: 1,
   votingPeriod: 50_400,
-  timelockDelay: 60n * 60n * 24n,
+  // timelockDelay: 60n * 60n * 24n,
+  timelockDelay: 60n * 60n,
   executionPeriod: 60n * 60n * 24n * 7n,
 };
 

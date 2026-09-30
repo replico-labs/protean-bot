@@ -281,14 +281,19 @@ export async function getCouncil(governanceAddress) {
 // this change (/createdao ... delegate); existing DAOs keep their config.
 // Block counts are for Monad (~0.4s); scaleBlockFields keeps ~5 min elsewhere.
 const DEFAULT_CONFIG_WITHOUT_COUNCIL_SIZE = {
-  termLength: 15n * 60n, // TEMP: 15 minutes. Was 60n * 60n (1 hour).
+  // termLength: 15n * 60n, // TEMP: 15 minutes. Was 60n * 60n (1 hour).
+  termLength: 60n * 60n * 24n * 2n,
   candidacyThreshold: 0n,
-  candidacyPeriod: 750, // TEMP: ~5 min. Was 50_400 (~5.6h).
-  electionVotingPeriod: 750, // TEMP: ~5 min. Was 50_400 (~5.6h).
+  // candidacyPeriod: 750, // TEMP: ~5 min. Was 50_400 (~5.6h).
+  candidacyPeriod: 50_400,
+  // electionVotingPeriod: 750, // TEMP: ~5 min. Was 50_400 (~5.6h).
+  electionVotingPeriod: 50_400,
   councilApprovalThresholdBps: 6_000,
   votingDelay: 1,
-  votingPeriod: 750, // TEMP: ~5 min council votes. Was 50_400 (~5.6h).
-  timelockDelay: 60n, // TEMP: 1 minute queue. Was 60n * 60n * 24n (24 hours).
+  // votingPeriod: 750, // TEMP: ~5 min council votes. Was 50_400 (~5.6h).
+  votingPeriod: 50_400,
+  // timelockDelay: 60n, // TEMP: 1 minute queue. Was 60n * 60n * 24n (24 hours).
+  timelockDelay: 60n * 60n,
   executionPeriod: 60n * 60n * 24n * 7n,
   recallQuorumBps: 1_000,
   recallApprovalThresholdBps: 6_000,
