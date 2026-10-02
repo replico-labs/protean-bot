@@ -111,7 +111,7 @@ export const ACTION_HELP = {
   "board-add-signer": "Adds a signer to the Board. Required approvals stay the same unless you also change them.",
   "board-remove-signer": "Removes a signer. It fails if that would leave fewer signers than required approvals - lower those first.",
   "board-set-required-approvals": "Sets how many Board signers must confirm a proposal.",
-  "sortition-set-randomness-source": "Sets the contract Sortition draws council randomness from (the Switchboard adapter, or any source with the same interface).",
+  "sortition-set-randomness-source": "Sets the contract Sortition draws council randomness from: this network's Pyth Entropy adapter, or any source with the same interface. Any round still waiting on the old source is abandoned, so a new draw can start (DAOs created after the Pyth update).",
   "treasury-transfer-eth": "Sends the network's native currency (MON, ETH or HYPE) from the Treasury.",
   "treasury-transfer-erc20": "Sends an ERC20 token from the Treasury. The amount is in whole tokens and assumes 18 decimals - for a token with fewer, like USDC, use treasury-execute with its own transfer calldata.",
   "treasury-execute": "Makes the Treasury call any contract with any calldata - the escape hatch for anything not in this list. The call runs as the Treasury, so check the calldata carefully.",

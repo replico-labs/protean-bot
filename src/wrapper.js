@@ -19,7 +19,7 @@ function wrapperContract(address) {
 
 /**
  * Deploys a fresh GuardWrapper for a DAO - one per DAO, matching the
- * same on-demand pattern as deployNftWrapper and deployChainlinkOracle.
+ * same on-demand pattern as deployNftWrapper.
  * governanceAddress is baked in at deployment: only that specific
  * Governance contract will ever be able to call proposeInstruction on
  * the resulting wrapper.

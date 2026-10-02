@@ -9,7 +9,7 @@ Contracts live in the companion repo, [`Spaces`](https://github.com/replico-labs
 - **Contracts:** 539/539 Foundry tests pass (see Spaces).
 - **Live on Monad testnet:** the full create → propose → vote → queue → execute loop has run through Telegram for token-weighted and Board DAOs, with real receipts.
 - **Tested end to end on local chains** (anvil, with the real contracts deployed from source): every model's full lifecycle through the Discord and Slack handlers — the same command code Telegram uses for the shared paths — about 230 checks, including a GuardWrapper handover with a treasury payout confirmed by signers. The network layer has its own two-chain test: one bot process serving a "Monad" chain and a "Base" chain at once.
-- **Not yet run live:** the other eight models on Monad testnet, anything on Base or HyperEVM (no factories deployed there yet), real Discord and Slack workspaces, the FHE relayer round-trip, and Switchboard's Crossbar round-trip. See [What's not verified yet](#whats-not-verified-yet).
+- **Not yet run live:** the other eight models on Monad testnet, anything on Base or HyperEVM (no factories deployed there yet), real Discord and Slack workspaces, the FHE relayer round-trip, and Pyth Entropy / Hermes on a live chain. See [What's not verified yet](#whats-not-verified-yet).
 
 ## How wallets work
 
@@ -96,8 +96,8 @@ Opportunity Markets are separate and always on Ethereum Sepolia; Zama's FHE copr
 | Optimistic | `/challenge <id>` |
 | Conviction | `/support <id>`, `/withdrawsupport`, `/mysupport` |
 | Delegate | `/startelection`, `/declarecandidacy`, `/voteinelection`, `/finalizeelection`, `/initiaterecall`, `/voterecall`, `/finalizerecall`, `/council` |
-| Sortition | `/registereligible`, `/withdraweligibility`, `/startsortition`, `/settlesortition`, `/finalizesortition`, `/council` |
-| Sowellian | `/proposecriteria`, `/deploychainlinkoracle`, `/castapprovalvote`, `/finalizeapproval`, `/takeposition`, `/resolveviaoracle`, `/proposeresolution`, `/challengeresolution`, `/finalizeunchallenged`, `/castadjudicationvote`, `/finalizeadjudication`, `/claimposition` |
+| Sortition | `/registereligible`, `/withdraweligibility`, `/startsortition`, `/finalizesortition`, `/council` |
+| Sowellian | `/proposecriteria`, `/castapprovalvote`, `/finalizeapproval`, `/takeposition`, `/resolveviaoracle`, `/proposeresolution`, `/challengeresolution`, `/finalizeunchallenged`, `/castadjudicationvote`, `/finalizeadjudication`, `/claimposition` |
 | Decision Markets | `/proposemarket`, `/split`, `/trade`, `/merge`, `/finalizeproposal`, `/redeem`, `/unwrap`, `/reclaimliquidity` |
 
 **Liquid delegation.** A delegate's vote counts only their own tokens. Each delegator's weight is added by a separate on-chain call, `resolveDelegatedVote`, which anyone can make while voting is open. The bot makes these calls for you:
@@ -116,19 +116,19 @@ Bonds and seeds (Optimistic challenges, Sowellian bonds and positions, Decision 
 ### Sowellian and Decision Markets through `/proposeaction`
 ```
 /proposeaction treasury-transfer-eth 0xRecipient 1 measure=7d Fund the grant                      (Sowellian, human track)
-/proposeaction treasury-transfer-eth 0xRecipient 1 track=oracle oracle=switchboard feed=0x… goal=100 when=min measure=30d Grow TVL
+/proposeaction treasury-transfer-eth 0xRecipient 1 track=oracle feed=0x<ETH/USD feed ID> goal=3000 when=min measure=30d Grow TVL
 /proposeaction treasury-transfer-eth 0xRecipient 1 seed=1000 quote=5 Fund the campaign            (Decision Markets)
 ```
-- **Sowellian:** `track=human|oracle` (default human), `oracle=<adapter>|switchboard`, `feed=<32-byte feed ID>`, `goal=<value>` (required on the oracle track), `when=min|max` (default min), `measure=<duration>` (default 7d). `/actioninfo` lists them in a Sowellian chat.
+- **Sowellian:** `track=human|oracle` (default human); on the oracle track `feed=<Pyth price feed ID>` and `goal=<price>` (e.g. 3000, sent as 18 decimals) are required and `oracle=` defaults to `pyth`, this network's `PYTH_PRICE_ADAPTER`; `when=min|max` (default min), `measure=<duration>` (default 7d). `/actioninfo` lists them in a Sowellian chat.
 - **Decision Markets:** `seed=<DAO tokens>` and `quote=<native>`, both required.
 - `/proposecriteria` and `/proposemarket` remain for raw calls the library doesn't cover.
 
 ### Sowellian oracle proposals (raw calls)
 ```
-/proposecriteria <target> <value> <data> oracle <adapter|switchboard> <feedId|-> <targetValue> min|max <measurementPeriodSeconds> <description>
+/proposecriteria <target> <value> <data> oracle <pyth|adapter> <feedId> <targetValue> min|max <measurementPeriodSeconds> <description>
 ```
-- **Switchboard:** type the literal word `switchboard` (uses the network's `SWITCHBOARD_ORACLE_ADAPTER`) and pass the real 32-byte Switchboard `feedId`. One adapter serves every feed.
-- **Chainlink:** run `/deploychainlinkoracle <chainlinkFeedAddress>` first, then pass the returned adapter address and `-` as the feed ID. Chainlink needs one adapter per feed, because each Chainlink feed is its own contract.
+- **Pyth:** type `pyth` (the network's `PYTH_PRICE_ADAPTER`) and the Pyth price feed ID (0x + 64 hex, from Pyth's price feed list). One adapter serves every feed. The target value is a price, e.g. `3000`, sent as 18 decimals.
+- **Resolving:** Pyth is pull-based. `/resolveviaoracle` fetches the feed's latest signed update from Pyth's Hermes service (`PYTH_HERMES_URL`, default `https://hermes.pyth.network`), posts it to Pyth paying its small fee from the caller's wallet, then resolves, so the price is fresh for `maxOracleStaleness`.
 - **Human track:** `human - -` in the oracle and feed slots.
 
 ### Opportunity Markets (Ethereum Sepolia, FHE-encrypted)
@@ -196,7 +196,7 @@ npm run discord   # DISCORD_BOT_TOKEN, DISCORD_APPLICATION_ID, optional DISCORD_
 npm run slack     # SLACK_APP_TOKEN + either SLACK_BOT_TOKEN (one workspace) or the "Add to Slack" settings below
 ```
 
-- **Discord** registers 100 native slash commands on startup (Discord's limit - merge commands before adding any). `createdao`, `createboarddao`, `register`, `unregister`, `createmarket`, `registermarket` and `unregistermarket` are for members with *Manage Server* only. Long replies are split across messages.
+- **Discord** registers 98 native slash commands on startup (Discord allows 100). `createdao`, `createboarddao`, `register`, `unregister`, `createmarket`, `registermarket` and `unregistermarket` are for members with *Manage Server* only. Long replies are split across messages.
 - **Slack** uses one command, `/protean <subcommand>` (e.g. `/protean vote 3 for`). Create the app from [`docs/slack-app-manifest.yml`](docs/slack-app-manifest.yml). Joining a channel with a welcome distributor sends the newcomer their tokens, as on Telegram.
 - **Slack in any workspace:** with `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`, `SLACK_STATE_SECRET` and `SLACK_PUBLIC_URL` set, the Slack process also serves an "Add to Slack" link at `<SLACK_PUBLIC_URL>/slack/install` (on `PORT`, so the service needs a public domain). Each workspace's bot token is stored encrypted under the wallets' KMS key, in Supabase's `slack_installations` table (`supabase/schema.sql`); uninstalling deletes it. Install into your own workspace through the same link, then activate public distribution. Without `SLACK_CLIENT_ID` it runs in one workspace on `SLACK_BOT_TOKEN`. Slack doesn't list Socket Mode apps in its App Directory, so share the link directly.
 - **Privacy:** anything Telegram sends by DM (bets, confidential balances, rewards, handover proposals, the treasury address from `contribute`) is shown only to the caller: an ephemeral reply on Discord (which also hides the options typed), an ephemeral response on Slack. So `back` takes its opportunity and amount directly — they never appear in the channel.
@@ -226,9 +226,9 @@ npm start
 | `NETWORKS`, `DEFAULT_NETWORK` | more than one network | see [Networks](#networks) |
 | `OPERATOR_PRIVATE_KEY` | `/createdao`, `/claim`, gas top-ups, keepers | a funded hot wallet on every enabled network — see Security |
 | `FACTORY_ADDRESS` + `<MODEL>_FACTORY_ADDRESS` | `/createdao` per model | per network with a prefix (`BASE_FACTORY_ADDRESS`); a model with no address can't be created there, but can still be `/register`ed |
-| `SORTITION_RANDOMNESS_SOURCE` | `/createdao ... sortition` | deployed `SwitchboardRandomnessAdapter`, per network |
-| `SWITCHBOARD_ORACLE_ADAPTER` | `switchboard` shorthand in `/proposecriteria` | deployed `SwitchboardPriceFeedAdapter` (optional), per network |
-| `SWITCHBOARD_ADDRESS` | keepers | Switchboard's own proxy, not our adapter, per network |
+| `SORTITION_RANDOMNESS_SOURCE` | `/createdao ... sortition` | deployed `PythEntropyRandomnessAdapter` (Spaces), per network |
+| `PYTH_PRICE_ADAPTER` | Sowellian oracle track (`oracle=pyth`) | deployed `PythPriceFeedAdapter` (Spaces), per network |
+| `PYTH_HERMES_URL` | `/resolveviaoracle` price updates | optional, default `https://hermes.pyth.network` |
 | `KMS_KEY_ID`, `AWS_REGION`, AWS credentials | KMS wallets | symmetric KMS key |
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | KMS wallets | service_role key — RLS allows nothing else |
 | `MASTER_WALLET_SEED` | legacy wallets only | keep set only while old wallets still hold funds |
@@ -237,10 +237,13 @@ npm start
 
 ### Keepers
 
-Switchboard is pull-based: someone has to submit randomness settlements and price updates. Two standalone keepers do it, paying gas from the operator wallet. Neither needs a chat token. **Each keeper process serves one network** — set `KEEPER_NETWORK` (default: the default network) and that network's `SWITCHBOARD_ADDRESS`; run one per network that has Sortition or Sowellian DAOs.
+Pyth Entropy calls back by itself (usually within seconds), so randomness needs no settlement. One optional keeper finishes the job:
 
-- **Sortition randomness** — `npm run keeper:sortition`. `startSortition()` only *requests* randomness; after the settlement delay the keeper fetches the signed result and settles it (anyone can also do this with `/settlesortition`). Polls every 30 s.
-- **Sowellian price feeds** — `npm run keeper:switchboard`. Finds oracle-track proposals whose measurement period has ended and whose oracle is the Switchboard adapter, pushes a fresh signed update from Crossbar, and resolves them in the same cycle (so the data is inside `maxOracleStaleness`). Skips Chainlink, which updates itself. Polls every 60 s. Optional: `SWITCHBOARD_FEED_IDS` (feeds to keep fresh on a timer), `SWITCHBOARD_REFRESH_SECONDS` (default 300), `SWITCHBOARD_NETWORK` (Crossbar's `testnet`/`mainnet`; defaults from the chain), `CROSSBAR_URL`.
+- **Sortition** — `npm run keeper:sortition`. Finalizes each Sortition DAO's round once its randomness has arrived, paying gas from the operator wallet (anyone can also run `/finalizesortition`). **One process per network**: set `KEEPER_NETWORK` (default: the default network). Polls every 30 s.
+
+**Paying for randomness.** Each draw costs Pyth Entropy's fee, in the chain's native currency. `/startsortition` uses the DAO's credit at the Entropy adapter first and tops up only the shortfall from the caller's wallet. A DAO can prefund its credit (anyone can call the adapter's `fund(governance)`, e.g. the Treasury through a proposal), after which draws cost callers nothing but gas.
+
+Sowellian oracle proposals need no keeper: `/resolveviaoracle` posts Pyth's price and resolves in one go.
 
 ## Security — read before deploying anywhere real
 
@@ -253,7 +256,7 @@ Switchboard is pull-based: someone has to submit randomness settlements and pric
 ## Known limitations
 
 - **`/createdao` mints the initial supply to the operator wallet**, not the person who ran the command, and records the operator as `creator` on-chain. `/tip` and welcome distributors are how it reaches members.
-- **Chainlink coverage is limited.** Not every metric has a Chainlink feed on every chain; Switchboard covers far more.
+- **Pyth fees come from the caller.** `/startsortition` (when the DAO's Entropy credit is short) and `/resolveviaoracle` (the price update) spend native currency from the caller's wallet on Pyth's fees; gas sponsorship covers gas only.
 - **Wrapped native is never auto-unwrapped.** Redeeming or reclaiming on a Decision Markets quote side returns the wrapped token; `/unwrap` converts it back.
 - **`data/chats.json` is a flat file.** Fine for now; swap for a database before scaling.
 
@@ -266,7 +269,7 @@ Switchboard is pull-based: someone has to submit randomness settlements and pric
   - HyperCore's action bytes were also compared with those produced by hyper-evm-lib.
 
 - Real Discord and Slack workspaces
-- Switchboard's Crossbar round-trip for sortition settlement and price updates
+- Pyth Entropy and Hermes price updates on a live chain (tested locally against the real Spaces contracts with Pyth's mocks and a stand-in Hermes)
 
 ## Not built yet
 
@@ -293,7 +296,7 @@ src/
 ├── walletStore.js        Supabase persistence for encrypted keys
 ├── wallet.js             legacy seed-derived wallets
 ├── opportunityMarket/    Sepolia config, market actions, FHE encryption, user + public decrypt
-├── keepers/              standalone Switchboard keepers (sortition randomness, Sowellian price feeds)
+├── keepers/              standalone sortition keeper (finalizes draws once Pyth Entropy delivers)
 └── abis/                 compiled ABIs (and bytecode for on-demand deployment)
 supabase/schema.sql       wallets table, RLS enabled
 docs/slack-app-manifest.yml
@@ -317,7 +320,6 @@ With "Add to Slack" enabled, give that service a public domain; Railway's `PORT`
 | Discord bot | `npm run discord` |
 | Slack bot | `npm run slack` |
 | Sortition keeper (per network) | `KEEPER_NETWORK=<id> npm run keeper:sortition` |
-| Price-feed keeper (per network) | `KEEPER_NETWORK=<id> npm run keeper:switchboard` |
 
 ## Try it live
 

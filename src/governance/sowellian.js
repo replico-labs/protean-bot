@@ -1,9 +1,9 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { getAddress, parseEther, zeroHash } from "viem";
-import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer, deployWithGasLimit } from "../config.js";
-import { scaleBlockFields, currentNetwork, networkEnvName } from "../networks.js";
+import { formatUnits, getAddress, parseEther, zeroHash } from "viem";
+import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer } from "../config.js";
+import { scaleBlockFields, currentNetwork, networkEnvName, networkEnv } from "../networks.js";
 import { ensureAllowance } from "./common.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -15,7 +15,6 @@ function loadAbi(name) {
 
 const abi = loadAbi("SowellianGovernance");
 const factoryAbi = loadAbi("SowellianDAOFactory");
-const { abi: chainlinkAdapterAbi, bytecode: chainlinkAdapterBytecode } = loadAbi("ChainlinkPriceFeedAdapter");
 
 function contractFor(address) {
   return { address: getAddress(address), abi };
@@ -269,9 +268,63 @@ export async function takePosition(client, governanceAddress, proposalId, side, 
 /** Reads the configured oracle directly and finalizes in one call - oracle-track proposals only. */
 export async function resolveViaOracle(client, governanceAddress, proposalId) {
   const gov = contractFor(governanceAddress);
+  const proposal = await publicClient.readContract({ ...gov, functionName: "getProposal", args: [BigInt(proposalId)] });
+  // Pyth is pull-based: post the latest signed price first, so the
+  // contract's staleness check sees a fresh value.
+  const priceUpdate = await postPythPrice(client, proposal.oracle, proposal.oracleSelector);
   const hash = await writeWithGasBuffer(client, { ...gov, functionName: "resolveViaOracle", args: [BigInt(proposalId)] });
   await publicClient.waitForTransactionReceipt({ hash });
-  return { hash };
+  return { hash, priceUpdate };
+}
+
+/*//////////////////////////////////////////////////////////////
+    PYTH PRICE UPDATES - Spaces' PythPriceFeedAdapter reads whatever
+    price is stored on the chain's Pyth contract; someone has to post a
+    signed update from Pyth's Hermes service first.
+//////////////////////////////////////////////////////////////*/
+
+// PythPriceFeedAdapter.pyth(), and IPyth's getUpdateFee/updatePriceFeeds,
+// checked against @pythnetwork/pyth-sdk-solidity 4.3.1's IPyth.sol.
+const PYTH_ADAPTER_ABI = [{ type: "function", name: "pyth", inputs: [], outputs: [{ type: "address" }], stateMutability: "view" }];
+const PYTH_ABI = [
+  { type: "function", name: "getUpdateFee", inputs: [{ type: "bytes[]" }], outputs: [{ type: "uint256" }], stateMutability: "view" },
+  { type: "function", name: "updatePriceFeeds", inputs: [{ type: "bytes[]" }], outputs: [], stateMutability: "payable" },
+];
+
+/** Pyth's Hermes price service; PYTH_HERMES_URL (per network) overrides it. */
+function hermesUrl() {
+  return (networkEnv(currentNetwork().id, "PYTH_HERMES_URL") || "https://hermes.pyth.network").replace(/\/$/, "");
+}
+
+/** The latest signed update for one price feed from Hermes, and its readable price. */
+export async function fetchPythUpdate(priceId) {
+  const url = `${hermesUrl()}/v2/updates/price/latest?ids[]=${priceId}&encoding=hex`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Pyth's Hermes service answered ${res.status} for feed ${priceId}${res.status === 404 ? " - check the feed ID" : ""}.`);
+  const body = await res.json();
+  const data = body?.binary?.data;
+  if (!Array.isArray(data) || data.length === 0) throw new Error(`Pyth's Hermes service returned no update for feed ${priceId}.`);
+  const parsed = body.parsed?.[0]?.price;
+  // price x 10^expo, exactly (no float rounding): e.g. 312345000000 at -8 -> "3123.45".
+  const expo = parsed ? Number(parsed.expo) : 0;
+  const price = parsed ? (expo <= 0 ? formatUnits(BigInt(parsed.price), -expo) : (BigInt(parsed.price) * 10n ** BigInt(expo)).toString()) : null;
+  return { updates: data.map((d) => (d.startsWith("0x") ? d : `0x${d}`)), price, publishTime: parsed ? Number(parsed.publish_time) : null };
+}
+
+/**
+ * Posts the latest Pyth price for `priceId` to the Pyth contract behind
+ * `oracleAddress`, paying Pyth's update fee from `client`'s wallet.
+ * Returns null when the oracle isn't a PythPriceFeedAdapter (nothing to post).
+ */
+export async function postPythPrice(client, oracleAddress, priceId) {
+  if (!oracleAddress || getAddress(oracleAddress) === "0x0000000000000000000000000000000000000000") return null;
+  const pyth = await publicClient.readContract({ address: getAddress(oracleAddress), abi: PYTH_ADAPTER_ABI, functionName: "pyth" }).catch(() => null);
+  if (!pyth) return null;
+  const { updates, price, publishTime } = await fetchPythUpdate(priceId);
+  const fee = await publicClient.readContract({ address: pyth, abi: PYTH_ABI, functionName: "getUpdateFee", args: [updates] });
+  const hash = await writeWithGasBuffer(client, { address: pyth, abi: PYTH_ABI, functionName: "updatePriceFeeds", args: [updates], value: fee });
+  await publicClient.waitForTransactionReceipt({ hash });
+  return { hash, fee, price, publishTime };
 }
 
 /*//////////////////////////////////////////////////////////////
@@ -400,29 +453,4 @@ export async function createDAO(name, symbol, initialSupplyWhole, maxSupplyWhole
   });
 
   return { hash, governance, governanceToken, underlyingToken, treasury };
-}
-
-/**
- * Deploys a fresh ChainlinkPriceFeedAdapter wrapping `chainlinkFeedAddress`
- * - the on-demand version of the manual `forge create` flow, so a DAO
- * member can get a usable oracle address without CLI access. Unlike
- * SwitchboardPriceFeedAdapter (one reusable deployment, feed chosen
- * per-proposal), Chainlink genuinely needs a fresh adapter per distinct
- * feed - see the adapter's own contract-level comment for why this
- * isn't a limitation of the adapter, but of how Chainlink itself works
- * (each price pair is already its own separately-deployed contract on
- * Chainlink's side, with no shared proxy to address feeds through).
- *
- * Real, verified bytecode - extracted directly from compiling
- * ChainlinkPriceFeedAdapter.sol against the actual installed
- * @chainlink/contracts package, not assumed or hand-written.
- */
-export async function deployChainlinkOracle(client, chainlinkFeedAddress) {
-  const hash = await deployWithGasLimit(client, {
-    abi: chainlinkAdapterAbi,
-    bytecode: chainlinkAdapterBytecode,
-    args: [getAddress(chainlinkFeedAddress)],
-  });
-  const receipt = await publicClient.waitForTransactionReceipt({ hash });
-  return { hash, adapterAddress: receipt.contractAddress };
 }

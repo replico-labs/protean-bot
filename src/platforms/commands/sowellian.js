@@ -1,9 +1,7 @@
 import { isAddress, getAddress, zeroHash } from "viem";
-import { switchboardOracleAdapter } from "../../config.js";
+import { resolveOracleWord, oracleGoalValue } from "../../modelProposal.js";
 import { getAdapter } from "../../governance/index.js";
-import { deployChainlinkOracle } from "../../governance/sowellian.js";
 import { VOTE_CHOICES } from "../../display.js";
-import { short } from "../../format.js";
 import { UserError, reply, requireModel, requireAdapterFn, parseId, userClient, weightNote, adapterWrite, ZERO_ADDRESS } from "../helpers.js";
 
 /** The Sowellian lifecycle: criteria, approval, positions, both resolution tracks, adjudication. Ported from index.js. */
@@ -35,36 +33,19 @@ function outcomeVote({ name, fn, description, notSupported, snapshotWhat, doneLa
 }
 
 export const SOWELLIAN_COMMANDS = {
-  deploychainlinkoracle: {
-    section: "Sowellian",
-    models: SOWELLIAN,
-    usage: "<chainlinkFeedAddress>",
-    description: "Wrap a Chainlink feed so proposals can use it as an oracle",
-    options: [{ name: "feed", description: "Chainlink Data Feed address on this chain", required: true }],
-    async run(ctx) {
-      const feedAddress = ctx.args[0];
-      if (!feedAddress || !isAddress(feedAddress)) {
-        throw new UserError(`Usage: \`${ctx.cmd("deploychainlinkoracle")} <chainlinkFeedAddress>\` — confirm the feed really exists on this chain first; a wrong address deploys fine but fails at resolution.`);
-      }
-      const { client } = await userClient(ctx);
-      const { adapterAddress } = await deployChainlinkOracle(client, feedAddress);
-      return reply(`✅ Adapter deployed at \`${short(adapterAddress)}\`. Use it as the oracle in \`${ctx.cmd("proposecriteria")}\`, with \`-\` for the selector.`);
-    },
-  },
-
   proposecriteria: {
     section: "Sowellian",
     models: SOWELLIAN,
-    usage: "<target> <value> <data> <oracle|human> <oracle|switchboard|-> <selector|-> <targetValue> <min|max> <measurementSeconds> <description>",
+    usage: "<target> <value> <data> <oracle|human> <pyth|adapter|-> <feedId|-> <targetValue> <min|max> <measurementSeconds> <description>",
     description: "Propose with an upfront success condition",
     options: [
       { name: "target", description: "Target contract address", required: true },
       { name: "value", description: "Native value in wei", required: true },
       { name: "data", description: "Hex calldata, or 0x", required: true },
       { name: "method", description: "How the outcome is resolved", required: true, choices: ["oracle", "human"] },
-      { name: "oracle", description: "Oracle adapter address, 'switchboard', or - for human", required: true },
-      { name: "selector", description: "Switchboard feedId (0x + 64 hex), or -", required: true },
-      { name: "target_value", description: "Value the metric is compared against", required: true },
+      { name: "oracle", description: "pyth (this network's Pyth adapter), an adapter address, or - for human", required: true },
+      { name: "selector", description: "Pyth price feed ID (0x + 64 hex), or - for human", required: true },
+      { name: "target_value", description: "Oracle: the price, e.g. 3000 (sent as 18 decimals). Human: a whole number", required: true },
       { name: "direction", description: "min: success if >= target; max: success if <= target", required: true, choices: ["min", "max"] },
       { name: "measurement_seconds", description: "Seconds after execution before resolving", required: true, type: "integer" },
       { name: "description", description: "What this proposal does", required: true, rest: true },
@@ -76,28 +57,37 @@ export const SOWELLIAN_COMMANDS = {
       const method = methodRaw?.toLowerCase();
       const direction = directionRaw?.toLowerCase();
 
-      let oracleRaw = oracleInput;
-      if (method === "oracle" && oracleInput?.toLowerCase() === "switchboard") {
-        if (!switchboardOracleAdapter()) throw new UserError("No Switchboard oracle adapter is configured on this bot - ask an admin to set SWITCHBOARD_ORACLE_ADAPTER, or pass an adapter address.");
-        oracleRaw = switchboardOracleAdapter();
-      }
+      const usage = [
+        `Usage: \`${ctx.cmd("proposecriteria")} <target> <value> <data> <oracle|human> <pyth|adapter|-> <feedId|-> <targetValue> <min|max> <measurementSeconds> <description>\``,
+        "",
+        `Example (oracle track, ETH/USD at least $3,000 30 days after execution): \`${ctx.cmd("proposecriteria")} 0xRecipient 0 0x oracle pyth 0x<ETH/USD feed ID> 3000 min 2592000 Grow treasury\``,
+        `Example (human track, resolves 7 days after execution): \`${ctx.cmd("proposecriteria")} 0xRecipient 0 0x human - - 0 min 604800 Fund the community grant\``,
+        `Easier: \`${ctx.cmd("proposeaction")}\` builds the call for you - see \`${ctx.cmd("actioninfo")}\`.`,
+      ].join("\n");
       const valid =
-        target && isAddress(target) && value && data &&
+        target && isAddress(target) && value && /^\d+$/.test(value) && data &&
         (method === "oracle" || method === "human") &&
-        targetValue !== undefined && !Number.isNaN(Number(targetValue)) &&
+        targetValue !== undefined &&
         (direction === "min" || direction === "max") &&
         measurementPeriod && /^\d+$/.test(measurementPeriod) &&
-        description &&
-        (method !== "oracle" || (oracleRaw && isAddress(oracleRaw))) &&
-        (method !== "oracle" || selectorRaw === "-" || /^0x[0-9a-fA-F]{64}$/.test(selectorRaw ?? ""));
-      if (!valid) {
-        throw new UserError(
-          [
-            `Usage: \`${ctx.cmd("proposecriteria")} <target> <value> <data> <oracle|human> <oracleAddress|switchboard|-> <selector|-> <targetValue> <min|max> <measurementSeconds> <description>\``,
-            "",
-            `Example (human track, resolves 7 days after execution): \`${ctx.cmd("proposecriteria")} 0xRecipient 0 0x human - - 0 min 604800 Fund the community grant\``,
-          ].join("\n")
-        );
+        description;
+      if (!valid) throw new UserError(usage);
+      let oracle = ZERO_ADDRESS;
+      let selector = zeroHash;
+      let goal;
+      try {
+        if (method === "oracle") {
+          oracle = resolveOracleWord(oracleInput);
+          if (!/^0x[0-9a-fA-F]{64}$/.test(selectorRaw ?? "")) throw new UserError(`The oracle track needs a Pyth price feed ID (0x + 64 hex) in the feed slot.\n\n${usage}`);
+          selector = selectorRaw;
+          goal = oracleGoalValue(targetValue);
+        } else {
+          if (!/^-?\d+$/.test(targetValue)) throw new UserError(`On the human track the target value is a whole number.\n\n${usage}`);
+          goal = targetValue;
+        }
+      } catch (err) {
+        if (err.userFacing) throw new UserError(err.message);
+        throw err;
       }
       const { client } = await userClient(ctx, { forceFullTopup: true });
       const { proposalId } = await getAdapter("sowellian").proposeWithCriteria(
@@ -106,9 +96,9 @@ export const SOWELLIAN_COMMANDS = {
         [{ target: getAddress(target), value: BigInt(value || 0), data: data || "0x" }],
         description,
         method === "oracle" ? 0 : 1,
-        method === "oracle" ? oracleRaw : ZERO_ADDRESS,
-        !selectorRaw || selectorRaw === "-" ? zeroHash : selectorRaw,
-        targetValue,
+        oracle,
+        selector,
+        goal,
         direction === "min",
         measurementPeriod
       );
@@ -176,7 +166,8 @@ export const SOWELLIAN_COMMANDS = {
     fn: "resolveViaOracle",
     notSupported: "This DAO uses {model} governance, which has no oracle-track resolution.",
     idLabel: "Proposal ID",
-    done: (ctx, id) => `✅ Proposal #${id} resolved via oracle. Use \`${ctx.cmd("claimposition")} ${id}\` to collect a winning position.`,
+    done: (ctx, id, { priceUpdate }) =>
+      `✅ Proposal #${id} resolved via oracle.${priceUpdate?.price != null ? ` Posted Pyth's latest price first: ${priceUpdate.price}.` : ""} Use \`${ctx.cmd("claimposition")} ${id}\` to collect a winning position.`,
   }),
 
   proposeresolution: outcomeVote({

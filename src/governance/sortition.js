@@ -4,58 +4,18 @@ import { fileURLToPath } from "url";
 import { getAddress, parseEther } from "viem";
 import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer } from "../config.js";
 import { scaleBlockFields, currentNetwork, networkEnvName } from "../networks.js";
-import { CrossbarClient } from "@switchboard-xyz/common";
-import { time } from "console";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Minimal ABI for the pieces of the real Switchboard contract this needs -
-// getRandomness/isRandomnessReady/settleRandomness, confirmed directly
-// against the installed @switchboard-xyz/on-demand-solidity package's own
-// ISwitchboard interface, not assumed from documentation.
-const SWITCHBOARD_ABI = [
-  {
-    type: "function",
-    name: "getRandomness",
-    inputs: [{ type: "bytes32" }],
-    outputs: [
-      {
-        type: "tuple",
-        components: [
-          { name: "randId", type: "bytes32" },
-          { name: "createdAt", type: "uint256" },
-          { name: "authority", type: "address" },
-          { name: "rollTimestamp", type: "uint256" },
-          { name: "minSettlementDelay", type: "uint64" },
-          { name: "oracle", type: "address" },
-          { name: "value", type: "uint256" },
-          { name: "settledAt", type: "uint256" },
-        ],
-      },
-    ],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
-    name: "isRandomnessReady",
-    inputs: [{ type: "bytes32" }],
-    outputs: [{ type: "bool" }],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
-    name: "settleRandomness",
-    inputs: [{ type: "bytes" }],
-    outputs: [],
-    stateMutability: "payable",
-  },
-];
-
-// Adapter ABI fragment needed to find the real Switchboard address behind
-// SortitionGovernance's own randomnessSource() - see the module comment on
-// settleSortitionRandomness below for why this matters.
-const ADAPTER_SWITCHBOARD_ABI = [
-  { type: "function", name: "switchboard", inputs: [], outputs: [{ type: "address" }], stateMutability: "view" },
+// The randomness source a Sortition DAO draws from: Spaces'
+// PythEntropyRandomnessAdapter (src/randomness), checked against its
+// source. requestFee/credit/fund are the adapter's own; isFulfilled is
+// IRandomnessSource.
+const RANDOMNESS_ABI = [
+  { type: "function", name: "requestFee", inputs: [], outputs: [{ type: "uint256" }], stateMutability: "view" },
+  { type: "function", name: "credit", inputs: [{ type: "address" }], outputs: [{ type: "uint256" }], stateMutability: "view" },
+  { type: "function", name: "fund", inputs: [{ type: "address" }], outputs: [], stateMutability: "payable" },
+  { type: "function", name: "isFulfilled", inputs: [{ type: "bytes32" }], outputs: [{ type: "bool" }], stateMutability: "view" },
 ];
 
 function loadAbi(name) {
@@ -219,29 +179,88 @@ export async function withdrawEligibility(client, governanceAddress) {
     MODEL-SPECIFIC EXTRAS - the sortition draw itself
 //////////////////////////////////////////////////////////////*/
 
+/** A refusal the bot can explain before spending gas, shown to the user as is. */
+export class SortitionError extends Error {
+  constructor(message) {
+    super(message);
+    this.userFacing = true;
+  }
+}
+
+/**
+ * What a draw costs right now and how much of it this DAO's credit at
+ * the adapter already covers. Sources other than the Pyth Entropy adapter
+ * (no requestFee) are treated as free.
+ */
+export async function sortitionFee(governanceAddress) {
+  const gov = contractFor(governanceAddress);
+  const source = await publicClient.readContract({ ...gov, functionName: "randomnessSource" });
+  const adapter = { address: getAddress(source), abi: RANDOMNESS_ABI };
+  const fee = await publicClient.readContract({ ...adapter, functionName: "requestFee" }).catch(() => null);
+  if (fee === null) return { source, fee: 0n, credit: 0n, shortfall: 0n };
+  const credit = await publicClient.readContract({ ...adapter, functionName: "credit", args: [gov.address] });
+  return { source, fee, credit, shortfall: fee > credit ? fee - credit : 0n };
+}
+
 /**
  * Starts a new sortition round - requests randomness from this DAO's
- * configured IRandomnessSource. Only callable once the current term has
- * ended and the eligible pool is non-empty; both checked on-chain.
+ * IRandomnessSource. Only callable once the current term has ended and
+ * the eligible pool is non-empty; both checked on-chain.
+ *
+ * Pyth Entropy charges a fee per request. If the DAO's credit at the
+ * adapter doesn't cover it, the caller tops the credit up first
+ * (adapter.fund(governance)) and the round then starts with no value
+ * sent. That works for every Sortition DAO, including ones cloned
+ * before startSortition was payable. `paid` is what the caller spent.
  */
 export async function startSortition(client, governanceAddress) {
   const gov = contractFor(governanceAddress);
+  const { source, shortfall } = await sortitionFee(governanceAddress);
+  if (shortfall > 0n) {
+    const hash = await writeWithGasBuffer(client, {
+      address: getAddress(source),
+      abi: RANDOMNESS_ABI,
+      functionName: "fund",
+      args: [gov.address],
+      value: shortfall,
+    });
+    await publicClient.waitForTransactionReceipt({ hash });
+  }
   const hash = await writeWithGasBuffer(client, { ...gov, functionName: "startSortition", args: [] });
   await publicClient.waitForTransactionReceipt({ hash });
 
   const round = await publicClient.readContract({ ...gov, functionName: "sortitionRound" });
-  return { hash, round };
+  return { hash, round, paid: shortfall };
 }
 
 /**
- * Finalizes the active sortition round once its randomness request has
- * been fulfilled - draws the new council via an unbiased shuffle seeded
- * by the verified random value. Reverts if the randomness source hasn't
- * fulfilled the request yet; the caller (or the bot's command handler)
- * is expected to retry later rather than this function polling.
+ * Where the current round stands: { round, active, fulfilled }. Entropy
+ * calls the adapter back by itself, usually within seconds of the start.
+ */
+export async function sortitionStatus(governanceAddress) {
+  const gov = contractFor(governanceAddress);
+  const round = await publicClient.readContract({ ...gov, functionName: "sortitionRound" });
+  if (round === 0n) return { round, active: false, fulfilled: false };
+  const [finalized, requestId, source] = await Promise.all([
+    publicClient.readContract({ ...gov, functionName: "roundFinalized", args: [round] }),
+    publicClient.readContract({ ...gov, functionName: "requestIdOfRound", args: [round] }),
+    publicClient.readContract({ ...gov, functionName: "randomnessSource" }),
+  ]);
+  if (finalized) return { round, active: false, fulfilled: true };
+  const fulfilled = await publicClient.readContract({ address: getAddress(source), abi: RANDOMNESS_ABI, functionName: "isFulfilled", args: [requestId] });
+  return { round, active: true, fulfilled };
+}
+
+/**
+ * Finalizes the active sortition round once its randomness has arrived -
+ * draws the new council via an unbiased shuffle seeded by it. Says so
+ * plainly when there's no round or the randomness hasn't arrived yet.
  */
 export async function finalizeSortition(client, governanceAddress) {
   const gov = contractFor(governanceAddress);
+  const status = await sortitionStatus(governanceAddress);
+  if (!status.active) throw new SortitionError("There's no sortition round waiting to be finalized - start one with /startsortition once the term has ended.");
+  if (!status.fulfilled) throw new SortitionError(`Round #${status.round}'s randomness hasn't arrived yet. Pyth Entropy usually delivers within a few seconds - try again shortly.`);
   const hash = await writeWithGasBuffer(client, { ...gov, functionName: "finalizeSortition", args: [] });
   await publicClient.waitForTransactionReceipt({ hash });
   return { hash };
@@ -331,89 +350,4 @@ export async function createDAO(name, symbol, initialSupplyWhole, maxSupplyWhole
   });
 
   return { hash, governance, governanceToken, underlyingToken, treasury };
-}
-
-/*//////////////////////////////////////////////////////////////
-    SWITCHBOARD SETTLEMENT - the keeper step nothing else in this
-    system does automatically. startSortition() requests randomness;
-    someone still has to fetch Switchboard's signed response off-
-    chain and submit it on-chain before finalizeSortition() can run.
-    Confirmed against the real, installed @switchboard-xyz/common
-    package (resolveEVMRandomness's actual signature and return
-    shape) and the real, installed @switchboard-xyz/on-demand-solidity
-    package's ISwitchboard interface - not assumed from docs alone.
-//////////////////////////////////////////////////////////////*/
-
-const crossbar = new CrossbarClient("https://crossbar.switchboard.xyz");
-
-/**
- * Settles the current sortition round's randomness, if it's ready -
- * the full off-chain resolve + on-chain settle round trip in one call.
- * Anyone can call this (Switchboard's settleRandomness has no access
- * control - it's a pull-based oracle, not a push/callback one), so
- * `client` just needs to be able to pay gas; it doesn't need to be the
- * DAO's own operator specifically.
- *
- * Returns one of:
- * - { status: "no-pending-round" } - no sortition round has ever been started
- * - { status: "already-settled" } - this round's randomness was already settled by someone else
- * - { status: "not-ready", readyIn: bigint } - still inside minSettlementDelay
- * - { status: "settled", hash } - settlement transaction succeeded
- *
- * Deliberately does NOT also call finalizeSortition() - settling
- * randomness and drawing the actual council are separate concerns, and
- * a caller may want to inspect the settled value or handle errors
- * independently before finalizing.
- */
-export async function settleSortitionRandomness(client, governanceAddress) {
-  const gov = contractFor(governanceAddress);
-
-  const round = await publicClient.readContract({ ...gov, functionName: "sortitionRound" });
-  if (round === 0n) return { status: "no-pending-round" };
-
-  const requestId = await publicClient.readContract({ ...gov, functionName: "requestIdOfRound", args: [round] });
-
-  const adapterAddress = await publicClient.readContract({ ...gov, functionName: "randomnessSource" });
-  const switchboardAddress = await publicClient.readContract({
-    address: adapterAddress,
-    abi: ADAPTER_SWITCHBOARD_ABI,
-    functionName: "switchboard",
-  });
-  const switchboardContract = { address: switchboardAddress, abi: SWITCHBOARD_ABI };
-
-  const randomness = await publicClient.readContract({
-    ...switchboardContract,
-    functionName: "getRandomness",
-    args: [requestId],
-  });
-  if (randomness.settledAt > 0n) return { status: "already-settled" };
-
-  const ready = await publicClient.readContract({
-    ...switchboardContract,
-    functionName: "isRandomnessReady",
-    args: [requestId],
-  });
-  if (!ready) {
-    const readyAt = randomness.rollTimestamp + randomness.minSettlementDelay;
-    const nowSeconds = BigInt(Math.floor(Date.now() / 1000));
-    return { status: "not-ready", readyIn: readyAt > nowSeconds ? readyAt - nowSeconds : 0n };
-  }
-
-  const chainId = await publicClient.getChainId();
-  const { encoded } = await crossbar.resolveEVMRandomness({
-    chainId,
-    randomnessId: requestId,
-    timestamp: Number(randomness.rollTimestamp),
-    minStalenessSeconds: Number(randomness.minSettlementDelay),
-    oracle: randomness.oracle,
-  });
-
-  const hash = await writeWithGasBuffer(client, {
-    ...switchboardContract,
-    functionName: "settleRandomness",
-    args: [encoded],
-  });
-  await publicClient.waitForTransactionReceipt({ hash });
-
-  return { status: "settled", hash };
 }

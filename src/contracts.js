@@ -444,9 +444,8 @@ export async function deployWelcomeDistributor(client, tokenAddress, governanceA
 }
 
 /**
- * Deploys a fresh NFTMarketplaceWrapper for a DAO - one per DAO, same
- * on-demand pattern as deployChainlinkOracle, not shared, since (unlike
- * a price adapter) this one holds the DAO's NFTs. Real,
+ * Deploys a fresh NFTMarketplaceWrapper for a DAO - one per DAO, not
+ * shared, since this one holds the DAO's NFTs. Real,
  * verified bytecode - extracted directly from compiling
  * NFTMarketplaceWrapper.sol against the actual installed OpenZeppelin
  * package, not assumed or hand-written.

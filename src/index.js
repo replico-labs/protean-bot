@@ -1,9 +1,9 @@
 import { Bot } from "grammy";
 import { run, sequentialize } from "@grammyjs/runner";
 import { isAddress, getAddress, parseEther, formatUnits } from "viem";
-import { BOT_TOKEN, publicClient, sortitionRandomnessSource, switchboardOracleAdapter, walletClient } from "./config.js";
+import { BOT_TOKEN, publicClient, sortitionRandomnessSource, walletClient } from "./config.js";
 import { fitGasLimit } from "./gasLimit.js";
-import { takeModelOptions, checkModelOptions, modelOptionsUsage, proposeForModel, proposalNextStep } from "./modelProposal.js";
+import { takeModelOptions, checkModelOptions, modelOptionsUsage, proposeForModel, proposalNextStep, resolveOracleWord, oracleGoalValue } from "./modelProposal.js";
 import { rewardComputedText, withdrawnText } from "./opportunityMarket/payoutText.js";
 import { marketSendMode, sendFromMarketWallet, marketWalletBalances } from "./opportunityMarket/send.js";
 import { currentNetwork, explorerAddressLine, isNativeTokenWord, runOnNetwork, takeNetworkArg, describeNetwork, ENABLED_NETWORKS, getNetwork, blocksToDuration } from "./networks.js";
@@ -52,9 +52,9 @@ import { createDAO as createLiquidDAO, resolveDelegationsBehind as resolveLiquid
 import { createDAO as createOptimisticDAO } from "./governance/optimistic.js";
 import { createDAO as createDelegateDAO } from "./governance/delegate.js";
 import { createDAO as createBoardDAO } from "./governance/board.js";
-import { createDAO as createSortitionDAO, settleSortitionRandomness } from "./governance/sortition.js";
+import { createDAO as createSortitionDAO } from "./governance/sortition.js";
 import { createDAO as createConvictionDAO } from "./governance/conviction.js";
-import { createDAO as createSowellianDAO, deployChainlinkOracle } from "./governance/sowellian.js";
+import { createDAO as createSowellianDAO } from "./governance/sowellian.js";
 import { createDAO as createDecisionMarketsDAO, getProposalVaults, splitTokens, mergeTokens, redeemTokens, unwrapWmon } from "./governance/decisionMarkets.js";
 import {
   stakeTokens,
@@ -365,9 +365,8 @@ const MODEL_HELP_BLOCKS = {
     "/council — see who's currently seated",
     "/registereligible — want a shot at being randomly picked for the next council? Opt in here",
     "/withdraweligibility — take yourself out of the running",
-    "/startsortition — kick off a new random council draw (requests randomness from the configured provider)",
-    "/settlesortition — once the randomness provider's delay has passed, submit the result on-chain — anyone can run this, not just admins",
-    "/finalizesortition — draw the actual new council once randomness has settled",
+    "/startsortition — kick off a new random council draw: requests randomness from Pyth Entropy, paying its small fee from your wallet if the DAO's credit doesn't cover it",
+    "/finalizesortition — draw the actual new council once the randomness has arrived (usually within seconds) — anyone can run this",
   ],
   conviction: [
     "/propose `<target> <value> <data> <description>` — propose an on-chain action for the DAO to back",
@@ -379,14 +378,13 @@ const MODEL_HELP_BLOCKS = {
     "/cancel `<id>` — withdraw your own proposal before execution",
   ],
   sowellian: [
-    "/deploychainlinkoracle `<chainlinkFeedAddress>` — one-time setup: wraps a real Chainlink price feed so oracle-track proposals can check it",
-    "/proposeaction `<actionId> <args...> [track=human|oracle] [oracle=…] [feed=…] [goal=N] [when=min|max] [measure=7d] <description>` — the easy way: the bot builds and checks the calls from the action library (see /listactions, /actioninfo) and adds your success condition",
-    "/proposecriteria `<target> <value> <data> <oracle|human> <oracleAddress|switchboard|-> <oracleSelector|-> <targetValue> <min|max> <measurementPeriod> <description>` — advanced: propose a raw call with a fixed, upfront success condition — checked automatically by an oracle, or resolved by a human afterward",
+    "/proposeaction `<actionId> <args...> [track=human|oracle] [feed=<Pyth feed ID>] [goal=<price>] [when=min|max] [measure=7d] <description>` — the easy way: the bot builds and checks the calls from the action library (see /listactions, /actioninfo) and adds your success condition",
+    "/proposecriteria `<target> <value> <data> <oracle|human> <pyth|adapter|-> <feedId|-> <targetValue> <min|max> <measurementPeriod> <description>` — advanced: propose a raw call with a fixed, upfront success condition — checked automatically by an oracle, or resolved by a human afterward",
     "/castapprovalvote `<id> for|against|abstain` — vote on whether this proposal is even worth opening up for betting",
     "/finalizeapproval `<id>` — close the approval vote and open the betting market if it passed",
     "/takeposition `<id> yes|no <amount>` — put real money behind whether you think the outcome will succeed or fail",
     "/execute `<id>` — once betting closes, run the proposal's actual action",
-    "/resolveviaoracle `<id>` — for oracle-track proposals: reads the configured oracle and settles the outcome automatically",
+    "/resolveviaoracle `<id>` — for oracle-track proposals: posts Pyth's latest price (a small Pyth fee from your wallet), reads it and settles the outcome",
     "/proposeresolution `<id> success|failure` — for human-track proposals: state what you believe actually happened (backed by a bond)",
     "/challengeresolution `<id>` — think a proposed resolution is wrong? Dispute it here to force a full vote",
     "/finalizeunchallenged `<id>` — nobody disputed the resolution within the window? Lock it in",
@@ -2171,48 +2169,6 @@ bot.command("actioninfo", async (ctx) => {
 });
 
 /*//////////////////////////////////////////////////////////////
-                      /deploychainlinkoracle
-//////////////////////////////////////////////////////////////*/
-
-bot.command("deploychainlinkoracle", async (ctx) => {
-  if (!isWalletStoreConfigured()) {
-    await ctx.reply("Wallets aren't set up on this bot yet - ask an admin to configure the KMS/Supabase wallet system.");
-    return;
-  }
-
-  const feedAddress = ctx.match?.trim();
-  if (!feedAddress || !isAddress(feedAddress)) {
-    await ctx.reply(
-      [
-        "Usage: `/deploychainlinkoracle <chainlinkFeedAddress>` — deploys a fresh oracle adapter wrapping a real Chainlink Data Feed, so you can reference it in `/proposecriteria`.",
-        "",
-        "⚠️ Unlike Switchboard, Chainlink needs a genuinely new adapter for every distinct metric - confirm the feed address is real and actually exists on this chain before deploying, since a wrong address deploys successfully but fails the first time anyone tries to resolve a proposal against it.",
-      ].join("\n"),
-      { parse_mode: "Markdown" }
-    );
-    return;
-  }
-
-  const account = await getOrCreateUserAccount(ctx.from.id);
-  const client = walletClientFor(account);
-  const statusMsg = await ctx.reply("⏳ Deploying a new Chainlink oracle adapter…");
-
-  try {
-    await ensureGasFunded(account);
-    const { adapterAddress } = await deployChainlinkOracle(client, feedAddress);
-    await ctx.api.editMessageText(
-      ctx.chat.id,
-      statusMsg.message_id,
-      `✅ Adapter deployed at \`${short(adapterAddress)}\`. Use this as the oracle address in /proposecriteria - pass \`-\` for its selector, since Chainlink ignores it.`,
-      { parse_mode: "Markdown" }
-    );
-  } catch (err) {
-    console.error(err);
-    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `Couldn't deploy the adapter: ${err.shortMessage || err.message}`);
-  }
-});
-
-/*//////////////////////////////////////////////////////////////
                           /proposecriteria
 //////////////////////////////////////////////////////////////*/
 
@@ -2230,53 +2186,52 @@ bot.command("proposecriteria", async (ctx) => {
     return;
   }
 
-  // Format: /proposecriteria <target> <value> <data> <oracle|human> <oracleAddress|switchboard|-> <oracleSelector|-> <targetValue> <min|max> <measurementPeriodSeconds> <description...>
+  // Format: /proposecriteria <target> <value> <data> <oracle|human> <pyth|adapter|-> <feedId|-> <targetValue> <min|max> <measurementPeriodSeconds> <description...>
   const raw = ctx.match?.trim() ?? "";
   const parts = raw.split(/\s+/);
   const [target, value, data, methodRaw, oracleRawInput, selectorRaw, targetValue, directionRaw, measurementPeriod, ...descriptionParts] = parts;
   const description = descriptionParts.join(" ");
   const method = methodRaw?.toLowerCase();
   const direction = directionRaw?.toLowerCase();
-
-  let oracleRaw = oracleRawInput;
-  let switchboardShorthandError = null;
-  if (method === "oracle" && oracleRawInput?.toLowerCase() === "switchboard") {
-    if (!switchboardOracleAdapter()) {
-      switchboardShorthandError = "No Switchboard oracle adapter configured on this bot - ask an admin to set SWITCHBOARD_ORACLE_ADAPTER, or pass a real adapter address directly.";
-    } else {
-      oracleRaw = switchboardOracleAdapter();
-    }
-  }
+  const usage = [
+    "Usage: `/proposecriteria <target> <value> <data> <oracle|human> <pyth|adapter|-> <feedId|-> <targetValue> <min|max> <measurementPeriodSeconds> <description>`",
+    "",
+    "Oracle track: `pyth` uses this network's Pyth adapter; the feed slot is a Pyth price feed ID (0x + 64 hex); the target value is a price like 3000 (sent as 18 decimals).",
+    "Human track: `- -` in the oracle and feed slots, and a whole-number target value.",
+    "`min` means success if the result ends up >= the target; `max` means <= the target.",
+    "",
+    "Example (oracle track): `/proposecriteria 0xRecipient 0 0x oracle pyth 0x<ETH/USD feed ID> 3000 min 2592000 Grow treasury`",
+    "Example (human track): `/proposecriteria 0xRecipient 0 0x human - - 0 min 604800 Fund the community grant`",
+    "",
+    "Easier: /proposeaction builds the call for you - see /actioninfo.",
+  ].join("\n");
 
   const valid =
-    !switchboardShorthandError &&
-    target && isAddress(target) && value && data &&
+    target && isAddress(target) && value && /^\d+$/.test(value) && data &&
     (method === "oracle" || method === "human") &&
-    targetValue !== undefined && !Number.isNaN(Number(targetValue)) &&
+    targetValue !== undefined &&
     (direction === "min" || direction === "max") &&
     measurementPeriod && /^\d+$/.test(measurementPeriod) &&
-    description &&
-    (method !== "oracle" || (oracleRaw && isAddress(oracleRaw))) &&
-    (method !== "oracle" || selectorRaw === "-" || /^0x[0-9a-fA-F]{64}$/.test(selectorRaw));
-
+    description;
   if (!valid) {
-    if (switchboardShorthandError) {
-      await ctx.reply(switchboardShorthandError);
-      return;
+    await ctx.reply(usage, { parse_mode: "Markdown" });
+    return;
+  }
+
+  let oracleRaw = "0x0000000000000000000000000000000000000000";
+  let oracleSelector = "0x0000000000000000000000000000000000000000000000000000000000000000";
+  let goal = targetValue;
+  try {
+    if (method === "oracle") {
+      oracleRaw = resolveOracleWord(oracleRawInput);
+      if (!/^0x[0-9a-fA-F]{64}$/.test(selectorRaw ?? "")) throw new Error("The oracle track needs a Pyth price feed ID (0x + 64 hex) in the feed slot.");
+      oracleSelector = selectorRaw;
+      goal = oracleGoalValue(targetValue);
+    } else if (!/^-?\d+$/.test(targetValue)) {
+      throw new Error("On the human track the target value is a whole number.");
     }
-    await ctx.reply(
-      [
-        "Usage: `/proposecriteria <target> <value> <data> <oracle|human> <oracleAddress|-> <oracleSelector|-> <targetValue> <min|max> <measurementPeriodSeconds> <description>`",
-        "",
-        "`oracle` needs a real deployed IMetricOracle address, or the literal word `switchboard` (if this bot has one configured); for `human`, pass `-` in that slot.",
-        "`oracleSelector` is the specific feed to read on that oracle - a full `0x`-prefixed 32-byte value for Switchboard (its feedId), or `-` for Chainlink and human track, where it's ignored.",
-        "`min` means success if the metric ends up >= targetValue; `max` means success if it ends up <= targetValue.",
-        "",
-        "Example (human track, resolves 7 days after execution):",
-        "`/proposecriteria 0xRecipient 0 0x human - - 0 min 604800 Fund the community grant`",
-      ].join("\n"),
-      { parse_mode: "Markdown" }
-    );
+  } catch (err) {
+    await ctx.reply(`${err.message}\n\n${usage}`, { parse_mode: "Markdown" });
     return;
   }
 
@@ -2289,8 +2244,6 @@ bot.command("proposecriteria", async (ctx) => {
     const adapter = getAdapter("sowellian");
     const actions = [{ target: getAddress(target), value: BigInt(value || 0), data: data || "0x" }];
     const resolutionMethod = method === "oracle" ? 0 : 1;
-    const oracle = method === "oracle" ? oracleRaw : "0x0000000000000000000000000000000000000000";
-    const oracleSelector = selectorRaw === "-" || !selectorRaw ? "0x0000000000000000000000000000000000000000000000000000000000000000" : selectorRaw;
 
     const { proposalId } = await adapter.proposeWithCriteria(
       client,
@@ -2298,9 +2251,9 @@ bot.command("proposecriteria", async (ctx) => {
       actions,
       description,
       resolutionMethod,
-      oracle,
+      oracleRaw,
       oracleSelector,
-      targetValue,
+      goal,
       direction === "min",
       measurementPeriod
     );
@@ -3040,67 +2993,16 @@ bot.command("startsortition", async (ctx) => {
 
   try {
     await ensureGasFunded(account);
-    const { round } = await adapter.startSortition(client, address);
+    const { round, paid } = await adapter.startSortition(client, address);
     await ctx.api.editMessageText(
       ctx.chat.id,
       statusMsg.message_id,
-      `✅ Sortition round ${round} started. Once the randomness request is fulfilled, run /finalizesortition to draw the new council.`
+      `✅ Sortition round ${round} started.${paid > 0n ? ` You paid Pyth Entropy's fee (${formatEther(paid)} ${currentNetwork().nativeSymbol}).` : ""} ` +
+        "Entropy usually delivers the randomness within seconds; then /finalizesortition draws the new council (the keeper does it too, if it's running)."
     );
   } catch (err) {
     console.error(err);
     await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `Couldn't start sortition: ${err.shortMessage || err.message}`);
-  }
-});
-
-/*//////////////////////////////////////////////////////////////
-                        /settlesortition
-//////////////////////////////////////////////////////////////*/
-
-bot.command("settlesortition", async (ctx) => {
-  const address = await requireDAO(ctx);
-  if (!address) return;
-  if (!isWalletStoreConfigured()) {
-    await ctx.reply("Wallets aren't set up on this bot yet - ask an admin.");
-    return;
-  }
-
-  const model = getChatModel(ctx.chat.id);
-  if (model !== "sortition") {
-    await ctx.reply(`This DAO uses ${model} governance, which has no randomness to settle.`);
-    return;
-  }
-
-  const account = await getOrCreateUserAccount(ctx.from.id);
-  const client = walletClientFor(account);
-  const statusMsg = await ctx.reply(
-    "⏳ Checking the current sortition round and settling with Switchboard if it's ready — this can take a moment…"
-  );
-
-  try {
-    await ensureGasFunded(account);
-    const result = await settleSortitionRandomness(client, address);
-
-    switch (result.status) {
-      case "no-pending-round":
-        await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, "No sortition round has been started yet — use /startsortition first.");
-        break;
-      case "already-settled":
-        await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, "This round's randomness is already settled. Use /finalizesortition to draw the council.");
-        break;
-      case "not-ready":
-        await ctx.api.editMessageText(
-          ctx.chat.id,
-          statusMsg.message_id,
-          `Not ready yet — Switchboard's minimum settlement delay hasn't passed. Try again in about ${result.readyIn} more second(s).`
-        );
-        break;
-      case "settled":
-        await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, "✅ Randomness settled. Use /finalizesortition to draw the new council.");
-        break;
-    }
-  } catch (err) {
-    console.error(err);
-    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `Couldn't settle randomness: ${err.shortMessage || err.message}`);
   }
 });
 
@@ -3132,7 +3034,7 @@ bot.command("finalizesortition", async (ctx) => {
     await ctx.api.editMessageText(
       ctx.chat.id,
       statusMsg.message_id,
-      `Couldn't finalize sortition (the randomness request may not be fulfilled yet): ${err.shortMessage || err.message}`
+      `Couldn't finalize sortition: ${err.shortMessage || err.message}`
     );
   }
 });
@@ -3587,18 +3489,19 @@ bot.command("resolveviaoracle", async (ctx) => {
 
   const id = ctx.match?.trim();
   if (!id || !/^\d+$/.test(id)) {
-    await ctx.reply("Usage: `/resolveviaoracle <id>` — reads the proposal's configured oracle and finalizes automatically.", { parse_mode: "Markdown" });
+    await ctx.reply("Usage: `/resolveviaoracle <id>` — posts Pyth's latest price for the proposal's feed (a small Pyth fee from your wallet), reads it and finalizes.", { parse_mode: "Markdown" });
     return;
   }
 
   const account = await getOrCreateUserAccount(ctx.from.id);
   const client = walletClientFor(account);
-  const statusMsg = await ctx.reply("⏳ Reading the oracle and resolving…");
+  const statusMsg = await ctx.reply("⏳ Posting Pyth's latest price and resolving…");
 
   try {
     await ensureGasFunded(account);
-    await adapter.resolveViaOracle(client, address, id);
-    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `✅ Proposal #${id} resolved via oracle. Use /claimposition ${id} to collect a winning position.`);
+    const { priceUpdate } = await adapter.resolveViaOracle(client, address, id);
+    const posted = priceUpdate?.price != null ? ` Posted Pyth's latest price first: ${priceUpdate.price}.` : "";
+    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `✅ Proposal #${id} resolved via oracle.${posted} Use /claimposition ${id} to collect a winning position.`);
   } catch (err) {
     console.error(err);
     await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `Couldn't resolve: ${err.shortMessage || err.message}`);

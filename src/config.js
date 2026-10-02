@@ -117,16 +117,13 @@ export function sortitionRandomnessSource() {
 }
 
 /**
- * The reusable Switchboard price-feed adapter every Sowellian oracle-
- * track proposal can reference by typing "switchboard" instead of a raw
- * address - one deployment per network, reused across every feed
- * Switchboard covers, since the adapter itself takes the feedId per-call. Genuinely
- * optional and not exclusive with Chainlink - a DAO can use both
- * providers side by side; this just removes the need to paste this one
- * address by hand every time.
+ * The network's PythPriceFeedAdapter (Spaces, src/oracles): what a
+ * Sowellian oracle-track proposal uses when it says oracle=pyth. One
+ * deployment per network serves every Pyth feed - the feed ID is chosen
+ * per proposal.
  */
-export function switchboardOracleAdapter() {
-  return networkEnv(currentNetwork().id, "SWITCHBOARD_ORACLE_ADAPTER");
+export function pythPriceAdapter() {
+  return networkEnv(currentNetwork().id, "PYTH_PRICE_ADAPTER");
 }
 
 /**

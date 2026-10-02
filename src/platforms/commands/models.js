@@ -1,8 +1,7 @@
 import { isAddress, formatEther } from "viem";
 import { walletClient } from "../../config.js";
-import { blocksToDuration } from "../../networks.js";
+import { blocksToDuration, currentNetwork } from "../../networks.js";
 import { resolveDelegationsBehind, queueSweep } from "../../governance/liquid.js";
-import { settleSortitionRandomness } from "../../governance/sortition.js";
 import { isWalletStoreConfigured } from "../../walletStore.js";
 import { VOTE_CHOICES } from "../../display.js";
 import { short } from "../../format.js";
@@ -154,34 +153,14 @@ export const MODEL_COMMANDS = {
     description: "Start a new random council draw",
     fn: "startSortition",
     notSupported: "This DAO uses {model} governance, which has no sortition draw.",
-    done: (ctx, id, { round }) => `✅ Sortition round ${round} started. Once randomness is settled, run \`${ctx.cmd("finalizesortition")}\` to draw the council.`,
+    done: (ctx, id, { round, paid }) =>
+      `✅ Sortition round ${round} started.${paid > 0n ? ` You paid Pyth Entropy's fee (${formatEther(paid)} ${currentNetwork().nativeSymbol}).` : ""} ` +
+      `Entropy usually delivers the randomness within seconds; then \`${ctx.cmd("finalizesortition")}\` draws the council (the keeper does it too, if it's running).`,
   }),
-  settlesortition: {
-    section: "Council",
-    models: ["sortition"],
-    usage: "",
-    description: "Submit the draw's randomness once it's ready",
-    options: [],
-    async run(ctx) {
-      const { address } = requireModel(ctx, "sortition", "This DAO uses {model} governance, which has no randomness to settle.");
-      const { client } = await userClient(ctx);
-      const result = await settleSortitionRandomness(client, address);
-      switch (result.status) {
-        case "no-pending-round":
-          return reply(`No sortition round has been started yet — use \`${ctx.cmd("startsortition")}\` first.`);
-        case "already-settled":
-          return reply(`This round's randomness is already settled. Use \`${ctx.cmd("finalizesortition")}\` to draw the council.`);
-        case "not-ready":
-          return reply(`Not ready yet — Switchboard's minimum settlement delay hasn't passed. Try again in about ${result.readyIn} more second(s).`);
-        default:
-          return reply(`✅ Randomness settled. Use \`${ctx.cmd("finalizesortition")}\` to draw the new council.`);
-      }
-    },
-  },
   finalizesortition: adapterWrite({
     section: "Council",
     models: ["sortition"],
-    description: "Draw the new council once randomness settles",
+    description: "Draw the new council once the randomness arrives",
     fn: "finalizeSortition",
     notSupported: "This DAO uses {model} governance, which has no sortition draw.",
     done: (ctx) => `✅ New council drawn. Use \`${ctx.cmd("council")}\` to see the roster.`,

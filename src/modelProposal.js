@@ -1,5 +1,5 @@
-import { getAddress, isAddress, zeroAddress, zeroHash } from "viem";
-import { switchboardOracleAdapter } from "./config.js";
+import { getAddress, isAddress, parseUnits, zeroAddress, zeroHash } from "viem";
+import { pythPriceAdapter } from "./config.js";
 import { getAdapter } from "./governance/index.js";
 import { parseDuration } from "./integrations/common.js";
 
@@ -15,9 +15,9 @@ import { parseDuration } from "./integrations/common.js";
  * after the action ID:
  *
  *   sowellian        track=human|oracle (default human)
- *                    oracle=<adapter address>|switchboard   (oracle track)
- *                    feed=<0x 32-byte feed ID>               (Switchboard)
- *                    goal=<target value> (default 0 on the human track)
+ *                    oracle=pyth (default) | <adapter address> (oracle track)
+ *                    feed=<Pyth price feed ID>               (oracle track)
+ *                    goal=<price, e.g. 3000> (oracle track; sent as 18 decimals)
  *                    when=min|max (default min: success if >= goal)
  *                    measure=<duration> (default 7d)
  *   decisionMarkets  seed=<DAO tokens> quote=<native amount>  (both required)
@@ -37,7 +37,7 @@ const KEYS = {
 
 /** Usage text for a model's extra settings, or "" for models that need none. */
 export function modelOptionsUsage(model) {
-  if (model === "sowellian") return "[track=human|oracle] [oracle=0x…|switchboard] [feed=0x…] [goal=N] [when=min|max] [measure=7d]";
+  if (model === "sowellian") return "[track=human|oracle] [feed=<Pyth feed ID>] [goal=<price>] [when=min|max] [measure=7d]";
   if (model === "decisionMarkets") return "seed=<DAO tokens> quote=<native amount>";
   return "";
 }
@@ -48,12 +48,12 @@ export function modelOptionsHelp(model) {
     return [
       "*Sowellian settings* (name=value, anywhere after the action ID):",
       "• `track` — human (people resolve it) or oracle (an on-chain metric does) (default human)",
-      "• `oracle` — oracle track: the adapter address from deploychainlinkoracle, or `switchboard`",
-      "• `feed` — Switchboard's 0x… 32-byte feed ID",
-      "• `goal` — the value the result is compared against, in the oracle's own units (default 0 on the human track)",
+      "• `feed` — oracle track: the Pyth price feed ID (0x + 64 hex, from Pyth's price feed list), e.g. ETH/USD",
+      "• `goal` — oracle track: the price it's compared against, e.g. 3000 or 0.95",
+      "• `oracle` — optional: `pyth` (default, this network's Pyth adapter) or an adapter address",
       "• `when` — min: success if the result is at least goal; max: at most (default min)",
       "• `measure` — how long after execution it's measured, e.g. 7d or 12h (default 7d)",
-      "The proposal bond is taken from your wallet when it's submitted.",
+      "The proposal bond is taken from your wallet when it's submitted. At resolution the bot posts Pyth's latest price first (a small Pyth fee, from the resolver's wallet).",
     ];
   }
   if (model === "decisionMarkets") {
@@ -88,13 +88,38 @@ function positiveAmount(text, what) {
   return text;
 }
 
+/**
+ * The oracle a proposal resolves against: "pyth" (the default) means
+ * this network's PythPriceFeedAdapter (PYTH_PRICE_ADAPTER); an address is
+ * taken as given.
+ */
+export function resolveOracleWord(word) {
+  if (word === undefined || String(word).toLowerCase() === "pyth") {
+    const adapter = pythPriceAdapter();
+    if (!adapter) throw new ProposalOptionError("No Pyth price adapter is configured on this bot for this network - ask an admin to set PYTH_PRICE_ADAPTER, or pass oracle=<adapter address>.");
+    return getAddress(adapter);
+  }
+  if (!isAddress(word)) throw new ProposalOptionError("oracle= must be pyth or an adapter address.");
+  return getAddress(word);
+}
+
+/**
+ * An oracle-track goal as the adapter reports values: 18-decimal fixed
+ * point. "3000" or "3000.5" (dollars, for a USD feed) -> 3000.5e18.
+ */
+export function oracleGoalValue(text) {
+  if (!/^-?\d+(\.\d{1,18})?$/.test(String(text))) throw new ProposalOptionError("goal= must be a number, e.g. 3000 or 0.95 (the feed's price; up to 18 decimals).");
+  const negative = String(text).startsWith("-");
+  const value = parseUnits(String(text).replace(/^-/, ""), 18);
+  return negative ? -value : value;
+}
+
 /** The resolution criteria Sowellian's propose() takes, from the settings words. */
 export function sowellianCriteria(options) {
   const track = (options.track ?? "human").toLowerCase();
   if (track !== "human" && track !== "oracle") throw new ProposalOptionError("track= must be human or oracle.");
   const when = (options.when ?? "min").toLowerCase();
   if (when !== "min" && when !== "max") throw new ProposalOptionError("when= must be min (success if the result is at least goal) or max (at most goal).");
-  if (options.goal !== undefined && !/^-?\d+$/.test(options.goal)) throw new ProposalOptionError("goal= must be a whole number in the oracle's own units.");
   let measurementPeriod;
   try {
     measurementPeriod = parseDuration(options.measure, 7 * 86400);
@@ -105,25 +130,18 @@ export function sowellianCriteria(options) {
 
   if (track === "human") {
     if (options.oracle || options.feed) throw new ProposalOptionError("oracle= and feed= only apply with track=oracle.");
+    if (options.goal !== undefined && !/^-?\d+$/.test(options.goal)) throw new ProposalOptionError("On the human track goal= is a whole number (it's only recorded; people decide the outcome).");
     return { resolutionMethod: 1, oracle: zeroAddress, oracleSelector: zeroHash, targetValue: options.goal ?? "0", targetIsMinimum: when === "min", measurementPeriod };
   }
 
-  if (options.goal === undefined) throw new ProposalOptionError("The oracle track needs goal=<value> - what the oracle's reading is compared against.");
-  let oracle = options.oracle;
-  if (!oracle) throw new ProposalOptionError("The oracle track needs oracle=<adapter address> (from /deploychainlinkoracle) or oracle=switchboard.");
-  if (oracle.toLowerCase() === "switchboard") {
-    oracle = switchboardOracleAdapter();
-    if (!oracle) throw new ProposalOptionError("No Switchboard oracle adapter is configured on this bot for this network - pass oracle=<adapter address> instead.");
-    if (!options.feed) throw new ProposalOptionError("Switchboard needs feed=<0x… 32-byte feed ID>.");
-  } else if (!isAddress(oracle)) {
-    throw new ProposalOptionError("oracle= must be an adapter address or the word switchboard.");
-  }
-  if (options.feed !== undefined && !/^0x[0-9a-fA-F]{64}$/.test(options.feed)) throw new ProposalOptionError("feed= must be a 0x-prefixed 32-byte value.");
+  if (!options.feed) throw new ProposalOptionError("The oracle track needs feed=<Pyth price feed ID> (0x + 64 hex, from Pyth's price feed list, e.g. ETH/USD).");
+  if (!/^0x[0-9a-fA-F]{64}$/.test(options.feed)) throw new ProposalOptionError("feed= must be a Pyth price feed ID: 0x followed by 64 hex characters.");
+  if (options.goal === undefined) throw new ProposalOptionError("The oracle track needs goal=<price> - what the feed's price is compared against, e.g. goal=3000.");
   return {
     resolutionMethod: 0,
-    oracle: getAddress(oracle),
-    oracleSelector: options.feed ?? zeroHash,
-    targetValue: options.goal,
+    oracle: resolveOracleWord(options.oracle),
+    oracleSelector: options.feed,
+    targetValue: oracleGoalValue(options.goal),
     targetIsMinimum: when === "min",
     measurementPeriod,
   };
