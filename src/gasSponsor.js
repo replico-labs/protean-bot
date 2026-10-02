@@ -2,6 +2,7 @@ import { formatEther } from "viem";
 import { publicClient, walletClient, operatorAccount } from "./config.js";
 import { currentNetwork } from "./networks.js";
 import { recordGasTopup, isWalletStoreConfigured } from "./walletStore.js";
+import { fitGasLimit } from "./gasLimit.js";
 
 /**
  * Gas sponsorship: the operator wallet pays for users' gas, never for the
@@ -122,6 +123,19 @@ export async function estimateWithFunding(client, contractParams) {
   }
 }
 
+/** estimateGas for a raw transaction (e.g. a contract deployment), funding and retrying the same way. */
+export async function estimateTxWithFunding(client, tx, fundingGas = ESTIMATE_FUNDING_GAS) {
+  const params = { ...tx, account: client.account };
+  try {
+    return await publicClient.estimateGas(params);
+  } catch (err) {
+    if (!unaffordable(err) || isOperator(client.account.address)) throw err;
+    const { gasCost } = await feesFor(fundingGas);
+    await ensureCanAfford(client.account.address, gasCost, tx.value ?? 0n);
+    return publicClient.estimateGas(params);
+  }
+}
+
 /** Current fees, and the up-front cost of a transaction with this gas limit at them. */
 export async function feesFor(gasLimit) {
   const fees = await publicClient.estimateFeesPerGas();
@@ -133,15 +147,11 @@ export async function feesFor(gasLimit) {
  * amount) first. Used by tips and transfers.
  */
 export async function sendNativeSponsored(client, to, value) {
-  let gasLimit;
-  try {
-    gasLimit = await publicClient.estimateGas({ account: client.account, to, value });
-  } catch (err) {
-    if (!unaffordable(err)) throw err;
-    const { gasCost } = await feesFor(ESTIMATE_FUNDING_GAS);
-    await ensureCanAfford(client.account.address, gasCost, value);
-    gasLimit = await publicClient.estimateGas({ account: client.account, to, value });
-  }
+  const tx = { account: client.account, to, value };
+  const estimate = await estimateTxWithFunding(client, { to, value });
+  // A plain transfer to a wallet is exactly 21000; a contract recipient
+  // runs code, so the limit is proven by simulation like any other call.
+  const gasLimit = await fitGasLimit(publicClient, tx, estimate);
   const { fees, gasCost } = await feesFor(gasLimit);
   await ensureCanAfford(client.account.address, gasCost, value);
   return client.sendTransaction({ to, value, gas: gasLimit, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas });

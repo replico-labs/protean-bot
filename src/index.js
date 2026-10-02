@@ -2,7 +2,11 @@ import { Bot } from "grammy";
 import { run, sequentialize } from "@grammyjs/runner";
 import { isAddress, getAddress, parseEther, formatUnits } from "viem";
 import { BOT_TOKEN, publicClient, sortitionRandomnessSource, switchboardOracleAdapter, walletClient } from "./config.js";
-import { currentNetwork, explorerAddressLine, isNativeTokenWord, runOnNetwork, takeNetworkArg, describeNetwork, ENABLED_NETWORKS, getNetwork } from "./networks.js";
+import { fitGasLimit } from "./gasLimit.js";
+import { takeModelOptions, checkModelOptions, modelOptionsUsage, proposeForModel, proposalNextStep } from "./modelProposal.js";
+import { rewardComputedText, withdrawnText } from "./opportunityMarket/payoutText.js";
+import { marketSendMode, sendFromMarketWallet, marketWalletBalances } from "./opportunityMarket/send.js";
+import { currentNetwork, explorerAddressLine, isNativeTokenWord, runOnNetwork, takeNetworkArg, describeNetwork, ENABLED_NETWORKS, getNetwork, blocksToDuration } from "./networks.js";
 import {
   registerChat,
   getChatDAO,
@@ -116,6 +120,38 @@ bot.use(sequentialize((ctx) => ctx.from?.id?.toString()));
 bot.use((ctx, next) => runOnNetwork(ctx.chat ? getChatNetwork(ctx.chat.id) : currentNetwork().id, next));
 
 /**
+ * Creating, linking and unlinking a group's DAO or market decides what
+ * the whole group operates, so only the group's owner and admins may do
+ * it. Registered before the commands themselves, so it runs first and
+ * stops the update there. In a DM the user is the only member, so it's
+ * allowed; an anonymous admin (posting as the group) counts as an admin.
+ */
+const ADMIN_ONLY_COMMANDS = ["createdao", "createboarddao", "register", "unregister", "createmarket", "registermarket", "unregistermarket"];
+
+async function isGroupAdmin(ctx) {
+  if (ctx.chat?.type === "private") return true;
+  if (ctx.message?.sender_chat?.id === ctx.chat?.id) return true;
+  const member = await ctx.api.getChatMember(ctx.chat.id, ctx.from.id);
+  return member.status === "creator" || member.status === "administrator";
+}
+
+bot.command(ADMIN_ONLY_COMMANDS, async (ctx, next) => {
+  let admin;
+  try {
+    admin = await isGroupAdmin(ctx);
+  } catch (err) {
+    console.error("[admin check]", err);
+    await ctx.reply("Couldn't confirm you're an admin of this group - try again in a moment.");
+    return;
+  }
+  if (!admin) {
+    await ctx.reply("Only this group's owner or admins can create, register or unregister a DAO or market here.");
+    return;
+  }
+  return next();
+});
+
+/**
  * Tracks users mid-way through a privacy-preserving /back flow: they
  * ran bare `/back` in a group, and the bot is now waiting for their
  * next DM to contain the actual opportunity id and amount. Keyed by
@@ -201,6 +237,9 @@ async function replyChunked(ctx, lines, options = {}) {
     await ctx.reply(chunk.join("\n"), options);
   }
 }
+
+/** Telegram's command syntax, for text shared with Discord/Slack (which pass their own). */
+const TG_CMD = (name) => `/${name}`;
 
 async function deliverPrivately(ctx, statusMsg, sensitiveMessage, groupAckText) {
   try {
@@ -341,7 +380,8 @@ const MODEL_HELP_BLOCKS = {
   ],
   sowellian: [
     "/deploychainlinkoracle `<chainlinkFeedAddress>` — one-time setup: wraps a real Chainlink price feed so oracle-track proposals can check it",
-    "/proposecriteria `<target> <value> <data> <oracle|human> <oracleAddress|switchboard|-> <oracleSelector|-> <targetValue> <min|max> <measurementPeriod> <description>` — propose an action with a fixed, upfront success condition — checked automatically by an oracle, or resolved by a human afterward",
+    "/proposeaction `<actionId> <args...> [track=human|oracle] [oracle=…] [feed=…] [goal=N] [when=min|max] [measure=7d] <description>` — the easy way: the bot builds and checks the calls from the action library (see /listactions, /actioninfo) and adds your success condition",
+    "/proposecriteria `<target> <value> <data> <oracle|human> <oracleAddress|switchboard|-> <oracleSelector|-> <targetValue> <min|max> <measurementPeriod> <description>` — advanced: propose a raw call with a fixed, upfront success condition — checked automatically by an oracle, or resolved by a human afterward",
     "/castapprovalvote `<id> for|against|abstain` — vote on whether this proposal is even worth opening up for betting",
     "/finalizeapproval `<id>` — close the approval vote and open the betting market if it passed",
     "/takeposition `<id> yes|no <amount>` — put real money behind whether you think the outcome will succeed or fail",
@@ -355,7 +395,8 @@ const MODEL_HELP_BLOCKS = {
     "/claimposition `<id>` — collect your payout if you backed the side that actually won",
   ],
   decisionMarkets: [
-    "/proposemarket `<target> <value> <data> <baseSeedAmount> <quoteSeedAmountMON> <description>` — propose an action and seed two live markets (pass vs. fail) that will decide its fate by price",
+    "/proposeaction `<actionId> <args...> seed=<tokens> quote=<native> <description>` — the easy way: the bot builds and checks the calls from the action library (see /listactions, /actioninfo) and seeds both markets",
+    "/proposemarket `<target> <value> <data> <baseSeedAmount> <quoteSeedAmountMON> <description>` — propose a raw call and seed two live markets (pass vs. fail) that will decide its fate by price",
     "/split `<id> base|quote <amount>` — convert real tokens into matched pass/fail conditional tokens, so you have something to actually trade",
     "/trade `<id> pass|fail base|quote <amountIn> <minAmountOut>` — put your belief where your money is: trade on whichever side you think will win",
     "/merge `<id> base|quote <amount>` — changed your mind before resolution? Combine matched conditional tokens back into the real asset",
@@ -371,11 +412,11 @@ const MODEL_HELP_BLOCKS = {
 bot.command("help", async (ctx) => {
   const lines = [
     "*Setup*",
-    "/createdao `<name> <symbol> <initialSupply> <maxSupply> [model] [network]` — the main \"spin up a new DAO\" command: deploys a token, treasury, and governance contract, all linked to this chat. Models: " + SUPPORTED_MODELS.filter((m) => m !== "board").join(", "),
-    "/createboarddao `<name> <signer1> <signer2> ... [network]` — for a Board (multisig) DAO specifically — no token at all, so it's a separate command",
+    "/createdao `<name> <symbol> <initialSupply> <maxSupply> [model] [network]` — the main \"spin up a new DAO\" command: deploys a token, treasury, and governance contract, all linked to this chat (group owner/admins). Models: " + SUPPORTED_MODELS.filter((m) => m !== "board").join(", "),
+    "/createboarddao `<name> <signer1> <signer2> ... [network]` — for a Board (multisig) DAO specifically — no token at all, so it's a separate command (group owner/admins)",
     "/network — which chain this chat's DAO is on, and which networks this bot supports",
-    "/register `<governance_address> [model] [network]` — already have a DAO deployed elsewhere? Link it to this chat instead of creating a new one (admin)",
-    "/unregister — unlink whatever DAO is connected here (admin) — doesn't touch the DAO itself, just this chat's connection to it",
+    "/register `<governance_address> [model] [network]` — already have a DAO deployed elsewhere? Link it to this chat instead of creating a new one (group owner/admins)",
+    "/unregister — unlink whatever DAO is connected here (group owner/admins) — doesn't touch the DAO itself, just this chat's connection to it",
     "/deploywelcomedistributor `<amountPerClaim> <distributionCap>` — solves \"everyone's tokens are stuck in the operator wallet\": deploys a contract new members can claim from (creator only)",
     "/deploynftwrapper — one per DAO: deploys the contract that holds this DAO's NFTs and lists them on marketplaces like OpenSea — NFTs go here, never to the treasury (creator only)",
     "/setdistributor `<address>` — link an already-deployed welcome distributor so /claim actually works (admin)",
@@ -430,9 +471,10 @@ bot.command("help", async (ctx) => {
       "/mybalance — check your own confidential balance, sent to you privately",
       "/mybet `<index>` — decrypt one of your own bets (0 is your first), sent to you privately",
       "/reclaimstake — get your stake back (after a cancelled market), sent to you privately",
-      "/computereward — work out your share of the reward pool once resolved, sent to you privately",
-      "/withdraw — withdraw your reclaimed stake, sent to you privately",
-      "/withdrawreward — withdraw your computed reward, sent to you privately",
+      "/computereward — work out your share of the reward pool once resolved; the amount is sent to you privately",
+      "/withdraw — withdraw your reclaimed stake to your wallet; the amount is sent to you privately",
+      "/withdrawreward — withdraw your computed reward to your wallet; the amount is sent to you privately",
+      "/send `<amount|all> <recipient> [ETH]` — send the market's token (your withdrawn stake or reward) or Sepolia ETH from your wallet to anyone. In a group with a DAO too, add `market` to send the market's token",
       "/fundrewardpool `<amount>` — deployer only: funds what backers of the winning opportunity get paid from",
       "/resolve `<winningOpportunityId>` — deployer only: declares which opportunity turned out to be real",
       "/cancelmarket — deployer only: cancels the market so everyone can reclaim their stake",
@@ -443,7 +485,7 @@ bot.command("help", async (ctx) => {
   } else {
     lines.push(
       "",
-      "_No Opportunity Market linked - /registermarket `<address>` or /createmarket `<underlyingToken>` to link one, /unregistermarket to unlink (deployer only)._"
+      "_No Opportunity Market linked - /registermarket `<address>` or /createmarket `<underlyingToken>` to link one (group owner/admins), /unregistermarket to unlink (group admins only)._"
     );
   }
 
@@ -1231,7 +1273,10 @@ bot.command("migratewallet", async (ctx) => {
       return;
     }
 
-    const GAS_RESERVE = parseEther("0.005"); // matches this bot's MIN_GAS_BALANCE convention elsewhere
+    // Sweep everything but the transfer's own up-front gas cost (limit x max fee), sized like every other send.
+    const sweepGas = await fitGasLimit(publicClient, { account: oldAccount, to: newAddress, value: 1n }, 21_000n);
+    const sweepFees = await publicClient.estimateFeesPerGas();
+    const GAS_RESERVE = sweepGas * sweepFees.maxFeePerGas;
     if (nativeBalance <= GAS_RESERVE) {
       await ctx.api.editMessageText(
         ctx.chat.id,
@@ -1247,7 +1292,13 @@ bot.command("migratewallet", async (ctx) => {
     const sendAmount = nativeBalance - GAS_RESERVE;
 
     await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, "⏳ Moving your balance to the new wallet…");
-    const hash = await oldClient.sendTransaction({ to: newAddress, value: sendAmount });
+    const hash = await oldClient.sendTransaction({
+      to: newAddress,
+      value: sendAmount,
+      gas: sweepGas,
+      maxFeePerGas: sweepFees.maxFeePerGas,
+      maxPriorityFeePerGas: sweepFees.maxPriorityFeePerGas,
+    });
     await publicClient.waitForTransactionReceipt({ hash });
 
     await ctx.api.editMessageText(
@@ -1472,6 +1523,51 @@ bot.command("tip", async (ctx) => {
 //////////////////////////////////////////////////////////////*/
 
 bot.command("send", async (ctx) => {
+  const parts = (ctx.match?.trim() ?? "").split(/\s+/).filter(Boolean);
+  const [amountRaw, recipientRaw, tokenRef] = parts;
+
+  // An Opportunity Market group (Sepolia): send the market's token - e.g. a
+  // withdrawn stake or reward - or Sepolia ETH, from the user's own wallet.
+  const market = getChatMarket(ctx.chat.id);
+  let marketMode;
+  try {
+    marketMode = await marketSendMode(market, Boolean(getChatDAO(ctx.chat.id)), tokenRef, TG_CMD);
+  } catch (err) {
+    await ctx.reply(err.userFacing ? err.message : `Couldn't read this group's market: ${err.shortMessage || err.message}`, { parse_mode: "Markdown" });
+    return;
+  }
+  if (marketMode) {
+    if (!isWalletStoreConfigured()) {
+      await ctx.reply("Wallets aren't set up on this bot yet - ask an admin.");
+      return;
+    }
+    const all = String(amountRaw).toLowerCase() === "all";
+    if (!amountRaw || (!all && !(Number(amountRaw) > 0)) || (all && marketMode.native) || !recipientRaw || !isAddress(recipientRaw)) {
+      await ctx.reply(
+        "Usage: `/send <amount|all> <recipientAddress>` sends this market's token (a withdrawn stake or reward) on Sepolia. Add `ETH` to send Sepolia ETH instead (a number, not all). Your wallet pays its own Sepolia gas.",
+        { parse_mode: "Markdown" }
+      );
+      return;
+    }
+    const account = await getOrCreateUserAccount(ctx.from.id);
+    const client = opportunityWalletClientFor(account);
+    const statusMsg = await ctx.reply("⏳ Sending on Sepolia…");
+    try {
+      const { hash, sent } = await sendFromMarketWallet(client, market, recipientRaw, amountRaw, marketMode);
+      const left = await marketWalletBalances(market, account.address);
+      await ctx.api.editMessageText(
+        ctx.chat.id,
+        statusMsg.message_id,
+        `✅ Sent ${sent} to \`${short(recipientRaw)}\` on Sepolia.\nTx: \`${short(hash)}\`\nYou now hold ${left.token} and ${left.eth}.`,
+        { parse_mode: "Markdown" }
+      );
+    } catch (err) {
+      console.error(err);
+      await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `Couldn't send that: ${err.shortMessage || err.message}`);
+    }
+    return;
+  }
+
   const address = await requireDAO(ctx);
   if (!address) return;
 
@@ -1479,9 +1575,6 @@ bot.command("send", async (ctx) => {
     await ctx.reply("Wallets aren't set up on this bot yet - ask an admin.");
     return;
   }
-
-  const parts = (ctx.match?.trim() ?? "").split(/\s+/).filter(Boolean);
-  const [amountRaw, recipientRaw, tokenRef] = parts;
 
   if (!amountRaw || Number.isNaN(Number(amountRaw)) || Number(amountRaw) <= 0 || !recipientRaw || !isAddress(recipientRaw)) {
     await ctx.reply(
@@ -1929,6 +2022,7 @@ bot.command("listactions", async (ctx) => {
   lines.push(...integrationListLines(getChatNetwork(ctx.chat.id)));
 
   lines.push("", "Use `/proposeaction <actionId> <arg1> <arg2> ... <description>` to propose one, and `/actioninfo <actionId>` to see what any of them does and what its arguments mean.");
+  if (modelOptionsUsage(model)) lines.push(`This ${model} DAO also needs, anywhere after the action ID: \`${modelOptionsUsage(model)}\`.`);
   await ctx.reply(lines.join("\n"), { parse_mode: "Markdown" });
 });
 
@@ -1970,12 +2064,21 @@ bot.command("proposeaction", async (ctx) => {
   }
 
   const { count: argCount, names: argNameList } = actionArgSpec(action);
-  const actionArgs = rest.slice(0, argCount);
-  const description = rest.slice(argCount).join(" ");
+  // Sowellian / Decision Markets settings (name=value) can go anywhere after the action ID.
+  const { options: modelOptions, rest: actionWords } = takeModelOptions(model, rest);
+  const actionArgs = actionWords.slice(0, argCount);
+  const description = actionWords.slice(argCount).join(" ");
 
   if (actionArgs.length !== argCount || !description) {
     const argNames = argNameList.join(" ");
-    await ctx.reply(`Usage: \`/proposeaction ${actionId} ${argNames} <description>\``, { parse_mode: "Markdown" });
+    const extra = modelOptionsUsage(model);
+    await ctx.reply(`Usage: \`/proposeaction ${actionId} ${argNames}${extra ? ` ${extra}` : ""} <description>\``, { parse_mode: "Markdown" });
+    return;
+  }
+  try {
+    checkModelOptions(model, modelOptions);
+  } catch (err) {
+    await ctx.reply(`${err.message}\nUsage: \`/proposeaction ${actionId} ${argNameList.join(" ")} ${modelOptionsUsage(model)} <description>\``, { parse_mode: "Markdown" });
     return;
   }
 
@@ -1995,14 +2098,13 @@ bot.command("proposeaction", async (ctx) => {
     });
 
     await ensureGasFunded(account, true);
-    const adapter = getAdapter(model);
     const actions = [{ target, value: 0n, data }];
-    const { proposalId } = await adapter.propose(client, address, actions, description);
+    const { proposalId } = await proposeForModel({ model, client, governanceAddress: address, actions, description, options: modelOptions });
 
     await ctx.api.editMessageText(
       ctx.chat.id,
       statusMsg.message_id,
-      `✅ Proposal #${proposalId} created via \`${actionId}\`.\n\nUse /proposal ${proposalId} to check on it, or /vote ${proposalId} for|against|abstain once voting opens.`,
+      `✅ Proposal #${proposalId} created via \`${actionId}\`.\n\n${proposalNextStep(model, proposalId, TG_CMD)}`,
       { parse_mode: "Markdown" }
     );
   } catch (err) {
@@ -2012,10 +2114,14 @@ bot.command("proposeaction", async (ctx) => {
 });
 
 /** /proposeaction for an external-protocol action (src/integrations): several Treasury calls in one proposal. */
-async function proposeIntegrationTelegram(ctx, address, actionId, words) {
+async function proposeIntegrationTelegram(ctx, address, actionId, allWords) {
   const model = getChatModel(ctx.chat.id);
-  if (model === "sowellian" || model === "decisionMarkets") {
-    await ctx.reply(`${model} proposals need extra parameters - use /proposecriteria or /proposewithseed with the calls from /actioninfo instead.`);
+  // Sowellian / Decision Markets settings come out first; the rest is the action's own.
+  const { options: modelOptions, rest: words } = takeModelOptions(model, allWords);
+  try {
+    checkModelOptions(model, modelOptions);
+  } catch (err) {
+    await ctx.reply(`${err.message}\nUsage: \`/proposeaction ${actionId} ${integrationUsage(getIntegrationAction(actionId))} ${modelOptionsUsage(model)} <description>\``, { parse_mode: "Markdown" });
     return;
   }
   const statusMsg = await ctx.reply("⏳ Checking the protocol and encoding the proposal…");
@@ -2031,16 +2137,17 @@ async function proposeIntegrationTelegram(ctx, address, actionId, words) {
     });
     if (!description) {
       const integration = getIntegrationAction(actionId);
-      throw new Error(`Add a description at the end. Usage: /proposeaction ${actionId} ${integrationUsage(integration)} <description>`);
+      const extra = modelOptionsUsage(model);
+      throw new Error(`Add a description at the end. Usage: /proposeaction ${actionId} ${integrationUsage(integration)}${extra ? ` ${extra}` : ""} <description>`);
     }
     const account = await getOrCreateUserAccount(ctx.from.id);
     const client = walletClientFor(account);
     await ensureGasFunded(account, true);
-    const { proposalId } = await getAdapter(model).propose(client, address, actions, description);
+    const { proposalId } = await proposeForModel({ model, client, governanceAddress: address, actions, description, options: modelOptions });
     await ctx.api.editMessageText(
       ctx.chat.id,
       statusMsg.message_id,
-      `✅ Proposal #${proposalId} created via \`${actionId}\` (${actions.length} step${actions.length === 1 ? "" : "s"}).\n\n${summary}\n\nUse /proposal ${proposalId} to check on it.`,
+      `✅ Proposal #${proposalId} created via \`${actionId}\` (${actions.length} step${actions.length === 1 ? "" : "s"}).\n\n${summary}\n\n${proposalNextStep(model, proposalId, TG_CMD)}`,
       { parse_mode: "Markdown" }
     );
   } catch (err) {
@@ -3048,7 +3155,9 @@ bot.command("council", async (ctx) => {
   try {
     const council = await adapter.getCouncil(address);
     const lines = council.map((addr, i) => `${i + 1}. \`${short(addr)}\``);
-    await ctx.reply(`*Current council* (${council.length}):\n${lines.join("\n")}`, { parse_mode: "Markdown" });
+    // Delegate also says where the election cycle stands (sortition has no elections).
+    const status = typeof adapter.electionStatusText === "function" ? `\n\n${await adapter.electionStatusText(address)}` : "";
+    await ctx.reply(`*Current council* (${council.length}):\n${lines.join("\n")}${status}`, { parse_mode: "Markdown" });
   } catch (err) {
     console.error(err);
     await ctx.reply("Couldn't read the council.");
@@ -3081,11 +3190,14 @@ bot.command("startelection", async (ctx) => {
 
   try {
     await ensureGasFunded(account);
-    const { electionId } = await adapter.startElection(client, address);
+    const { electionId, election } = await adapter.startElection(client, address);
     await ctx.api.editMessageText(
       ctx.chat.id,
       statusMsg.message_id,
-      `✅ Election #${electionId} opened. Candidates: /declarecandidacy ${electionId}. Voters: /voteinelection ${electionId} once candidacy closes.`
+      `✅ Election #${electionId} opened.\n` +
+        `Candidates: /declarecandidacy ${electionId} within ${blocksToDuration(election.candidacyDeadline - election.snapshotBlock)}.\n` +
+        `Voters: /voteinelection ${electionId} <candidates...> after that, for ${blocksToDuration(election.votingEndBlock - election.candidacyDeadline)}.\n` +
+        "Only tokens staked before this election opened count."
     );
   } catch (err) {
     console.error(err);
@@ -3161,7 +3273,7 @@ bot.command("voteinelection", async (ctx) => {
 
   try {
     await ensureGasFunded(account);
-    const { weight } = await adapter.voteInElection(client, address, electionId, candidates);
+    const { weight, candidates: counted } = await adapter.voteInElection(client, address, electionId, candidates);
 
     const weightNote =
       weight === 0n
@@ -3171,7 +3283,7 @@ bot.command("voteinelection", async (ctx) => {
     await ctx.api.editMessageText(
       ctx.chat.id,
       statusMsg.message_id,
-      `✅ Voted for ${candidates.length} candidate(s) in election #${electionId}.${weightNote}`,
+      `✅ Voted for ${counted.length} candidate(s) in election #${electionId}.${weightNote}`,
       { parse_mode: "Markdown" }
     );
   } catch (err) {
@@ -4216,19 +4328,7 @@ bot.command("unregistermarket", async (ctx) => {
     return;
   }
 
-  try {
-    const deployer = await opportunityMarket.getDeployer(address);
-    const callerAddress = isWalletStoreConfigured() ? await getUserAddress(ctx.from.id) : null;
-    if (!callerAddress || getAddress(callerAddress) !== getAddress(deployer)) {
-      await ctx.reply("Only this market's deployer can unregister it.");
-      return;
-    }
-  } catch (err) {
-    console.error(err);
-    await ctx.reply("Couldn't confirm you're the deployer - try again in a moment.");
-    return;
-  }
-
+  // Group owners and admins only (checked before this handler runs).
   unregisterMarket(ctx.chat.id);
   await ctx.reply("Unlinked. Run /registermarket or /createmarket to link one again.");
 });
@@ -4626,7 +4726,7 @@ bot.command("computereward", async (ctx) => {
 
   try {
     await opportunityMarket.computeReward(client, address);
-    await deliverPrivately(ctx, statusMsg, "✅ Reward computed. Use /withdrawreward to collect it.", "Confirmed your reward computation.");
+    await deliverPrivately(ctx, statusMsg, await rewardComputedText(client, address, TG_CMD), "Reward computed - I've sent you the amount privately.");
   } catch (err) {
     console.error(err);
     await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `Couldn't compute reward: ${err.shortMessage || err.message}`);
@@ -4667,8 +4767,8 @@ bot.command("withdraw", async (ctx) => {
   const statusMsg = await ctx.reply("⏳ Withdrawing your stake — this takes a moment…");
 
   try {
-    await revealAndCompleteWithdrawal(client, address, "stake");
-    await deliverPrivately(ctx, statusMsg, "✅ Stake withdrawn.", "Confirmed your withdrawal.");
+    const { amount } = await revealAndCompleteWithdrawal(client, address, "stake");
+    await deliverPrivately(ctx, statusMsg, await withdrawnText(address, "stake", amount, account.address, TG_CMD), "Stake withdrawn - I've sent you the amount privately.");
   } catch (err) {
     console.error(err);
     await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `Couldn't withdraw: ${err.shortMessage || err.message}`);
@@ -4688,8 +4788,8 @@ bot.command("withdrawreward", async (ctx) => {
   const statusMsg = await ctx.reply("⏳ Withdrawing your reward — this takes a moment…");
 
   try {
-    await revealAndCompleteWithdrawal(client, address, "reward");
-    await deliverPrivately(ctx, statusMsg, "✅ Reward withdrawn.", "Confirmed your reward withdrawal.");
+    const { amount } = await revealAndCompleteWithdrawal(client, address, "reward");
+    await deliverPrivately(ctx, statusMsg, await withdrawnText(address, "reward", amount, account.address, TG_CMD), "Reward withdrawn - I've sent you the amount privately.");
   } catch (err) {
     console.error(err);
     await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `Couldn't withdraw: ${err.shortMessage || err.message}`);

@@ -1,5 +1,6 @@
 import { isAddress, formatEther } from "viem";
 import { walletClient } from "../../config.js";
+import { blocksToDuration } from "../../networks.js";
 import { resolveDelegationsBehind, queueSweep } from "../../governance/liquid.js";
 import { settleSortitionRandomness } from "../../governance/sortition.js";
 import { isWalletStoreConfigured } from "../../walletStore.js";
@@ -196,7 +197,12 @@ export const MODEL_COMMANDS = {
     async run(ctx) {
       const { address, adapter } = requireAdapterFn(ctx, "getCouncil", "This DAO uses {model} governance, which has no council.");
       const council = await adapter.getCouncil(address);
-      return reply(`*Current council* (${council.length}):\n${council.map((a, i) => `${i + 1}. \`${short(a)}\``).join("\n")}`);
+      const lines = [`*Current council* (${council.length}):`, ...council.map((a, i) => `${i + 1}. \`${short(a)}\``)];
+      if (typeof adapter.electionStatusText === "function") {
+        const status = await adapter.electionStatusText(address);
+        lines.push("", status.replace(/\/([a-z]+)\b/g, (m, n) => ctx.cmd(n)));
+      }
+      return reply(lines.join("\n"));
     },
   },
 
@@ -207,8 +213,10 @@ export const MODEL_COMMANDS = {
     description: "Open a council election",
     fn: "startElection",
     notSupported: "This DAO uses {model} governance, which has no elections.",
-    done: (ctx, id, { electionId }) =>
-      `✅ Election #${electionId} opened. Candidates: \`${ctx.cmd("declarecandidacy")} ${electionId}\`. Voters: \`${ctx.cmd("voteinelection")} ${electionId} <candidates...>\` once candidacy closes.`,
+    done: (ctx, id, { electionId, election }) =>
+      `✅ Election #${electionId} opened. Candidates: \`${ctx.cmd("declarecandidacy")} ${electionId}\` within ${blocksToDuration(election.candidacyDeadline - election.snapshotBlock)}. ` +
+      `Voters: \`${ctx.cmd("voteinelection")} ${electionId} <candidates...>\` after that, for ${blocksToDuration(election.votingEndBlock - election.candidacyDeadline)}. ` +
+      `Only tokens staked before this election opened count.`,
   }),
   declarecandidacy: adapterWrite({
     section: "Council",
@@ -235,8 +243,8 @@ export const MODEL_COMMANDS = {
         throw new UserError(`Usage: \`${ctx.cmd("voteinelection")} <electionId> <candidate1> [candidate2] ...\``);
       }
       const { client } = await userClient(ctx);
-      const { weight } = await adapter.voteInElection(client, address, electionId, candidates);
-      return reply(`✅ Voted for ${candidates.length} candidate(s) in election #${electionId}.${weightNote(weight, "this election's snapshot block")}`);
+      const { weight, candidates: counted } = await adapter.voteInElection(client, address, electionId, candidates);
+      return reply(`✅ Voted for ${counted.length} candidate(s) in election #${electionId}.${weightNote(weight, "this election's snapshot block")}`);
     },
   },
   finalizeelection: adapterWrite({

@@ -4,11 +4,10 @@ import * as opportunityMarket from "../../opportunityMarket/market.js";
 import { back as opportunityBack } from "../../opportunityMarket/encryptedBet.js";
 import { getBalance, getBet, getAllBets, getMarketAnalytics } from "../../opportunityMarket/decrypt.js";
 import { revealAndCompleteWinningTotal, revealAndCompleteWithdrawal } from "../../opportunityMarket/publicReveal.js";
-import { getUserAddress } from "../../walletResolver.js";
-import { isWalletStoreConfigured } from "../../walletStore.js";
 import { short } from "../../format.js";
 import { formatMarketAnalytics } from "../../opportunityMarket/analyticsText.js";
-import { UserError, reply, privateReply, requireMarket, parseId, opportunityClient, NO_WALLETS } from "../helpers.js";
+import { rewardComputedText, withdrawnText } from "../../opportunityMarket/payoutText.js";
+import { UserError, reply, privateReply, requireMarket, parseId, opportunityClient } from "../helpers.js";
 
 /**
  * Opportunity Markets (Sepolia, Zama FHE) - ported from index.js.
@@ -35,6 +34,23 @@ function simpleMarketWrite({ usage, description, options = [], action, done, pri
       const { client } = await opportunityClient(ctx);
       await action(ctx, client, address);
       return privateResult ? privateReply(done(ctx)) : reply(done(ctx));
+    },
+  };
+}
+
+/** /withdraw and /withdrawreward: pay out, then say exactly how much arrived and how to send it on. */
+function withdrawal(kind, description) {
+  return {
+    section: MARKET,
+    usage: "",
+    description,
+    options: [],
+    ephemeralByDefault: true,
+    async run(ctx) {
+      const address = requireMarket(ctx);
+      const { account, client } = await opportunityClient(ctx);
+      const { amount } = await revealAndCompleteWithdrawal(client, address, kind);
+      return privateReply(await withdrawnText(address, kind, amount, account.address, ctx.cmd));
     },
   };
 }
@@ -70,15 +86,12 @@ export const OPPORTUNITY_COMMANDS = {
   unregistermarket: {
     section: MARKET,
     usage: "",
-    description: "Unlink the market (its deployer only)",
+    description: "Unlink the market (channel owners/admins)",
     options: [],
     async run(ctx) {
+      // Owners/admins only - enforced by runCommand (ADMIN_COMMANDS).
       const address = getChatMarket(ctx.chatId, ctx.platform);
       if (!address) throw new UserError("No market is linked here.");
-      if (!isWalletStoreConfigured()) throw new UserError(NO_WALLETS);
-      const deployer = await opportunityMarket.getDeployer(address);
-      const caller = await getUserAddress(ctx.userId, ctx.platform).catch(() => null);
-      if (!caller || getAddress(caller) !== getAddress(deployer)) throw new UserError("Only this market's deployer can unregister it.");
       unregisterMarket(ctx.chatId, ctx.platform);
       return reply(`Unlinked. Run \`${ctx.cmd("registermarket")}\` or \`${ctx.cmd("createmarket")}\` to link one again.`);
     },
@@ -258,27 +271,20 @@ export const OPPORTUNITY_COMMANDS = {
     done: () => "✅ Stake reclaimed.",
   }),
 
-  computereward: simpleMarketWrite({
+  computereward: {
+    section: MARKET,
     usage: "",
-    description: "Work out your reward share (private)",
-    privateResult: true,
-    action: (ctx, client, address) => opportunityMarket.computeReward(client, address),
-    done: (ctx) => `✅ Reward computed. Use \`${ctx.cmd("withdrawreward")}\` to collect it.`,
-  }),
+    description: "Work out your reward share and see the amount (private)",
+    options: [],
+    ephemeralByDefault: true,
+    async run(ctx) {
+      const address = requireMarket(ctx);
+      const { client } = await opportunityClient(ctx);
+      await opportunityMarket.computeReward(client, address);
+      return privateReply(await rewardComputedText(client, address, ctx.cmd));
+    },
+  },
 
-  withdraw: simpleMarketWrite({
-    usage: "",
-    description: "Withdraw your reclaimed stake (private)",
-    privateResult: true,
-    action: (ctx, client, address) => revealAndCompleteWithdrawal(client, address, "stake"),
-    done: () => "✅ Stake withdrawn.",
-  }),
-
-  withdrawreward: simpleMarketWrite({
-    usage: "",
-    description: "Withdraw your computed reward (private)",
-    privateResult: true,
-    action: (ctx, client, address) => revealAndCompleteWithdrawal(client, address, "reward"),
-    done: () => "✅ Reward withdrawn.",
-  }),
+  withdraw: withdrawal("stake", "Withdraw your reclaimed stake and see the amount (private)"),
+  withdrawreward: withdrawal("reward", "Withdraw your computed reward and see the amount (private)"),
 };

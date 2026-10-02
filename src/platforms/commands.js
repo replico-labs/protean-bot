@@ -27,6 +27,7 @@ export { UserError };
  *   named     optional { optionName: rawString } for platforms with separate
  *             fields per option (Discord), used where word boundaries matter
  *   isAdmin   true/false if the platform can tell, undefined if it can't
+ *   isDirect  true in a one-to-one DM (no channel admins to defer to)
  *   cmd(name) how this platform spells a command, for usage hints
  *
  * Replies use Telegram-style markdown (*bold*, `code`); Discord converts
@@ -124,6 +125,14 @@ export const COMMANDS = {
 };
 
 /**
+ * Creating, linking and unlinking a channel's DAO or market decides what
+ * the whole channel operates, so only owners and admins may run these:
+ * Discord's Manage Server permission, Slack's workspace admins and owners
+ * (ctx.isAdmin). A Slack DM (ctx.isDirect) has no one else to protect.
+ */
+export const ADMIN_COMMANDS = new Set(["createdao", "createboarddao", "register", "unregister", "createmarket", "registermarket", "unregistermarket"]);
+
+/**
  * Runs one command and always returns a reply - never throws. UserErrors
  * are shown as-is; chain errors show viem's short message; anything else
  * is logged and reported generically. Errors are always private.
@@ -131,11 +140,22 @@ export const COMMANDS = {
 export async function runCommand(name, ctx) {
   const command = COMMANDS[name];
   if (!command) return reply(`Unknown command \`${name}\`. Try \`${ctx.cmd("help")}\`.`, { ephemeral: true });
+  if (ADMIN_COMMANDS.has(name) && !ctx.isDirect && ctx.isAdmin !== true) {
+    return reply(
+      ctx.isAdmin === undefined
+        ? "Couldn't confirm you're an admin here - try again in a moment."
+        : `Only this ${ctx.platform === "discord" ? "server's" : "workspace's"} owners or admins can create, register or unregister a DAO or market.`,
+      { ephemeral: true }
+    );
+  }
   try {
     // Every command runs on its channel's network (networks.js).
     return await runOnNetwork(getChatNetwork(ctx.chatId, ctx.platform), () => command.run({ ...ctx, command: name }));
   } catch (err) {
     if (err instanceof UserError) return reply(err.message, { ephemeral: true });
+    // Adapter refusals (e.g. delegate.js's ElectionError) name commands
+    // Telegram-style; show them with this platform's command syntax.
+    if (err?.userFacing) return reply(err.message.replace(/\/([a-z]+)\b/g, (m, n) => (COMMANDS[n] ? ctx.cmd(n) : m)), { ephemeral: true });
     console.error(`[${ctx.platform}] ${name} failed:`, err);
     // viem's shortMessage says only "reverted"; the decoded custom error
     // (e.g. AlreadyConfirmed) is what actually tells the user why.

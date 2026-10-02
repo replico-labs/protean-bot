@@ -1,13 +1,14 @@
 import { isAddress, getAddress, parseEther, formatEther } from "viem";
 import { walletClient, publicClient } from "../../config.js";
 import { explorerAddressLine, isNativeTokenWord, currentNetwork } from "../../networks.js";
-import { getChatModel, getChatCreator, registerToken, getRegisteredTokens } from "../../db.js";
+import { getChatModel, getChatCreator, registerToken, getRegisteredTokens, getChatMarket, getChatDAO } from "../../db.js";
+import { marketSendMode, sendFromMarketWallet, marketWalletBalances } from "../../opportunityMarket/send.js";
 import { tipTokens, getTokenBalance, getTokenSymbol, getUnderlyingTokenAddress } from "../../contracts.js";
 import { getAdapter } from "../../governance/index.js";
 import { hasToken, getDaoInfo } from "../../governance/common.js";
 import { isWalletStoreConfigured } from "../../walletStore.js";
 import { short } from "../../format.js";
-import { UserError, reply, privateReply, requireDao, requireCreator, userClient, resolveToken, callerAddress, NO_WALLETS } from "../helpers.js";
+import { UserError, reply, privateReply, requireDao, requireCreator, userClient, resolveToken, callerAddress, opportunityClient, NO_WALLETS } from "../helpers.js";
 import { sendNativeSponsored } from "../../gasSponsor.js";
 
 /** Treasury contributions and token movement - ported from index.js. */
@@ -82,14 +83,29 @@ export const TOKEN_COMMANDS = {
 
   send: {
     section: "Tokens",
-    usage: "<amount> <recipient> [token|native]",
-    description: "Send tokens or native currency you hold to anyone",
+    usage: "<amount> <recipient> [token|native|market]",
+    description: "Send tokens or native currency you hold (in a market channel: its token or Sepolia ETH)",
     options: [
       { name: "amount", description: "Amount (whole tokens or native currency)", required: true },
       { name: "recipient", description: "Recipient address", required: true },
-      { name: "token", description: "Token address, registered ticker, or native/MON/ETH/HYPE (default: this DAO's token)", required: false },
+      { name: "token", description: "Token, ticker, native/MON/ETH/HYPE, or market (default: DAO token, else the market's token)", required: false },
     ],
     async run(ctx) {
+      // In an Opportunity Market channel (Sepolia), send the market's token or Sepolia ETH - e.g. a withdrawn stake or reward.
+      const market = getChatMarket(ctx.chatId, ctx.platform);
+      const mode = await marketSendMode(market, Boolean(getChatDAO(ctx.chatId, ctx.platform)), ctx.args[2], ctx.cmd);
+      if (mode) {
+        const [amountRaw, recipientRaw] = ctx.args;
+        const all = String(amountRaw).toLowerCase() === "all";
+        if (!amountRaw || (!all && !(Number(amountRaw) > 0)) || (all && mode.native) || !recipientRaw || !isAddress(recipientRaw)) {
+          throw new UserError(`Usage: \`${ctx.cmd("send")} <amount|all> <recipientAddress>\` sends this market's token on Sepolia; add \`ETH\` to send Sepolia ETH (a number, not all).`);
+        }
+        const { client } = await opportunityClient(ctx);
+        const { hash, sent } = await sendFromMarketWallet(client, market, recipientRaw, amountRaw, mode);
+        const left = await marketWalletBalances(market, client.account.address);
+        return reply(`✅ Sent ${sent} to \`${short(recipientRaw)}\` on Sepolia.\nTx: \`${short(hash)}\`\nYou now hold ${left.token} and ${left.eth}.`);
+      }
+
       const address = requireDao(ctx);
       const { amountRaw, recipientRaw, tokenRef } = parseAmountAndRecipient(ctx, "send", " — add the native symbol (`MON`, `ETH`, `HYPE`) or `native` to send native currency.");
       const isNativeMon = isNativeTokenWord(tokenRef);

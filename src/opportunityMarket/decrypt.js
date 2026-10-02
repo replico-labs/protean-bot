@@ -323,3 +323,60 @@ export function summarizeBets(bets, opportunities) {
     })),
   };
 }
+
+const U64 = 1n << 64n;
+
+/**
+ * The reward computeReward() gives the caller, worked out from values the
+ * caller may read: their own bets (userDecrypt), the public reward pool,
+ * winning opportunity and revealed winning total. The contract keeps the
+ * reward itself encrypted with no getter, so this repeats its math
+ * exactly: qualifying stake x uint64(rewardPool) in 64-bit arithmetic
+ * (FHE.add/FHE.mul on euint64 wrap past 2^64), then floor-divided by the
+ * winning total.
+ *
+ * Returns { reward, qualifying, overflowed } in raw token units, or null
+ * before the winning total has been revealed.
+ */
+export async function getMyReward(client, marketAddress) {
+  const userAddress = client.account.address;
+  const gov = marketContract(marketAddress);
+  const read = (functionName, args = []) => opportunityPublicClient.readContract({ ...gov, functionName, args });
+  const [finalized, winningId, pool, backing, count] = await Promise.all([
+    read("winningTotalFinalized"),
+    read("winningOpportunityId"),
+    read("rewardPool"),
+    read("winningTotalBacking"),
+    read("betCount", [userAddress]),
+  ]);
+  if (!finalized) return null;
+  if (count === 0n) return { reward: 0n, qualifying: 0n, overflowed: false };
+
+  const bets = await Promise.all(Array.from({ length: Number(count) }, (_, i) => read("getBet", [userAddress, BigInt(i)])));
+  const instance = await getFhevmInstance();
+  const session = await getOrCreateDecryptSession(client, marketAddress);
+  const pairs = bets.flatMap(([target, amount]) => [
+    { handle: target, contractAddress: marketAddress },
+    { handle: amount, contractAddress: marketAddress },
+  ]);
+  const results = await instance.userDecrypt(
+    pairs,
+    session.privateKey,
+    session.publicKey,
+    session.signature,
+    [marketAddress],
+    userAddress,
+    session.startTimestamp,
+    session.durationDays,
+    { timeout: USER_DECRYPT_TIMEOUT_MS }
+  );
+
+  let qualifying = 0n;
+  for (const [target, amount] of bets) {
+    if (BigInt(results[target]) === BigInt(winningId)) qualifying = (qualifying + BigInt(results[amount])) % U64;
+  }
+  const product = qualifying * (BigInt(pool) % U64); // the contract encrypts uint64(rewardPool)
+  const numerator = product % U64;
+  const reward = BigInt(backing) === 0n ? 0n : numerator / BigInt(backing);
+  return { reward, qualifying, overflowed: product !== numerator };
+}

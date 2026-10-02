@@ -3,6 +3,7 @@ import { getNetwork } from "../networks.js";
 import { getAction } from "../actionLibrary.js";
 import { actionArgSpec } from "../proposalBuilder.js";
 import { ACTION_HELP, fieldHelp, actionTargetText, actionAppliesText } from "../actionLibraryHelp.js";
+import { modelOptionsHelp } from "../modelProposal.js";
 
 /**
  * Chat text for external-protocol actions, shared by Telegram and the
@@ -58,6 +59,13 @@ function libraryActionInfoText(action, proposeCommand, chat = {}) {
 
 /** Full help for any action - native library or external protocol. Null if unknown. */
 export function actionInfoText(actionId, networkId, proposeCommand, chat) {
+  const text = baseActionInfoText(actionId, networkId, proposeCommand, chat);
+  // Sowellian and Decision Markets DAOs add their own settings to any action.
+  const extra = text && chat?.model ? modelOptionsHelp(chat.model) : [];
+  return extra.length ? `${text}\n\n${extra.join("\n")}` : text;
+}
+
+function baseActionInfoText(actionId, networkId, proposeCommand, chat) {
   const native = getAction(actionId);
   if (native) return libraryActionInfoText(native, proposeCommand, chat);
   const action = getIntegrationAction(actionId);

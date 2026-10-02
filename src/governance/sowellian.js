@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { getAddress, parseEther, zeroHash } from "viem";
-import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer } from "../config.js";
+import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer, deployWithGasLimit } from "../config.js";
 import { scaleBlockFields, currentNetwork, networkEnvName } from "../networks.js";
 import { ensureAllowance } from "./common.js";
 
@@ -418,7 +418,7 @@ export async function createDAO(name, symbol, initialSupplyWhole, maxSupplyWhole
  * @chainlink/contracts package, not assumed or hand-written.
  */
 export async function deployChainlinkOracle(client, chainlinkFeedAddress) {
-  const hash = await client.deployContract({
+  const hash = await deployWithGasLimit(client, {
     abi: chainlinkAdapterAbi,
     bytecode: chainlinkAdapterBytecode,
     args: [getAddress(chainlinkFeedAddress)],

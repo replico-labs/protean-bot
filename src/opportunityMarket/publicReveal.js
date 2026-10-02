@@ -1,3 +1,4 @@
+import { decodeAbiParameters } from "viem";
 import { marketContract, finalizeWinningTotal, requestWithdrawal, requestRewardWithdrawal } from "./market.js";
 import { getFhevmInstance } from "./encryptedBet.js";
 import { opportunityPublicClient, writeWithGasBuffer } from "./config.js";
@@ -110,5 +111,7 @@ export async function revealAndCompleteWithdrawal(client, marketAddress, kind) {
     args: [handle, abiEncodedClearValues, decryptionProof],
   });
   await opportunityPublicClient.waitForTransactionReceipt({ hash });
-  return { hash, handle };
+  // The KMS-signed cleartext is exactly what completeWithdrawal pays out (abi.decode as uint64).
+  const [amount] = decodeAbiParameters([{ type: "uint64" }], abiEncodedClearValues);
+  return { hash, handle, amount };
 }

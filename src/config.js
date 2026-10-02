@@ -1,7 +1,9 @@
 import "dotenv/config";
 import { privateKeyToAccount } from "viem/accounts";
 import { currentNetwork, networkEnv, attachOperator, operatorClientFor } from "./networks.js";
-import { ensureCanAfford, feesFor, estimateWithFunding } from "./gasSponsor.js";
+import { encodeDeployData } from "viem";
+import { ensureCanAfford, feesFor, estimateWithFunding, estimateTxWithFunding } from "./gasSponsor.js";
+import { fitGasLimit, contractTx } from "./gasLimit.js";
 
 /**
  * Everything below that touches a chain follows whichever network the
@@ -143,15 +145,13 @@ export function switchboardOracleAdapter() {
  * full, inflated amount was genuinely charged: roughly 1 extra MON for
  * what should have cost a small fraction of that.
  *
- * A 50% buffer over a real, per-call estimate (Monad's own docs use
- * this exact multiple as a starting point before a system has enough
- * production history to tighten it) stays comfortably clear of state
- * changing between estimation and execution, without ever risking the
- * runaway inflation this bot has now observed directly in production.
+ * The limit is the gas the call really uses plus 15-20%, proven by
+ * simulating the call at that limit first (gasLimit.js) - not a fixed
+ * multiple of the estimate, which on Monad can itself be far too high.
  */
 export async function writeWithGasBuffer(client, contractParams) {
   const estimate = await estimateWithFunding(client, contractParams);
-  let gas = (estimate * 150n) / 100n;
+  let gas = await fitGasLimit(publicClient, contractTx(client.account, contractParams), estimate);
 
   // HyperEVM only fits transactions up to 2M gas in its fast small blocks;
   // anything larger needs the sender switched to big blocks (a HyperCore
@@ -173,4 +173,21 @@ export async function writeWithGasBuffer(client, contractParams) {
   const { fees, gasCost } = await feesFor(gas);
   await ensureCanAfford(client.account.address, gasCost, contractParams.value ?? 0n);
   return client.writeContract({ ...contractParams, gas, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas });
+}
+// Deployments can need a few million gas; enough for the estimate to run
+// when the deploying wallet starts empty.
+const DEPLOY_FUNDING_GAS = 5_000_000n;
+
+/**
+ * deployContract with the same gas rule as writeWithGasBuffer: the gas
+ * the deployment really uses +15-20%, proven by simulating it at that
+ * limit, with the wallet funded for exactly that cost.
+ */
+export async function deployWithGasLimit(client, { abi, bytecode, args = [] }) {
+  const data = encodeDeployData({ abi, bytecode, args });
+  const estimate = await estimateTxWithFunding(client, { data }, DEPLOY_FUNDING_GAS);
+  const gas = await fitGasLimit(publicClient, { account: client.account, data }, estimate);
+  const { fees, gasCost } = await feesFor(gas);
+  await ensureCanAfford(client.account.address, gasCost);
+  return client.deployContract({ abi, bytecode, args, gas, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas });
 }

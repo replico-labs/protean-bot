@@ -1,5 +1,5 @@
 import { Client, Events, GatewayIntentBits, PermissionFlagsBits, REST, Routes, SlashCommandBuilder, MessageFlags } from "discord.js";
-import { COMMANDS, runCommand } from "./commands.js";
+import { COMMANDS, runCommand, ADMIN_COMMANDS } from "./commands.js";
 import { startEventListener } from "../eventListener.js";
 
 /**
@@ -21,7 +21,8 @@ import { startEventListener } from "../eventListener.js";
 
 const DISCORD_MAX_MESSAGE = 2000;
 // Changing which DAO a channel points at is a server-management action.
-const MANAGE_COMMANDS = new Set(["register", "unregister"]);
+// Hidden from members without Manage Server (runCommand enforces it too).
+const MANAGE_COMMANDS = ADMIN_COMMANDS;
 
 /** Telegram-style *bold* -> Discord **bold**, leaving `code` spans alone. */
 export function toDiscordMarkdown(text) {

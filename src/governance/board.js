@@ -4,7 +4,6 @@ import { fileURLToPath } from "url";
 import { getAddress, parseEther } from "viem";
 import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer } from "../config.js";
 import { currentNetwork, networkEnvName } from "../networks.js";
-import { ensureCanAfford, feesFor } from "../gasSponsor.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -81,30 +80,18 @@ export async function queue() {
 export async function execute(client, governanceAddress, proposalId, valueWhole = 0) {
   const gov = contractFor(governanceAddress);
 
-  // Deliberately NOT using writeWithGasBuffer here, unlike every other
-  // call in this file - that helper still calls estimateContractGas
-  // internally, which hits the exact same eth_estimateGas RPC method
-  // that returned ~9,943,397 gas for this specific call in production
-  // (confirmed via the actual receipt), against a real, traced need of
-  // only ~150,347 gas. Buffering on top of an estimate that may itself
-  // already be wrong (Monad's dual-pool routing is a documented,
-  // plausible cause) risks compounding the problem rather than fixing
-  // it. A fixed, modest limit based on the real measured need sidesteps
-  // estimateGas entirely for this proven case - matching Monad's own
-  // guidance to set gas explicitly when it's fairly constant, since
-  // executeTransaction's call depth (governance clone -> implementation
-  // -> treasury clone -> implementation -> recipient) doesn't vary.
+  // This call's eth_estimateGas once came back at ~9.94M on Monad for a
+  // traced need of ~150k, and Monad charges the whole limit. It used to be
+  // pinned at 400k, which wastes gas on simple transfers and is too little
+  // for a proposal that swaps or deposits. writeWithGasBuffer now sizes the
+  // limit from the gas the call really uses (+15-20%, proven by simulating
+  // at that limit), so the inflated estimate is never what's sent.
   const value = parseEther(String(valueWhole));
-  const { fees, gasCost } = await feesFor(400_000n);
-  await ensureCanAfford(client.account.address, gasCost, value);
-  const hash = await client.writeContract({
+  const hash = await writeWithGasBuffer(client, {
     ...gov,
     functionName: "executeTransaction",
     args: [BigInt(proposalId)],
     value,
-    gas: 400_000n,
-    maxFeePerGas: fees.maxFeePerGas,
-    maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
   });
   await publicClient.waitForTransactionReceipt({ hash });
   return { hash };

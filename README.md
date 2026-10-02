@@ -52,7 +52,7 @@ The network word can go anywhere after the model; without one, the bot's default
 What changes between networks, handled automatically:
 
 - **Block-counted voting periods are rescaled.** Several governance periods are counted in blocks, and the defaults were written for Monad's 400 ms blocks: 50,400 blocks is ~5.6 h on Monad but ~28 h on Base. New DAOs get their block-counted fields scaled to the same wall-clock length (10,080 on Base, 20,160 on HyperEVM). Periods counted in seconds (timelocks, execution windows, Sowellian's challenge period) are unchanged.
-- **Gas.** Every write estimates gas and adds a 50% buffer, because Monad charges the full gas limit, not gas used. On HyperEVM the buffer is capped at the 2M small-block limit; a transaction that genuinely needs more fails with an explanation, since its sender would have to switch to big blocks. Every model's DAO creation fits under 2M (the heaviest, Delegate, is ~1.29M).
+- **Gas.** Monad charges the full gas limit, not gas used, and its `eth_estimateGas` can come back far too high (a Board execute that used ~150k was estimated at ~9.94M). So no limit is a guess (`src/gasLimit.js`): each write is simulated once with `eth_createAccessList` to get the gas it really uses (or, where a node lacks that, the smallest limit `eth_call` succeeds within, found by halving), then sent at that +15%, or +20% if a simulation capped at +15% fails. Contract writes, deployments, native sends, Board execute (no longer pinned at 400k) and the Sepolia market writes all use it. On HyperEVM the limit is capped at the 2M small-block limit; a transaction that genuinely needs more fails with an explanation, since its sender would have to switch to big blocks. Every model's DAO creation fits under 2M (the heaviest, Delegate, is ~1.29M).
 - **The native token.** `/send 1 0x... ETH` on Base, `HYPE` on HyperEVM, `MON` on Monad — or `native` anywhere.
 
 Opportunity Markets are separate and always on Ethereum Sepolia; Zama's FHE coprocessor doesn't exist on Monad, Base or HyperEVM.
@@ -83,7 +83,7 @@ Opportunity Markets are separate and always on Ethereum Sepolia; Zama's FHE copr
 - `/proposals` · `/proposal <id>` — list, or full detail rendered for each model's own vote shape
 
 ### Proposing and deciding
-- `/listactions` · `/proposeaction <actionId> <args...> <description>` — the verified action library: every native governance, Treasury, token and wrapper admin function, encoded for you, plus the external protocol actions available on the chat's network (see [External protocol actions](#external-protocol-actions)). After a GuardWrapper handover, Treasury and token actions are routed through the wrapper automatically.
+- `/listactions` · `/proposeaction <actionId> <args...> <description>` — the verified action library: every native governance, Treasury, token and wrapper admin function, encoded for you, plus the external protocol actions available on the chat's network (see [External protocol actions](#external-protocol-actions)). After a GuardWrapper handover, Treasury and token actions are routed through the wrapper automatically. Works for every model: Sowellian and Decision Markets DAOs add their settings as `name=value` words anywhere after the action ID (below), so nobody has to hand-type calldata into `/proposecriteria` or `/proposemarket`.
 - `/actioninfo <actionId>` — an action's arguments, options, and the sources its contract addresses were checked against
 - `/propose <target> <value> <data> <description>` — raw calldata, for anything else
 - `/vote <id> for|against|abstain [reason]` · `/queue <id>` · `/execute <id> [nativeValue]` · `/cancel <id>`
@@ -113,7 +113,17 @@ Bonds and seeds (Optimistic challenges, Sowellian bonds and positions, Decision 
 - `/guardwrapper` — signers, threshold, tenure
 - `/instruction <id>` · `/confirminstruction <id>` · `/rejectinstruction <id>` · `/revokeconfirmation <id>`
 
-### Sowellian oracle proposals
+### Sowellian and Decision Markets through `/proposeaction`
+```
+/proposeaction treasury-transfer-eth 0xRecipient 1 measure=7d Fund the grant                      (Sowellian, human track)
+/proposeaction treasury-transfer-eth 0xRecipient 1 track=oracle oracle=switchboard feed=0x… goal=100 when=min measure=30d Grow TVL
+/proposeaction treasury-transfer-eth 0xRecipient 1 seed=1000 quote=5 Fund the campaign            (Decision Markets)
+```
+- **Sowellian:** `track=human|oracle` (default human), `oracle=<adapter>|switchboard`, `feed=<32-byte feed ID>`, `goal=<value>` (required on the oracle track), `when=min|max` (default min), `measure=<duration>` (default 7d). `/actioninfo` lists them in a Sowellian chat.
+- **Decision Markets:** `seed=<DAO tokens>` and `quote=<native>`, both required.
+- `/proposecriteria` and `/proposemarket` remain for raw calls the library doesn't cover.
+
+### Sowellian oracle proposals (raw calls)
 ```
 /proposecriteria <target> <value> <data> oracle <adapter|switchboard> <feedId|-> <targetValue> min|max <measurementPeriodSeconds> <description>
 ```
@@ -122,11 +132,13 @@ Bonds and seeds (Optimistic challenges, Sowellian bonds and positions, Decision 
 - **Human track:** `human - -` in the oracle and feed slots.
 
 ### Opportunity Markets (Ethereum Sepolia, FHE-encrypted)
-- `/createmarket <underlyingToken>` · `/registermarket <address>` · `/unregistermarket`
+- `/createmarket <underlyingToken>` · `/registermarket <address>` · `/unregistermarket` (group owners/admins only)
 - `/listopportunity <metadataURI>` · `/deposit <amount>` · `/back <opportunityId> <amount>` (confidential)
 - `/mybalance` · `/mybet <index>` · `/allbets` · `/analytics` (deployer only, sent privately: total staked, average bet, average per bettor and largest bet, overall and per opportunity, plus each opportunity's share of all stake. Built from the bets the contract already lets the deployer decrypt; nothing new is revealed publicly)
 - `/fundrewardpool` · `/resolve <id>` · `/cancelmarket` (deployer only)
 - `/reclaimstake` · `/computereward` · `/revealwinningtotal` · `/withdraw` · `/withdrawreward`
+- `/computereward` tells you the reward amount privately. The contract keeps it encrypted with no getter, so the bot works it out from your own decrypted bets and the public pool, winning opportunity and winning total, repeating the contract's 64-bit math exactly (and warns if that math wrapped). `/withdraw` and `/withdrawreward` report the exact amount paid: the KMS-signed cleartext the contract pays out.
+- `/send <amount|all> <recipient> [ETH]` — in a market group, sends the market's token (your withdrawn stake or reward) or Sepolia ETH from your wallet. In a group with a DAO too, add `market` (or the token's symbol or address) to send the market's token. Sepolia gas isn't sponsored; an empty wallet is told how much it needs and its address.
 
 `/registermarket` only accepts addresses the configured `OpportunityMarketFactory` reports as its own (`isMarket`).
 
@@ -192,11 +204,12 @@ npm run discord   # DISCORD_BOT_TOKEN, DISCORD_APPLICATION_ID, optional DISCORD_
 npm run slack     # SLACK_APP_TOKEN + either SLACK_BOT_TOKEN (one workspace) or the "Add to Slack" settings below
 ```
 
-- **Discord** registers 98 native slash commands on startup (Discord allows 100 per bot). `/register` and `/unregister` default to members with *Manage Server*. Long replies are split across messages.
+- **Discord** registers 100 native slash commands on startup (Discord's limit - merge commands before adding any). `createdao`, `createboarddao`, `register`, `unregister`, `createmarket`, `registermarket` and `unregistermarket` are for members with *Manage Server* only. Long replies are split across messages.
 - **Slack** uses one command, `/protean <subcommand>` (e.g. `/protean vote 3 for`). Create the app from [`docs/slack-app-manifest.yml`](docs/slack-app-manifest.yml). Joining a channel with a welcome distributor sends the newcomer their tokens, as on Telegram.
 - **Slack in any workspace:** with `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`, `SLACK_STATE_SECRET` and `SLACK_PUBLIC_URL` set, the Slack process also serves an "Add to Slack" link at `<SLACK_PUBLIC_URL>/slack/install` (on `PORT`, so the service needs a public domain). Each workspace's bot token is stored encrypted under the wallets' KMS key, in Supabase's `slack_installations` table (`supabase/schema.sql`); uninstalling deletes it. Install into your own workspace through the same link, then activate public distribution. Without `SLACK_CLIENT_ID` it runs in one workspace on `SLACK_BOT_TOKEN`. Slack doesn't list Socket Mode apps in its App Directory, so share the link directly.
 - **Privacy:** anything Telegram sends by DM (bets, confidential balances, rewards, handover proposals, the treasury address from `contribute`) is shown only to the caller: an ephemeral reply on Discord (which also hides the options typed), an ephemeral response on Slack. So `back` takes its opportunity and amount directly — they never appear in the channel.
-- **Link vs creator:** whoever runs `register` becomes the channel's *linker* (can relink/unlink); whoever runs `createdao`/`createboarddao` is the DAO's *creator* (can also `tip`, deploy wrappers and distributors). Registering an existing DAO never grants creator rights. Server/workspace admins can always relink.
+- **Link vs creator:** whoever runs `register` becomes the channel's *linker* (can relink/unlink); whoever runs `createdao`/`createboarddao` is the DAO's *creator* (can also `tip`, deploy wrappers and distributors). Registering an existing DAO never grants creator rights.
+- **Owners and admins only:** creating, registering and unregistering a DAO or market (`createdao`, `createboarddao`, `register`, `unregister`, `createmarket`, `registermarket`, `unregistermarket`) is limited to the group's owner and admins on Telegram (anonymous admins count; a DM is allowed), *Manage Server* on Discord, and workspace admins/owners on Slack.
 - **Errors** name the contract's reason, e.g. `AlreadyConfirmed`.
 
 Command logic lives in `src/platforms/commands/` (grouped as core, setup, tokens, models, sowellian, markets, opportunity); `discord.js` and `slack.js` only handle transport.

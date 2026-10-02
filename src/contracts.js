@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { createWalletClient, http, formatEther, parseEther, getAddress, isAddress } from "viem";
-import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer } from "./config.js";
+import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer, deployWithGasLimit } from "./config.js";
 import { currentNetwork, scaleBlockFields } from "./networks.js";
 import { ensureCanAfford } from "./gasSponsor.js";
 
@@ -428,7 +428,7 @@ export async function getTokenSymbol(tokenAddress) {
  * it, then /setdistributor its address) rather than silently bundled in.
  */
 export async function deployWelcomeDistributor(client, tokenAddress, governanceAddress, amountPerClaimWhole, distributionCapWhole) {
-  const hash = await client.deployContract({
+  const hash = await deployWithGasLimit(client, {
     abi: welcomeDistributorArtifact.abi,
     bytecode: welcomeDistributorArtifact.bytecode,
     args: [
@@ -452,7 +452,7 @@ export async function deployWelcomeDistributor(client, tokenAddress, governanceA
  * package, not assumed or hand-written.
  */
 export async function deployNftWrapper(client, governanceAddress, treasuryAddress) {
-  const hash = await client.deployContract({
+  const hash = await deployWithGasLimit(client, {
     abi: nftMarketplaceWrapperArtifact.abi,
     bytecode: nftMarketplaceWrapperArtifact.bytecode,
     args: [getAddress(governanceAddress), getAddress(treasuryAddress)],

@@ -1,3 +1,4 @@
+import { takeModelOptions, checkModelOptions, modelOptionsUsage, proposeForModel, proposalNextStep } from "../../modelProposal.js";
 import { isAddress, getAddress, formatEther } from "viem";
 import { currentNetwork, takeNetworkArg, runOnNetwork, getNetwork, ENABLED_NETWORKS, describeNetwork } from "../../networks.js";
 import { registerChat, recordChatLinker, getChatDAO, getChatModel, unregisterChat, getChatNftWrapper, getChatGuardWrapper, getChatNetwork, getRegisteredToken } from "../../db.js";
@@ -251,6 +252,8 @@ export const CORE_COMMANDS = {
       if (getChatGuardWrapper(ctx.chatId, ctx.platform)) section("Guard wrapper", listActionsForModel("guardWrapper"));
       lines.push(...integrationListLines(getChatNetwork(ctx.chatId, ctx.platform)).slice(1), "");
       lines.push(`Use \`${ctx.cmd("proposeaction")} <actionId> <args...> <description>\` to propose one, and \`${ctx.cmd("actioninfo")} <actionId>\` to see what any of them does and what its arguments mean.`);
+      const extra = modelOptionsUsage(model);
+      if (extra) lines.push(`This ${model} DAO also needs, anywhere after the action ID: \`${extra}\`.`);
       return reply(lines.join("\n"), { ephemeral: true });
     },
   },
@@ -259,7 +262,7 @@ export const CORE_COMMANDS = {
     description: "Propose a verified action",
     options: [
       { name: "action", description: "Action ID from listactions", required: true },
-      { name: "args", description: "The action's arguments, space-separated", required: false },
+      { name: "args", description: "The action's arguments; Sowellian/Decision Markets also take settings (see actioninfo)", required: false },
       { name: "description", description: "What this proposal does", required: true, rest: true },
     ],
     // Discord passes args and description as separate options; Slack
@@ -277,25 +280,27 @@ export const CORE_COMMANDS = {
       if (!actionAppliesTo(action, model, { nftWrapperAddress: getChatNftWrapper(ctx.chatId, ctx.platform), guardWrapperAddress })) {
         throw new UserError(`\`${actionId}\` doesn't apply to this DAO. See \`${ctx.cmd("listactions")}\`.`);
       }
-      if (model === "sowellian" || model === "decisionMarkets") {
-        throw new UserError(`${model} proposals need extra parameters that aren't supported outside Telegram yet.`);
-      }
-
       const { count, names } = actionArgSpec(action);
       // Platforms with separate fields (Discord) pass them in ctx.named, so
       // a missing argument is reported as missing instead of the first word
-      // of the description being read as that argument.
+      // of the description being read as that argument. Sowellian and
+      // Decision Markets settings (name=value) can sit in either field.
       const named = ctx.named;
-      const actionArgs = named ? (named.args ?? "").split(/\s+/).filter(Boolean) : rest.slice(0, count);
-      const description = named ? (named.description ?? "").trim() : rest.slice(count).join(" ");
+      const argWords = takeModelOptions(model, named ? (named.args ?? "").split(/\s+/).filter(Boolean) : rest);
+      const descWords = named ? takeModelOptions(model, (named.description ?? "").trim().split(/\s+/).filter(Boolean)) : { options: {}, rest: [] };
+      const options = { ...argWords.options, ...descWords.options };
+      const actionArgs = named ? argWords.rest : argWords.rest.slice(0, count);
+      const description = named ? descWords.rest.join(" ") : argWords.rest.slice(count).join(" ");
+      const extra = modelOptionsUsage(model);
       if (actionArgs.length !== count || !description) {
-        throw new UserError(`Usage: \`${ctx.cmd("proposeaction")} ${actionId} ${names.join(" ")} <description>\``);
+        throw new UserError(`Usage: \`${ctx.cmd("proposeaction")} ${actionId} ${names.join(" ")}${extra ? ` ${extra}` : ""} <description>\``);
       }
+      checkModelOptions(model, options);
 
       const { target, data } = await buildActionProposal({ model, governanceAddress: address, actionId, actionArgs, guardWrapperAddress });
       const { client } = await userClient(ctx, { forceFullTopup: true });
-      const { proposalId } = await getAdapter(model).propose(client, address, [{ target, value: 0n, data }], description);
-      return reply(`✅ Proposal #${proposalId} created via \`${actionId}\`.\n\nUse \`${ctx.cmd("proposal")} ${proposalId}\` to check on it, or \`${ctx.cmd("vote")} ${proposalId} for|against|abstain\` once voting opens.`);
+      const { proposalId } = await proposeForModel({ model, client, governanceAddress: address, actions: [{ target, value: 0n, data }], description, options });
+      return reply(`✅ Proposal #${proposalId} created via \`${actionId}\`.\n\n${proposalNextStep(model, proposalId, ctx.cmd)}`);
     },
   },
 
@@ -413,12 +418,12 @@ export const CORE_COMMANDS = {
 /** proposeaction for an external-protocol action: several Treasury calls in one proposal. */
 async function proposeIntegration(ctx, address, actionId, rest) {
   const model = getChatModel(ctx.chatId, ctx.platform);
-  if (model === "sowellian" || model === "decisionMarkets") {
-    throw new UserError(`${model} proposals need extra parameters that aren't supported outside Telegram yet.`);
-  }
   // Discord passes args and description as separate fields; join them so
   // name=value options and the description parse the same way as Slack.
-  const words = ctx.named ? [...(ctx.named.args ?? "").split(/\s+/).filter(Boolean), ...(ctx.named.description ?? "").trim().split(/\s+/).filter(Boolean)] : rest;
+  const allWords = ctx.named ? [...(ctx.named.args ?? "").split(/\s+/).filter(Boolean), ...(ctx.named.description ?? "").trim().split(/\s+/).filter(Boolean)] : rest;
+  // Sowellian / Decision Markets settings come out first; the rest is the action's own.
+  const { options: modelOptions, rest: words } = takeModelOptions(model, allWords);
+  checkModelOptions(model, modelOptions);
   let built;
   try {
     built = await buildIntegrationProposal({
@@ -435,10 +440,11 @@ async function proposeIntegration(ctx, address, actionId, rest) {
     throw err;
   }
   if (!built.description) {
-    throw new UserError(`Add a description at the end: \`${ctx.cmd("proposeaction")} ${actionId} ${integrationUsage(getIntegrationAction(actionId))} <description>\``);
+    const extra = modelOptionsUsage(model);
+    throw new UserError(`Add a description at the end: \`${ctx.cmd("proposeaction")} ${actionId} ${integrationUsage(getIntegrationAction(actionId))}${extra ? ` ${extra}` : ""} <description>\``);
   }
   const { client } = await userClient(ctx, { forceFullTopup: true });
-  const { proposalId } = await getAdapter(model).propose(client, address, built.actions, built.description);
+  const { proposalId } = await proposeForModel({ model, client, governanceAddress: address, actions: built.actions, description: built.description, options: modelOptions });
   const steps = built.actions.length;
-  return reply(`✅ Proposal #${proposalId} created via \`${actionId}\` (${steps} step${steps === 1 ? "" : "s"}).\n\n${built.summary}\n\nUse \`${ctx.cmd("proposal")} ${proposalId}\` to check on it.`);
+  return reply(`✅ Proposal #${proposalId} created via \`${actionId}\` (${steps} step${steps === 1 ? "" : "s"}).\n\n${built.summary}\n\n${proposalNextStep(model, proposalId, ctx.cmd)}`);
 }

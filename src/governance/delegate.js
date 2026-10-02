@@ -3,7 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { getAddress, parseEther } from "viem";
 import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer } from "../config.js";
-import { scaleBlockFields, currentNetwork, networkEnvName } from "../networks.js";
+import { scaleBlockFields, currentNetwork, networkEnvName, blocksToDuration } from "../networks.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -145,19 +145,124 @@ export async function getProposal(governanceAddress, proposalId) {
     MODEL-SPECIFIC EXTRAS - elections, open to every token holder
 //////////////////////////////////////////////////////////////*/
 
+/**
+ * A refusal the bot can explain before spending gas - shown to the user as
+ * is (platforms/commands.js and the Telegram handlers both print
+ * err.message).
+ */
+export class ElectionError extends Error {
+  constructor(message) {
+    super(message);
+    this.userFacing = true;
+  }
+}
+
+const blocksLeft = (blocks) => blocksToDuration(blocks < 1n ? 1n : blocks);
+
+function minutesFromNow(seconds) {
+  const m = Math.ceil(Number(seconds) / 60);
+  return m < 120 ? `~${m}m` : `~${(m / 60).toFixed(1)}h`;
+}
+
+/**
+ * Where an election stands right now: "candidacy" (block <=
+ * candidacyDeadline), "voting" (candidacyDeadline < block <=
+ * votingEndBlock), "ended" (voting closed, not finalized) or "finalized".
+ * Mirrors the checks in DelegateGovernance's declareCandidacy,
+ * voteInElection and finalizeElection.
+ */
+export function electionPhase(election, block) {
+  if (election.finalized) return "finalized";
+  if (block <= election.candidacyDeadline) return "candidacy";
+  if (block <= election.votingEndBlock) return "voting";
+  return "ended";
+}
+
+/** One line on what can be done in an election now, and until when. */
+export function describeElectionPhase(election, block) {
+  const id = election.id;
+  switch (electionPhase(election, block)) {
+    case "candidacy":
+      return `Election #${id}: candidacy open for ${blocksLeft(election.candidacyDeadline - block + 1n)} (/declarecandidacy ${id}); voting opens after that and runs ${blocksLeft(election.votingEndBlock - election.candidacyDeadline)}.`;
+    case "voting":
+      return `Election #${id}: voting open for ${blocksLeft(election.votingEndBlock - block + 1n)} (/voteinelection ${id} <candidates...>).`;
+    case "ended":
+      return `Election #${id}: voting has closed - run /finalizeelection ${id} to seat the winners.`;
+    default:
+      return `Election #${id}: finalized.`;
+  }
+}
+
+async function loadElection(gov, electionId) {
+  const election = await publicClient.readContract({ ...gov, functionName: "getElection", args: [BigInt(electionId)] });
+  if (election.id === 0n) {
+    const count = await publicClient.readContract({ ...gov, functionName: "electionCount" });
+    throw new ElectionError(count === 0n ? "No election has been started yet - run /startelection first." : `There's no election #${electionId} - the latest is #${count}.`);
+  }
+  return election;
+}
+
+/**
+ * The latest election and the term's end, for /council and the
+ * startElection pre-check.
+ */
+export async function getElectionStatus(governanceAddress) {
+  const gov = contractFor(governanceAddress);
+  const [count, termEnd, block, latestBlock] = await Promise.all([
+    publicClient.readContract({ ...gov, functionName: "electionCount" }),
+    publicClient.readContract({ ...gov, functionName: "currentTermEnd" }),
+    publicClient.getBlockNumber({ cacheTime: 0 }),
+    publicClient.getBlock({ blockTag: "latest" }),
+  ]);
+  const latest = count === 0n ? null : await publicClient.readContract({ ...gov, functionName: "getElection", args: [count] });
+  return { latest, termEnd, block, now: latestBlock.timestamp };
+}
+
+/** Plain-English status lines: the term, and the latest election if one is under way. */
+export async function electionStatusText(governanceAddress) {
+  const { latest, termEnd, block, now } = await getElectionStatus(governanceAddress);
+  const lines = [];
+  if (latest && !latest.finalized) {
+    lines.push(describeElectionPhase(latest, block));
+  } else if (now < termEnd) {
+    lines.push(`This term ends in ${minutesFromNow(termEnd - now)}; /startelection works after that.`);
+  } else {
+    lines.push("This term has ended - anyone can /startelection.");
+  }
+  return lines.join("\n");
+}
+
 /** Opens a new election - only callable once the current term has ended. */
 export async function startElection(client, governanceAddress) {
   const gov = contractFor(governanceAddress);
+  const { latest, termEnd, block, now } = await getElectionStatus(governanceAddress);
+  // Same order as the contract: TooEarlyForElection, then ElectionAlreadyActive.
+  if (now < termEnd) {
+    throw new ElectionError(`The current council's term hasn't ended yet - an election can start in ${minutesFromNow(termEnd - now)}.`);
+  }
+  if (latest && !latest.finalized) {
+    throw new ElectionError(`Election #${latest.id} hasn't been finalized, so a new one can't start.\n${describeElectionPhase(latest, block)}`);
+  }
+
   const hash = await writeWithGasBuffer(client, { ...gov, functionName: "startElection", args: [] });
   await publicClient.waitForTransactionReceipt({ hash });
 
   const electionCount = await publicClient.readContract({ ...gov, functionName: "electionCount" });
-  return { hash, electionId: electionCount };
+  const election = await publicClient.readContract({ ...gov, functionName: "getElection", args: [electionCount] });
+  return { hash, electionId: electionCount, election };
 }
 
 /** Declares the caller's candidacy in an open election's candidacy window. */
 export async function declareCandidacy(client, governanceAddress, electionId) {
   const gov = contractFor(governanceAddress);
+  const election = await loadElection(gov, electionId);
+  const block = await publicClient.getBlockNumber({ cacheTime: 0 });
+  if (electionPhase(election, block) !== "candidacy") {
+    throw new ElectionError(`Candidacy for election #${election.id} has closed.\n${describeElectionPhase(election, block)}`);
+  }
+  const me = getAddress(client.account.address);
+  if (election.candidates.some((c) => getAddress(c) === me)) throw new ElectionError(`You're already a candidate in election #${election.id}.`);
+
   const hash = await writeWithGasBuffer(client, { ...gov, functionName: "declareCandidacy", args: [BigInt(electionId)] });
   await publicClient.waitForTransactionReceipt({ hash });
   return { hash };
@@ -182,11 +287,34 @@ const VOTES_TOKEN_ABI = [
  * election opens, this is fully checkable in advance - read here first
  * so the bot can warn before spending gas on a vote that would count
  * for nothing.
+ *
+ * Repeated addresses are dropped (the contract reverts DuplicateCandidate
+ * on any repeat), and the phase, candidate list and seat count are
+ * checked first so a doomed vote gets a reason instead of a revert.
  */
 export async function voteInElection(client, governanceAddress, electionId, candidateAddresses) {
   const gov = contractFor(governanceAddress);
 
-  const election = await getElection(governanceAddress, electionId);
+  const election = await loadElection(gov, electionId);
+  const block = await publicClient.getBlockNumber({ cacheTime: 0 });
+  const phase = electionPhase(election, block);
+  if (phase === "candidacy") {
+    throw new ElectionError(`Voting in election #${election.id} hasn't opened yet - it opens when candidacy closes, in ${blocksLeft(election.candidacyDeadline - block + 1n)}.`);
+  }
+  if (phase !== "voting") throw new ElectionError(`Voting in election #${election.id} has closed.\n${describeElectionPhase(election, block)}`);
+
+  const candidates = [...new Set(candidateAddresses.map((s) => getAddress(s.toLowerCase())))];
+  const registered = new Set(election.candidates.map((c) => getAddress(c)));
+  if (registered.size === 0) throw new ElectionError(`Nobody declared candidacy in election #${election.id}, so there's no one to vote for. Let it close and run /finalizeelection ${election.id}.`);
+  const unknown = candidates.filter((c) => !registered.has(c));
+  if (unknown.length > 0) {
+    throw new ElectionError(`Not a candidate in election #${election.id}: ${unknown.join(", ")}.\nCandidates: ${[...registered].join(", ")}`);
+  }
+  const { councilSize } = await publicClient.readContract({ ...gov, functionName: "config" });
+  if (candidates.length > Number(councilSize)) {
+    throw new ElectionError(`You can vote for at most ${councilSize} candidate(s) (the council size); you named ${candidates.length}.`);
+  }
+
   const governanceTokenAddress = await publicClient.readContract({ ...gov, functionName: "governanceToken" });
   const weight = await publicClient.readContract({
     address: governanceTokenAddress,
@@ -198,15 +326,21 @@ export async function voteInElection(client, governanceAddress, electionId, cand
   const hash = await writeWithGasBuffer(client, {
     ...gov,
     functionName: "voteInElection",
-    args: [BigInt(electionId), candidateAddresses.map((s) => getAddress(s.toLowerCase()))],
+    args: [BigInt(electionId), candidates],
   });
   await publicClient.waitForTransactionReceipt({ hash });
-  return { hash, weight };
+  return { hash, weight, candidates };
 }
 
 /** Finalizes a closed election - top vote-getters become the new council. */
 export async function finalizeElection(client, governanceAddress, electionId) {
   const gov = contractFor(governanceAddress);
+  const election = await loadElection(gov, electionId);
+  const block = await publicClient.getBlockNumber({ cacheTime: 0 });
+  const phase = electionPhase(election, block);
+  if (phase === "finalized") throw new ElectionError(`Election #${election.id} is already finalized.`);
+  if (phase !== "ended") throw new ElectionError(`Election #${election.id} can't be finalized until voting closes.\n${describeElectionPhase(election, block)}`);
+
   const hash = await writeWithGasBuffer(client, { ...gov, functionName: "finalizeElection", args: [BigInt(electionId)] });
   await publicClient.waitForTransactionReceipt({ hash });
   return { hash };

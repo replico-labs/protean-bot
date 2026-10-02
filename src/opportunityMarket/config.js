@@ -1,4 +1,5 @@
-import { createPublicClient, createWalletClient, http } from "viem";
+import { createPublicClient, createWalletClient, http, formatEther } from "viem";
+import { fitGasLimit, contractTx } from "../gasLimit.js";
 import { sepolia } from "viem/chains";
 import { SepoliaConfig } from "@zama-fhe/relayer-sdk/node";
 
@@ -58,18 +59,66 @@ export function isOpportunityMarketConfigured() {
   return Boolean(SEPOLIA_RPC_URL);
 }
 
+/** A refusal shown to the user as is (no Sepolia ETH for gas, etc.). */
+export class SepoliaGasError extends Error {
+  constructor(message) {
+    super(message);
+    this.userFacing = true;
+  }
+}
+
+/**
+ * Sepolia gas isn't sponsored, so the wallet pays its own: check it can
+ * before signing, so an empty wallet gets a reason and its address
+ * instead of a node error.
+ */
+export async function requireSepoliaGas(address, gas, value = 0n) {
+  const [fees, balance] = await Promise.all([
+    opportunityPublicClient.estimateFeesPerGas(),
+    opportunityPublicClient.getBalance({ address, blockTag: "latest" }),
+  ]);
+  const need = gas * fees.maxFeePerGas + value;
+  if (balance < need) {
+    throw new SepoliaGasError(
+      `Your wallet has ${formatEther(balance)} Sepolia ETH and this needs up to ${formatEther(need)} (Sepolia gas isn't sponsored). ` +
+        `Send some Sepolia ETH to ${address} and try again.`
+    );
+  }
+  return fees;
+}
+
 /**
  * Sepolia-side equivalent of the main config.js's writeWithGasBuffer -
  * can't reuse that one directly, since it's bound to Monad's
- * publicClient, not this file's own opportunityPublicClient. Applied
- * here mainly for consistency with the rest of the bot; Sepolia (a
- * standard Ethereum testnet) doesn't share Monad's charge-for-the-
- * full-gas_limit behavior, so the risk this addresses on the Monad
- * side is largely theoretical here - a real, per-call estimate plus a
- * modest buffer is still a reasonable default regardless of chain.
+ * publicClient, not this file's own opportunityPublicClient. Same gas
+ * limit rule (gasLimit.js): what the call really uses plus 15-20%,
+ * proven by simulating at that limit.
  */
+const unaffordable = (err) => /insufficient funds|exceeds the balance|exceeds allowance|insufficient balance/i.test(`${err.shortMessage || ""} ${err.details || ""} ${err.message}`);
+
+/** The node's estimate; a wallet too empty to even estimate gets the same clear message as requireSepoliaGas. */
+async function estimateOrExplain(address, estimateFn) {
+  try {
+    return await estimateFn();
+  } catch (err) {
+    if (unaffordable(err)) await requireSepoliaGas(address, 100_000n);
+    throw err;
+  }
+}
+
 export async function writeWithGasBuffer(client, contractParams) {
-  const estimate = await opportunityPublicClient.estimateContractGas({ ...contractParams, account: client.account });
-  const gas = (estimate * 150n) / 100n;
-  return client.writeContract({ ...contractParams, gas });
+  const params = { ...contractParams, account: client.account };
+  const estimate = await estimateOrExplain(client.account.address, () => opportunityPublicClient.estimateContractGas(params));
+  const gas = await fitGasLimit(opportunityPublicClient, contractTx(client.account, contractParams), estimate);
+  const fees = await requireSepoliaGas(client.account.address, gas, contractParams.value ?? 0n);
+  return client.writeContract({ ...contractParams, gas, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas });
+}
+
+/** Sends Sepolia ETH with the same proven gas limit and up-front balance check. */
+export async function sendNativeWithGasLimit(client, to, value) {
+  const tx = { account: client.account, to, value };
+  const estimate = await estimateOrExplain(client.account.address, () => opportunityPublicClient.estimateGas(tx));
+  const gas = await fitGasLimit(opportunityPublicClient, tx, estimate);
+  const fees = await requireSepoliaGas(client.account.address, gas, value);
+  return client.sendTransaction({ to, value, gas, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas });
 }

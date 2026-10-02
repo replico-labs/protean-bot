@@ -1,6 +1,6 @@
 import { CrossbarClient } from "@switchboard-xyz/common";
 import { zeroHash } from "viem";
-import { publicClient, walletClient, operatorAccount } from "../config.js";
+import { publicClient, walletClient, operatorAccount, writeWithGasBuffer } from "../config.js";
 import { currentNetwork, runOnNetwork, resolveNetworkId, DEFAULT_NETWORK, networkEnv, networkEnvName } from "../networks.js";
 import { getGovernanceDaosByModel } from "../db.js";
 
@@ -114,7 +114,7 @@ async function checkAndSettleOne(governanceAddress, switchboardAddress, crossbar
     // Already settled on Switchboard's side - just needs finalizeSortition()
     // called, which anyone can do, including this keeper as a convenience.
     try {
-      const hash = await walletClient.writeContract({ ...gov, functionName: "finalizeSortition", args: [] });
+      const hash = await writeWithGasBuffer(walletClient, { ...gov, functionName: "finalizeSortition", args: [] });
       await publicClient.waitForTransactionReceipt({ hash });
       console.log(`[sortitionKeeper] Finalized round ${round} for ${governanceAddress} (tx ${hash})`);
     } catch (err) {
@@ -137,14 +137,14 @@ async function checkAndSettleOne(governanceAddress, switchboardAddress, crossbar
     oracle: randomness.oracle,
   });
 
-  const hash = await walletClient.writeContract({ ...sb, functionName: "settleRandomness", args: [encoded] });
+  const hash = await writeWithGasBuffer(walletClient, { ...sb, functionName: "settleRandomness", args: [encoded] });
   await publicClient.waitForTransactionReceipt({ hash });
   console.log(`[sortitionKeeper] Settled requestId ${requestId} for ${governanceAddress} (tx ${hash})`);
 
   // Immediately try finalizing too, so a single poll cycle can complete
   // a whole draw rather than waiting for the next tick.
   try {
-    const finalizeHash = await walletClient.writeContract({ ...gov, functionName: "finalizeSortition", args: [] });
+    const finalizeHash = await writeWithGasBuffer(walletClient, { ...gov, functionName: "finalizeSortition", args: [] });
     await publicClient.waitForTransactionReceipt({ hash: finalizeHash });
     console.log(`[sortitionKeeper] Finalized round ${round} for ${governanceAddress} (tx ${finalizeHash})`);
   } catch (err) {

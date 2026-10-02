@@ -1,5 +1,5 @@
 import bolt from "@slack/bolt";
-import { COMMANDS, runCommand } from "./commands.js";
+import { COMMANDS, runCommand, ADMIN_COMMANDS } from "./commands.js";
 import { attemptClaim } from "./commands/setup.js";
 import { getChatNetwork, recordSlackTeam, getSlackTeam, getSlackChannelsWithoutTeam } from "../db.js";
 import { runOnNetwork } from "../networks.js";
@@ -35,8 +35,8 @@ const { App } = bolt;
  *
  * Admin detection: Slack only exposes workspace admin status through an
  * extra users.info call, so isAdmin comes from that (is_admin/is_owner).
- * If the lookup fails it's left undefined, and only whoever linked the
- * channel can relink or unlink it.
+ * Only they may create, register or unregister a channel's DAO or market
+ * (commands.js ADMIN_COMMANDS); if the lookup fails, those are refused.
  */
 
 const SLASH_COMMAND = process.env.SLACK_COMMAND || "/protean";
@@ -78,7 +78,8 @@ export async function handleSlashCommand({ command, ack, respond, client }) {
     chatId: command.channel_id,
     userId: command.user_id,
     args,
-    isAdmin: name === "register" || name === "unregister" ? await lookupIsAdmin(client, command.user_id) : undefined,
+    isAdmin: ADMIN_COMMANDS.has(name) ? await lookupIsAdmin(client, command.user_id) : undefined,
+    isDirect: command.channel_name === "directmessage",
     cmd: (sub) => `${SLASH_COMMAND} ${sub}`,
   };
 

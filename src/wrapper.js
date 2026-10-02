@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { getAddress } from "viem";
-import { publicClient, writeWithGasBuffer } from "./config.js";
+import { publicClient, writeWithGasBuffer, deployWithGasLimit } from "./config.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -25,7 +25,7 @@ function wrapperContract(address) {
  * the resulting wrapper.
  */
 export async function deployGuardWrapper(client, governanceAddress, initialSigners, requiredApprovals, tenureLengthSeconds) {
-  const hash = await client.deployContract({
+  const hash = await deployWithGasLimit(client, {
     abi: guardWrapperArtifact.abi,
     bytecode: guardWrapperArtifact.bytecode,
     args: [
