@@ -327,13 +327,29 @@ export function summarizeBets(bets, opportunities) {
 const U64 = 1n << 64n;
 
 /**
+ * The reward OpportunityMarket.computeReward() pays, in raw units, from
+ * plaintext inputs. REWARD_MATH_VERSION 2 multiplies in 128 bits, so it's
+ * exact floor((qualifying * rewardPool) / winningTotal). Markets cloned
+ * from the earlier implementation (no REWARD_MATH_VERSION) multiplied in
+ * 64 bits, which wraps past 2^64 - repeated here so the amount shown is
+ * what that contract will really pay.
+ */
+export function rewardFor({ qualifying, pool, backing, version }) {
+  if (BigInt(backing) === 0n) return { reward: 0n, overflowed: false };
+  if (version >= 2) {
+    return { reward: (qualifying * BigInt(pool)) / BigInt(backing), overflowed: false };
+  }
+  const product = qualifying * (BigInt(pool) % U64); // the old contract encrypts uint64(rewardPool)
+  const numerator = product % U64;
+  return { reward: numerator / BigInt(backing), overflowed: product !== numerator };
+}
+
+/**
  * The reward computeReward() gives the caller, worked out from values the
  * caller may read: their own bets (userDecrypt), the public reward pool,
  * winning opportunity and revealed winning total. The contract keeps the
  * reward itself encrypted with no getter, so this repeats its math
- * exactly: qualifying stake x uint64(rewardPool) in 64-bit arithmetic
- * (FHE.add/FHE.mul on euint64 wrap past 2^64), then floor-divided by the
- * winning total.
+ * exactly (rewardFor).
  *
  * Returns { reward, qualifying, overflowed } in raw token units, or null
  * before the winning total has been revealed.
@@ -375,8 +391,7 @@ export async function getMyReward(client, marketAddress) {
   for (const [target, amount] of bets) {
     if (BigInt(results[target]) === BigInt(winningId)) qualifying = (qualifying + BigInt(results[amount])) % U64;
   }
-  const product = qualifying * (BigInt(pool) % U64); // the contract encrypts uint64(rewardPool)
-  const numerator = product % U64;
-  const reward = BigInt(backing) === 0n ? 0n : numerator / BigInt(backing);
-  return { reward, qualifying, overflowed: product !== numerator };
+  const version = Number(await read("REWARD_MATH_VERSION").catch(() => 1n));
+  const { reward, overflowed } = rewardFor({ qualifying, pool, backing, version });
+  return { reward, qualifying, overflowed };
 }

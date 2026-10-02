@@ -26,7 +26,9 @@ export async function rewardComputedText(client, marketAddress, cmd) {
         : `✅ Reward computed: *${amount}* (from ${formatUnits(result.qualifying, decimals)} ${symbol} you staked on the winner).`,
     ];
     if (result.overflowed) {
-      lines.push("⚠️ Your stake times the reward pool passed the contract's 64-bit limit, so the contract's own math wrapped around - this is the amount it will actually pay.");
+      lines.push(
+        "⚠️ This market was created before the reward-math fix: your stake times the reward pool passed its 64-bit limit, so its math wrapped around - this is the amount it will actually pay. Markets from the updated factory don't have this problem."
+      );
     }
     if (result.reward > 0n) lines.push(`Use \`${cmd("withdrawreward")}\` to move it to your wallet, then \`${cmd("send")}\` to send it anywhere.`);
     return lines.join("\n");

@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { getAddress, parseUnits } from "viem";
+import { getAddress, parseUnits, formatUnits } from "viem";
 import { opportunityPublicClient, writeWithGasBuffer } from "./config.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -141,6 +141,30 @@ export async function getUnderlyingTokenAddress(marketAddress) {
   return opportunityPublicClient.readContract({ ...gov, functionName: "underlyingToken" });
 }
 
+const MAX_ENCRYPTED = (1n << 64n) - 1n;
+
+/** A refusal shown to the user as is. */
+export class MarketAmountError extends Error {
+  constructor(message) {
+    super(message);
+    this.userFacing = true;
+  }
+}
+
+/**
+ * Amounts are encrypted as 64-bit integers, so one amount can't exceed
+ * 2^64 - 1 raw units (~18.4 tokens at 18 decimals, ~18 trillion at 6).
+ * The updated contract reverts AmountTooLarge; markets from the earlier
+ * implementation silently truncated - either way, refuse here first.
+ */
+function requireFitsEncrypted(amount, decimals) {
+  if (amount > MAX_ENCRYPTED) {
+    throw new MarketAmountError(
+      `That's more than one encrypted amount can hold (${formatUnits(MAX_ENCRYPTED, decimals)} of this token). Markets work best with a 6-decimal stablecoin such as USDC.`
+    );
+  }
+}
+
 /**
  * Deposits `amountWhole` of the underlying token into the market -
  * separate from backing an opportunity. This initial deposit is
@@ -154,6 +178,7 @@ export async function deposit(client, marketAddress, amountWhole) {
   const gov = marketContract(marketAddress);
   const decimals = await getUnderlyingDecimals(marketAddress);
   const amount = parseUnits(String(amountWhole), decimals);
+  requireFitsEncrypted(amount, decimals);
 
   const tokenAddress = await getUnderlyingTokenAddress(marketAddress);
   await ensureAllowance(client, tokenAddress, marketAddress, amount);
@@ -172,6 +197,7 @@ export async function fundRewardPool(client, marketAddress, amountWhole) {
   const gov = marketContract(marketAddress);
   const decimals = await getUnderlyingDecimals(marketAddress);
   const amount = parseUnits(String(amountWhole), decimals);
+  requireFitsEncrypted(amount, decimals);
 
   const tokenAddress = await getUnderlyingTokenAddress(marketAddress);
   await ensureAllowance(client, tokenAddress, marketAddress, amount);

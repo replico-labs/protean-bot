@@ -142,6 +142,8 @@ Bonds and seeds (Optimistic challenges, Sowellian bonds and positions, Decision 
 
 `/registermarket` only accepts addresses the configured `OpportunityMarketFactory` reports as its own (`isMarket`).
 
+**Use a 6-decimal stablecoin (e.g. USDC) as a market's underlying token.** Each amount is encrypted as a 64-bit integer, so one deposit or reward pool can hold up to ~18 trillion tokens at 6 decimals, but only ~18.4 at 18 decimals; the bot refuses larger amounts before sending. Markets from the current `OpportunityMarketFactory` compute rewards in 128 bits (`REWARD_MATH_VERSION` 2), so any stake and pool size pays out exactly. Markets created from the earlier factory multiplied stake × pool in 64 bits, which wraps once that passes ~18.4 million whole tokens at 6 decimals (e.g. 5,000 × 5,000 USDC paid 1,310); the bot reads which version a market has, shows what it will really pay, and warns when it wrapped. Point `OPPORTUNITY_MARKET_FACTORY_ADDRESS` at a factory deployed from the fixed Spaces build for new markets.
+
 ## External protocol actions
 
 `/proposeaction` can also propose actions on outside protocols. The DAO's funds sit in its Treasury, so each action is one proposal made of several `Treasury.execute(target, value, data)` steps (approve, then act), with the protocol seeing the Treasury as the caller. NFT actions go through the DAO's NFT wrapper instead. After a GuardWrapper handover, every step is routed through the wrapper like any other Treasury action. An action is offered only on networks where its protocol is deployed.
@@ -333,4 +335,6 @@ With "Add to Slack" enabled, give that service a public domain; Railway's `PORT`
 
 ## Try it live
 
-[**@proteandao_bot**](https://t.me/proteandao_bot) — when it's deployed and running.
+- **Telegram:** [@proteandao_bot](https://t.me/proteandao_bot)
+- **Discord:** [Add to your server](https://discord.com/oauth2/authorize?client_id=1550697784259121203&permissions=3072&integration_type=0&scope=applications.commands+bot)
+- **Slack:** [Add to Slack](https://protean-bot-production.up.railway.app/slack/install)
