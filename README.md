@@ -142,7 +142,6 @@ Bonds and seeds (Optimistic challenges, Sowellian bonds and positions, Decision 
 
 `/registermarket` only accepts addresses the configured `OpportunityMarketFactory` reports as its own (`isMarket`).
 
-**Use a 6-decimal stablecoin (e.g. USDC) as a market's underlying token.** Each amount is encrypted as a 64-bit integer, so one deposit or reward pool can hold up to ~18 trillion tokens at 6 decimals, but only ~18.4 at 18 decimals; the bot refuses larger amounts before sending. Markets from the current `OpportunityMarketFactory` compute rewards in 128 bits (`REWARD_MATH_VERSION` 2), so any stake and pool size pays out exactly. Markets created from the earlier factory multiplied stake × pool in 64 bits, which wraps once that passes ~18.4 million whole tokens at 6 decimals (e.g. 5,000 × 5,000 USDC paid 1,310); the bot reads which version a market has, shows what it will really pay, and warns when it wrapped. Point `OPPORTUNITY_MARKET_FACTORY_ADDRESS` at a factory deployed from the fixed Spaces build for new markets.
 
 ## External protocol actions
 
@@ -176,15 +175,6 @@ Arguments are positional, then `name=value` options (`/actioninfo` lists them), 
 - the protocols' cross-references hold (for example, that a router's factory is the factory listed here);
 - known token symbols are as expected;
 - protocol-specific facts, such as HyperCore's precompiles agreeing on the USDC and HYPE token indexes.
-
-It sends nothing. It hasn't been run against the real networks yet (see below).
-
-**Not available, and why:**
-- **Avantis (Base).** It became Veranta in September 2026. Its v2 contracts' ABIs are not published, and trading goes through off-chain signed intents that a Treasury contract can't sign.
-- **Staking directly with Kinetiq (HyperEVM).** No official source for the staking contract's interface was reachable. `kinetiq-buy-khype` covers the same need through HyperSwap.
-- **HyperSwap v2.** Its router adds a `referral` argument, and HyperSwap doesn't publish that router's ABI. Swaps use HyperSwap v3.
-- **Lido direct staking on Base.** The CCIP direct-staking contracts publish no verifiable interface. `lido-buy-wsteth` covers the same need through Aerodrome.
-- **Flaunch on HyperEVM.** Flaunch isn't deployed there.
 
 HyperCore note: Core applies CoreWriter actions just after the EVM transaction. A proposal can execute successfully while Core rejects the order (tick size, no balance, no fill). The bot checks Hyperliquid's tick and lot rules before proposing, and says so in every summary.
 
@@ -269,21 +259,17 @@ Switchboard is pull-based: someone has to submit randomness settlements and pric
 
 ## What's not verified yet
 
-- The other eight governance models through real Telegram sessions on Monad testnet (they pass on local chains through the shared command code)
 - Anything on Base or HyperEVM — no factories deployed there yet
 - **External protocol actions against the live protocols.** Each was tested on local chains through a real Board DAO:
   - Uniswap, Aerodrome, Lido-via-Aerodrome and Seaport ran against those protocols' real compiled contracts. HyperSwap and kHYPE-via-HyperSwap ran against Uniswap's real v3 contracts (HyperSwap v3 is a Uniswap v3 fork).
   - Aave, HyperLend, shMON, Nad.fun, Perpl, Flaunch and HyperCore ran against stand-ins with the protocols' exact function signatures.
   - HyperCore's action bytes were also compared with those produced by hyper-evm-lib.
 
-  `npm run verify:integrations` has not been run against the real networks.
 - Real Discord and Slack workspaces
-- The FHE relayer round-trip for confidential bets and decryption (Opportunity Markets)
 - Switchboard's Crossbar round-trip for sortition settlement and price updates
 
 ## Not built yet
 
-- **Avantis/Veranta actions**, and **direct staking with Lido (Base) or Kinetiq (HyperEVM)**. They are blocked on unpublished or unreachable interfaces; see [External protocol actions](#external-protocol-actions).
 - Group-wide gas sponsorship with spending limits
 
 ## Architecture
