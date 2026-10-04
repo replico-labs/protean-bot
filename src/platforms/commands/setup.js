@@ -116,7 +116,7 @@ export const SETUP_COMMANDS = {
     usage: "<name> <symbol> <initialSupply> <maxSupply> [model] [network] [council...]",
     description: "Create a new DAO and link it to this channel",
     options: [
-      { name: "name", description: "DAO name (one word)", required: true },
+      { name: "name", description: "DAO name (spaces allowed)", required: true },
       { name: "symbol", description: "Token symbol", required: true },
       { name: "initial_supply", description: "Initial token supply (whole tokens)", required: true },
       { name: "max_supply", description: "Maximum token supply (whole tokens)", required: true },
@@ -135,6 +135,7 @@ export const SETUP_COMMANDS = {
           [
             `Usage: \`${ctx.cmd("createdao")} <name> <symbol> <initialSupply> <maxSupply> [model] [network] [council...]\``,
             `Example: \`${ctx.cmd("createdao")} ArkDAO ARK 1000000 10000000\``,
+            `A name with spaces goes in quotes: \`${ctx.cmd("createdao")} "Ark DAO" ARK 1000000 10000000\`.`,
             `Models: ${Object.keys(CREATE_DAO_FUNCTIONS).join(", ")} (default tokenWeighted). Delegate and sortition also need starting council addresses. For a token-less multisig use \`${ctx.cmd("createboarddao")}\`.`,
           ].join("\n")
         );
@@ -194,7 +195,7 @@ export const SETUP_COMMANDS = {
     usage: "<name> <signer1> <signer2> ... [network]",
     description: "Create a Board (multisig) DAO and link it here",
     options: [
-      { name: "name", description: "DAO name (one word)", required: true },
+      { name: "name", description: "DAO name (spaces allowed)", required: true },
       { name: "signers", description: "Signer addresses, space-separated", required: true, rest: true },
       NETWORK_OPTION,
     ],

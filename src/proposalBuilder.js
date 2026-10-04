@@ -69,11 +69,34 @@ export function actionArgSpec(action) {
  *
  * Returns { target, data } ready for adapter.propose(); value is always 0.
  */
+const ERC20_DECIMALS = [{ type: "function", name: "decimals", inputs: [], outputs: [{ type: "uint8" }], stateMutability: "view" }];
+
+async function readTokenDecimals(tokenWord) {
+  let token;
+  try {
+    token = getAddress(String(tokenWord).toLowerCase());
+  } catch {
+    throw new Error(`"${tokenWord}" isn't a token address.`);
+  }
+  try {
+    return Number(await publicClient.readContract({ address: token, abi: ERC20_DECIMALS, functionName: "decimals" }));
+  } catch {
+    throw new Error(`${token} doesn't look like an ERC20 token on ${currentNetwork().chain.name} (no decimals()).`);
+  }
+}
+
 export async function buildActionProposal({ model, governanceAddress, actionId, actionArgs, guardWrapperAddress }) {
   const action = getAction(actionId);
   if (!action) throw new Error(`Unknown action "${actionId}"`);
 
-  let { data, target: fixedTarget } = encodeAction(actionId, actionArgs);
+  // An amount of an arbitrary ERC20 is scaled by that token's decimals.
+  let tokenDecimals;
+  const scaledBy = action.params.find((p) => p.decimalsOf);
+  if (scaledBy) {
+    const tokenWord = actionArgs[action.params.findIndex((p) => p.name === scaledBy.decimalsOf)];
+    tokenDecimals = await readTokenDecimals(tokenWord);
+  }
+  let { data, target: fixedTarget } = encodeAction(actionId, actionArgs, { tokenDecimals });
   let target;
 
   if (action.targetKind === "governance") {

@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { createWalletClient, http, formatEther, parseEther, getAddress, isAddress } from "viem";
+import { createWalletClient, http, formatEther, parseEther, formatUnits, parseUnits, getAddress, isAddress } from "viem";
 import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer, deployWithGasLimit } from "./config.js";
 import { currentNetwork, scaleBlockFields } from "./networks.js";
 import { ensureCanAfford } from "./gasSponsor.js";
@@ -381,7 +381,18 @@ export async function resolveTokenReference(governanceAddress, reference) {
  */
 export async function tipTokens(client, tokenAddress, recipientAddress, amountWhole) {
   const token = underlyingToken(tokenAddress);
-  const amount = parseEther(String(amountWhole));
+  // Any ERC20 can be sent, so scale by its own decimals (USDC has 6).
+  const [decimals, symbol, held] = await Promise.all([
+    tokenDecimalsOf(tokenAddress),
+    publicClient.readContract({ ...token, functionName: "symbol" }).catch(() => "tokens"),
+    publicClient.readContract({ ...token, functionName: "balanceOf", args: [client.account.address] }),
+  ]);
+  const amount = parseUnits(String(amountWhole), decimals);
+  if (held < amount) {
+    const err = new Error(`You hold ${formatUnits(held, decimals)} ${symbol} in ${client.account.address} - not enough to send ${amountWhole}.`);
+    err.userFacing = true;
+    throw err;
+  }
 
   const hash = await writeWithGasBuffer(client, {
     ...token,
@@ -395,12 +406,20 @@ export async function tipTokens(client, tokenAddress, recipientAddress, amountWh
 
 /** Raw ERC20 balanceOf on any token sharing GovernanceToken's ABI, formatted as a whole-token string. */
 export async function getTokenBalance(tokenAddress, holderAddress) {
-  const balance = await publicClient.readContract({
-    ...underlyingToken(tokenAddress),
-    functionName: "balanceOf",
-    args: [getAddress(holderAddress)],
-  });
-  return formatEther(balance);
+  const [balance, decimals] = await Promise.all([
+    publicClient.readContract({ ...underlyingToken(tokenAddress), functionName: "balanceOf", args: [getAddress(holderAddress)] }),
+    tokenDecimalsOf(tokenAddress),
+  ]);
+  return formatUnits(balance, decimals);
+}
+
+/** An ERC20's decimals (18 when it doesn't say). */
+export async function tokenDecimalsOf(tokenAddress) {
+  try {
+    return Number(await publicClient.readContract({ ...underlyingToken(tokenAddress), functionName: "decimals" }));
+  } catch {
+    return 18;
+  }
 }
 
 /** Reads a token's real on-chain symbol - for display labels, not resolution (see resolveTokenReference for that). */

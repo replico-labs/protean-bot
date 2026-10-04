@@ -135,6 +135,13 @@ const POOL_OPTIONS = [
   { name: "deadline", description: "how long after proposing it may execute", default: "30d" },
 ];
 
+// A swap picks its pool: by default every standard fee tier is tried
+// and the one quoting the most out wins.
+const SWAP_OPTIONS = [
+  { name: "fee", description: "pool fee tier (100, 500, 3000, 10000) or auto - every standard tier, best quote now", default: "auto" },
+  ...POOL_OPTIONS.slice(1),
+];
+
 function deployment(ctx) {
   const d = protocol.deployments[ctx.network.id];
   if (!d) throw new IntegrationError(`Uniswap v4 isn't set up for ${ctx.network.chain.name}.`);
@@ -214,12 +221,51 @@ async function quoteExactIn(ctx, d, key, zeroForOne, amountIn) {
   }
 }
 
+/**
+ * The pool a swap goes through. With fee=auto (the default) every
+ * standard tier is checked and the one quoting the most out is used, so
+ * nobody has to guess which tier a pair's liquidity sits in.
+ */
+async function pickSwapPool(ctx, d, tokenIn, tokenOut, amountIn, needQuote) {
+  const feeText = ctx.options.fee;
+  if (feeText !== undefined && String(feeText).toLowerCase() !== "auto") {
+    const key = poolKeyFor(tokenIn, tokenOut, ctx.options);
+    if ((await readSqrtPrice(ctx, d, key)) === 0n) {
+      throw new IntegrationError(`No Uniswap v4 pool for this pair with ${describePool(key)} - leave out fee= to try every standard tier, or check tickSpacing=/hooks=.`);
+    }
+    return { key, quote: undefined };
+  }
+  if (ctx.options.tickSpacing !== undefined) throw new IntegrationError("tickSpacing= needs a fee= too.");
+
+  let best = null;
+  const found = [];
+  for (const fee of Object.keys(DEFAULT_TICK_SPACING)) {
+    const key = poolKeyFor(tokenIn, tokenOut, { ...ctx.options, fee, tickSpacing: undefined });
+    if ((await readSqrtPrice(ctx, d, key)) === 0n) continue;
+    found.push(key);
+    const quote = await quoteExactIn(ctx, d, key, lower(tokenIn) === lower(key.currency0), amountIn).catch(() => null);
+    if (quote !== null && quote > 0n && (!best || quote > best.quote)) best = { key, quote };
+  }
+  if (best) return best;
+  // An explicit minimum needs no quote: with one pool, use it.
+  if (!needQuote && found.length === 1) return { key: found[0], quote: undefined };
+  if (found.length) {
+    throw new IntegrationError(`Uniswap v4 has this pair at ${found.map(describePool).join("; ")}, but none of them can quote this amount now (no liquidity in range)${needQuote ? "" : " - add fee= to pick one"}.`);
+  }
+  const hooks = ctx.options.hooks && ctx.options.hooks !== "none" ? ` with hooks ${ctx.options.hooks}` : " without hooks";
+  const native = tokenIn === NATIVE || tokenOut === NATIVE;
+  const otherSide = native ? "the wrapped token (WMON/WETH/WHYPE) instead of the native coin" : "the native coin (MON/ETH/HYPE, or native) instead of its wrapped token";
+  throw new IntegrationError(
+    `No Uniswap v4 pool for this pair at any standard fee tier (0.01%, 0.05%, 0.3%, 1%)${hooks}. Try ${otherSide}, a pool's hooks=<address>, or another DEX.`
+  );
+}
+
 export const actions = [
   {
     id: "uniswap-swap",
     label: "Swap tokens on Uniswap v4 (exact input, one pool)",
     usage: ["tokenIn", "tokenOut", "amountIn", "minOut|slippage%"],
-    options: POOL_OPTIONS,
+    options: SWAP_OPTIONS,
     async build(ctx) {
       const d = deployment(ctx);
       const [inWord, outWord, amountText, minText] = ctx.args;
@@ -227,18 +273,15 @@ export const actions = [
       const tokenOut = resolveToken(outWord, ctx);
       const amountIn = await parseAmount(ctx, tokenIn, amountText);
       if (amountIn > maxUint128) throw new IntegrationError("Amount too large.");
-      const key = poolKeyFor(tokenIn, tokenOut, ctx.options);
-      const zeroForOne = lower(tokenIn) === lower(key.currency0);
 
       await requireCode(ctx, { UniversalRouter: d.universalRouter, StateView: d.stateView, Permit2: d.permit2 });
-      if ((await readSqrtPrice(ctx, d, key)) === 0n) {
-        throw new IntegrationError(`No Uniswap v4 pool for this pair with ${describePool(key)} - check fee=/tickSpacing=/hooks=.`);
-      }
+      const { key, quote: autoQuote } = await pickSwapPool(ctx, d, tokenIn, tokenOut, amountIn, String(minText).endsWith("%"));
+      const zeroForOne = lower(tokenIn) === lower(key.currency0);
 
       let minOut;
       let quoteNote = "";
       if (String(minText).endsWith("%")) {
-        const quote = await quoteExactIn(ctx, d, key, zeroForOne, amountIn);
+        const quote = autoQuote ?? (await quoteExactIn(ctx, d, key, zeroForOne, amountIn));
         minOut = minusBps(quote, parsePercentBps(minText));
         quoteNote = ` (quoted ${await formatAmount(ctx, tokenOut, quote, { approx: true })} now, less ${minText})`;
       } else {

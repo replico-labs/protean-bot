@@ -5,6 +5,7 @@ import { getChatNetwork, recordSlackTeam, getSlackTeam, getSlackChannelsWithoutT
 import { runOnNetwork } from "../networks.js";
 import { startEventListener } from "../eventListener.js";
 import { createInstallationStore, isSlackInstallationStoreConfigured } from "./slackInstallations.js";
+import { splitArgs } from "../args.js";
 
 const { App } = bolt;
 
@@ -48,7 +49,7 @@ const REDIRECT_PATH = "/slack/oauth_redirect";
 
 /** Splits "/protean vote 3 for because" into ["vote", ["3", "for", "because"]]. */
 export function parseSlackText(text) {
-  const words = (text || "").trim().split(/\s+/).filter(Boolean);
+  const words = splitArgs(text);
   const [name = "help", ...args] = words;
   return [name.toLowerCase(), args];
 }

@@ -84,6 +84,7 @@ import { formatMarketAnalytics } from "./opportunityMarket/analyticsText.js";
 import { getBalance as opportunityGetBalance, getBet as opportunityGetBet, getAllBets as opportunityGetAllBets, getMarketAnalytics as opportunityGetAnalytics } from "./opportunityMarket/decrypt.js";
 import { revealAndCompleteWinningTotal, revealAndCompleteWithdrawal } from "./opportunityMarket/publicReveal.js";
 import { sendNativeSponsored } from "./gasSponsor.js";
+import { splitArgs } from "./args.js";
 
 // Checked here rather than in config.js, so the keepers and the Discord
 // and Slack entrypoints (which share config.js) don't need a Telegram token.
@@ -536,7 +537,7 @@ const CREATE_DAO_FUNCTIONS = {
 };
 
 bot.command("createdao", async (ctx) => {
-  const args = ctx.match?.trim().split(/\s+/) ?? [];
+  const args = splitArgs(ctx.match);
 
   if (args.length < 4) {
     await ctx.reply(
@@ -552,7 +553,7 @@ bot.command("createdao", async (ctx) => {
         "",
         `Network can go anywhere after the model (e.g. \`base\`, \`hyperevm\`) - defaults to this bot's default network. Enabled here: ${ENABLED_NETWORKS.join(", ")}.`,
         "",
-        "⚠️ Name and symbol must be single words (no spaces) for now.",
+        "A name with spaces goes in quotes: `/createdao \"Ark DAO\" ARK 1000000 10000000`. The symbol is one word.",
       ].join("\n"),
       { parse_mode: "Markdown" }
     );
@@ -655,7 +656,7 @@ bot.command("createdao", async (ctx) => {
 //////////////////////////////////////////////////////////////*/
 
 bot.command("createboarddao", async (ctx) => {
-  const args = ctx.match?.trim().split(/\s+/) ?? [];
+  const args = splitArgs(ctx.match);
 
   if (args.length < 2) {
     await ctx.reply(
@@ -664,7 +665,7 @@ bot.command("createboarddao", async (ctx) => {
         "",
         "Example: `/createboarddao ArkBoard 0xAaa... 0xBbb... 0xCcc...`",
         "",
-        "⚠️ Board has no token at all - signers approve directly. Name must be a single word for now.",
+        "⚠️ Board has no token at all - signers approve directly. A name with spaces goes in quotes: `/createboarddao \"Ark Board\" 0xAaa... 0xBbb...`",
       ].join("\n"),
       { parse_mode: "Markdown" }
     );

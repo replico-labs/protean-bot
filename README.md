@@ -65,6 +65,7 @@ Opportunity Markets are separate and always on Ethereum Sepolia; Zama's FHE copr
 ### Setup
 - `/createdao <name> <symbol> <initialSupply> <maxSupply> [model] [network] [council...]` — deploy a DAO and link it here. Models: `tokenWeighted` (default), `quadratic`, `liquid`, `optimistic`, `delegate`, `sortition`, `conviction`, `sowellian`, `decisionMarkets`. `delegate` and `sortition` take the starting council as trailing addresses; sortition's randomness source comes from the bot's config.
 - `/createboarddao <name> <signer1> <signer2> ... [network]` — deploy a Board (multisig) DAO; no token at all
+- **Spaces in arguments:** a description (`/propose`, `/proposeaction`, `/vote` reasons, `/listopportunity`) is everything after the last fixed argument, so it can be plain text with spaces. A DAO name with spaces goes in quotes: `/createdao "Ark DAO" ARK 1000000 10000000` (straight or curly quotes; on Telegram and Slack). Discord's name field takes spaces as is.
 - `/register <address> [model] [network]` / `/unregister` — link or unlink an existing DAO. `/register` checks the address really is that model's contract on that network.
 - `/network` — which chain this chat's DAO is on, and which networks the bot supports
 - `/deploywelcomedistributor <amountPerClaim> <cap>` / `/setdistributor <address>` — welcome tokens for new members; `/claim` (also automatic on join)

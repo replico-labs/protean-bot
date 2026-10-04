@@ -1,4 +1,4 @@
-import { encodeFunctionData, getAddress, parseEther } from "viem";
+import { encodeFunctionData, getAddress, parseEther, parseUnits } from "viem";
 
 /**
  * Every entry here is already fully verified - real ABI fragments,
@@ -263,7 +263,7 @@ export const ACTION_LIBRARY = [
     targetKind: "treasury",
     functionName: "transferERC20",
     abi: [{ type: "function", name: "transferERC20", stateMutability: "nonpayable", inputs: [{ name: "token", type: "address" }, { name: "recipient", type: "address" }, { name: "amount", type: "uint256" }], outputs: [] }],
-    params: [{ name: "token", type: "address" }, { name: "recipient", type: "address" }, { name: "amountWhole", type: "uint256", scaled: true }],
+    params: [{ name: "token", type: "address" }, { name: "recipient", type: "address" }, { name: "amountWhole", type: "uint256", scaled: true, decimalsOf: "token" }],
   },
   {
     id: "treasury-execute",
@@ -393,7 +393,7 @@ export const ACTION_LIBRARY = [
     targetKind: "fixedAddress",
     functionName: "sweepERC20",
     abi: [{ type: "function", name: "sweepERC20", stateMutability: "nonpayable", inputs: [{ name: "token", type: "address" }, { name: "amount", type: "uint256" }], outputs: [] }],
-    params: [{ name: "wrapperAddress", type: "address", isTarget: true }, { name: "token", type: "address" }, { name: "amountWhole", type: "uint256", scaled: true }],
+    params: [{ name: "wrapperAddress", type: "address", isTarget: true }, { name: "token", type: "address" }, { name: "amountWhole", type: "uint256", scaled: true, decimalsOf: "token" }],
   },
 
   /*//////////////////////////////////////////////////////////////
@@ -451,8 +451,12 @@ export function listActionsForModel(model) {
  * args must be supplied in exactly the field order listed in that
  * action's params[0].fields - Solidity ABI encoding has no named
  * fields at the wire level, only positional ones.
+ *
+ * Whole amounts are scaled by 18 decimals, except an amount of an
+ * arbitrary ERC20 (a param with decimalsOf), which uses that token's
+ * own decimals from `tokenDecimals` - USDC has 6.
  */
-export function encodeAction(actionId, args) {
+export function encodeAction(actionId, args, { tokenDecimals } = {}) {
   const action = getAction(actionId);
   if (!action) throw new Error(`Unknown action: ${actionId}`);
 
@@ -477,7 +481,10 @@ export function encodeAction(actionId, args) {
     }
     if (param.type === "address") values.push(getAddress(raw.toLowerCase()));
     else if (param.type === "address[]") values.push(raw.split(",").map((s) => getAddress(s.trim().toLowerCase())));
-    else if (param.scaled) values.push(parseEther(String(raw)));
+    else if (param.scaled && param.decimalsOf) {
+      if (tokenDecimals === undefined) throw new Error(`${action.id} needs the token's decimals to scale ${param.name}`);
+      values.push(parseUnits(String(raw), tokenDecimals));
+    } else if (param.scaled) values.push(parseEther(String(raw)));
     else if (param.type.startsWith("uint")) values.push(BigInt(raw));
     else values.push(raw);
   }
