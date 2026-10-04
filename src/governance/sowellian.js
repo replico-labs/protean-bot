@@ -291,16 +291,34 @@ const PYTH_ABI = [
   { type: "function", name: "updatePriceFeeds", inputs: [{ type: "bytes[]" }], outputs: [], stateMutability: "payable" },
 ];
 
-/** Pyth's Hermes price service; PYTH_HERMES_URL (per network) overrides it. */
+/**
+ * Pyth's Hermes price service. Since Pyth's Core upgrade (26 Aug 2026) it
+ * answers price requests only with an API key from Pyth Terminal, sent as
+ * a Bearer token. PYTH_HERMES_URL and PYTH_API_KEY (per network) set them.
+ */
 function hermesUrl() {
-  return (networkEnv(currentNetwork().id, "PYTH_HERMES_URL") || "https://hermes.pyth.network").replace(/\/$/, "");
+  return (networkEnv(currentNetwork().id, "PYTH_HERMES_URL") || process.env.PYTH_HERMES_URL || "https://pyth.dourolabs.app/hermes").replace(/\/$/, "");
+}
+
+function hermesHeaders() {
+  // One key serves every network, so the plain name is the fallback.
+  const key = networkEnv(currentNetwork().id, "PYTH_API_KEY") || process.env.PYTH_API_KEY;
+  return key ? { authorization: `Bearer ${key}` } : {};
 }
 
 /** The latest signed update for one price feed from Hermes, and its readable price. */
 export async function fetchPythUpdate(priceId) {
   const url = `${hermesUrl()}/v2/updates/price/latest?ids[]=${priceId}&encoding=hex`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Pyth's Hermes service answered ${res.status} for feed ${priceId}${res.status === 404 ? " - check the feed ID" : ""}.`);
+  const res = await fetch(url, { headers: hermesHeaders() });
+  if (!res.ok) {
+    const hint =
+      res.status === 404 ? " - check the feed ID"
+      : res.status === 401 ? " - set PYTH_API_KEY to a key from Pyth Terminal"
+      : res.status === 403 ? " - this API key's Pyth plan doesn't include that feed"
+      : res.status === 429 ? " - rate limited, try again in a minute"
+      : "";
+    throw new Error(`Pyth's Hermes service answered ${res.status} for feed ${priceId}${hint}.`);
+  }
   const body = await res.json();
   const data = body?.binary?.data;
   if (!Array.isArray(data) || data.length === 0) throw new Error(`Pyth's Hermes service returned no update for feed ${priceId}.`);

@@ -216,6 +216,18 @@ export async function sortitionFee(governanceAddress) {
 export async function startSortition(client, governanceAddress) {
   const gov = contractFor(governanceAddress);
   const { source, shortfall } = await sortitionFee(governanceAddress);
+  // A DAO created before the switch to Pyth still points at the Switchboard
+  // adapter, which will never answer. Starting a round there would leave it
+  // waiting forever (those DAOs' contracts can't abandon a round), so refuse.
+  const isEntropyAdapter = await publicClient
+    .readContract({ address: getAddress(source), abi: RANDOMNESS_ABI, functionName: "requestFee" })
+    .then(() => true, () => false);
+  if (!isEntropyAdapter) {
+    throw new SortitionError(
+      `This DAO's randomness source (${source}) isn't a Pyth Entropy adapter - most likely the old Switchboard one, which will never answer. ` +
+        "Pass a proposal first: /proposeaction sortition-set-randomness-source <this network's Entropy adapter> Switch to Pyth Entropy - then /startsortition."
+    );
+  }
   if (shortfall > 0n) {
     const hash = await writeWithGasBuffer(client, {
       address: getAddress(source),

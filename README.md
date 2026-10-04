@@ -128,7 +128,7 @@ Bonds and seeds (Optimistic challenges, Sowellian bonds and positions, Decision 
 /proposecriteria <target> <value> <data> oracle <pyth|adapter> <feedId> <targetValue> min|max <measurementPeriodSeconds> <description>
 ```
 - **Pyth:** type `pyth` (the network's `PYTH_PRICE_ADAPTER`) and the Pyth price feed ID (0x + 64 hex, from Pyth's price feed list). One adapter serves every feed. The target value is a price, e.g. `3000`, sent as 18 decimals.
-- **Resolving:** Pyth is pull-based. `/resolveviaoracle` fetches the feed's latest signed update from Pyth's Hermes service (`PYTH_HERMES_URL`, default `https://hermes.pyth.network`), posts it to Pyth paying its small fee from the caller's wallet, then resolves, so the price is fresh for `maxOracleStaleness`.
+- **Resolving:** Pyth is pull-based. `/resolveviaoracle` fetches the feed's latest signed update from Pyth's Hermes service (needs `PYTH_API_KEY` from Pyth Terminal; `PYTH_HERMES_URL` defaults to `https://pyth.dourolabs.app/hermes`), posts it to Pyth paying its small fee from the caller's wallet, then resolves, so the price is fresh for `maxOracleStaleness`.
 - **Human track:** `human - -` in the oracle and feed slots.
 
 ### Opportunity Markets (Ethereum Sepolia, FHE-encrypted)
@@ -228,7 +228,8 @@ npm start
 | `FACTORY_ADDRESS` + `<MODEL>_FACTORY_ADDRESS` | `/createdao` per model | per network with a prefix (`BASE_FACTORY_ADDRESS`); a model with no address can't be created there, but can still be `/register`ed |
 | `SORTITION_RANDOMNESS_SOURCE` | `/createdao ... sortition` | deployed `PythEntropyRandomnessAdapter` (Spaces), per network |
 | `PYTH_PRICE_ADAPTER` | Sowellian oracle track (`oracle=pyth`) | deployed `PythPriceFeedAdapter` (Spaces), per network |
-| `PYTH_HERMES_URL` | `/resolveviaoracle` price updates | optional, default `https://hermes.pyth.network` |
+| `PYTH_API_KEY` | `/resolveviaoracle` price updates | API key from Pyth Terminal; Hermes refuses price requests without one |
+| `PYTH_HERMES_URL` | `/resolveviaoracle` price updates | optional, default `https://pyth.dourolabs.app/hermes` |
 | `KMS_KEY_ID`, `AWS_REGION`, AWS credentials | KMS wallets | symmetric KMS key |
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | KMS wallets | service_role key — RLS allows nothing else |
 | `MASTER_WALLET_SEED` | legacy wallets only | keep set only while old wallets still hold funds |
