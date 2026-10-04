@@ -1,6 +1,6 @@
 # Protean — DAO Governance Bot for Telegram, Discord and Slack
 
-Turns a group chat into a fully functioning DAO. Deploy a governance system under any of ten models, get a wallet, stake, propose, vote, trade decision markets, and place confidential bets — all without leaving the chat. Runs on Telegram, Discord and Slack, and on Monad, Base and HyperEVM.
+Turns a group chat into a fully functioning DAO. Deploy a governance system under any of ten models, get a wallet, stake, propose, vote, trade decision markets, and place confidential bets — all without leaving the chat. Runs on Telegram, Discord and Slack. Deployed on Monad testnet, Base Sepolia and HyperEVM testnet; the mainnets are supported but not yet deployed.
 
 Contracts live in the companion repo, [`Spaces`](https://github.com/replico-labs/Spaces). See its README for deployed addresses per network.
 
@@ -9,7 +9,8 @@ Contracts live in the companion repo, [`Spaces`](https://github.com/replico-labs
 - **Contracts:** 539/539 Foundry tests pass (see Spaces).
 - **Live on Monad testnet:** the full create → propose → vote → queue → execute loop has run through Telegram for token-weighted and Board DAOs, with real receipts.
 - **Tested end to end on local chains** (anvil, with the real contracts deployed from source): every model's full lifecycle through the Discord and Slack handlers — the same command code Telegram uses for the shared paths — about 230 checks, including a GuardWrapper handover with a treasury payout confirmed by signers. The network layer has its own two-chain test: one bot process serving a "Monad" chain and a "Base" chain at once.
-- **Not yet run live:** the other eight models on Monad testnet, anything on Base or HyperEVM (no factories deployed there yet), real Discord and Slack workspaces, the FHE relayer round-trip, and Pyth Entropy / Hermes on a live chain. See [What's not verified yet](#whats-not-verified-yet).
+- **Deployed on Base Sepolia and HyperEVM testnet:** all ten factories plus the Pyth Entropy and price-feed adapters, built with Spaces' `size-limited` profile (addresses in Spaces' README).
+- **Not yet run live:** the other eight models on Monad testnet, any DAO lifecycle on Base Sepolia or HyperEVM testnet, the mainnets (nothing deployed), real Discord and Slack workspaces, the FHE relayer round-trip, and Pyth Entropy / Hermes on a live chain. See [What's not verified yet](#whats-not-verified-yet).
 
 ## How wallets work
 
@@ -30,12 +31,12 @@ The operator wallet pays users' gas, never the amounts they send.
 
 | Network | id | Chain | Gas token | Notes |
 |---|---|---|---|---|
-| Monad testnet | `monad-testnet` | 10143 | MON | the default; all ten factories deployed |
-| Monad mainnet | `monad-mainnet` | 143 | MON | |
-| Base | `base` | 8453 | ETH | contracts must be built with Spaces' `size-limited` profile |
-| Base Sepolia | `base-sepolia` | 84532 | ETH | same |
-| HyperEVM | `hyperevm` | 999 | HYPE | same, plus big blocks for factory deploys |
-| HyperEVM testnet | `hyperevm-testnet` | 998 | HYPE | same |
+| Monad testnet | `monad-testnet` | 10143 | MON | the default; all ten factories and both Pyth adapters deployed |
+| Monad mainnet | `monad-mainnet` | 143 | MON | not yet deployed |
+| Base | `base` | 8453 | ETH | not yet deployed; contracts must be built with Spaces' `size-limited` profile |
+| Base Sepolia | `base-sepolia` | 84532 | ETH | all ten factories and both Pyth adapters deployed (`size-limited`) |
+| HyperEVM | `hyperevm` | 999 | HYPE | not yet deployed; `size-limited`, plus big blocks for factory deploys |
+| HyperEVM testnet | `hyperevm-testnet` | 998 | HYPE | all ten factories and both Pyth adapters deployed (`size-limited`, big blocks); set a provider `HYPEREVM_TESTNET_RPC_URL`, the public RPC rate-limits hard |
 
 **Each chat's DAO lives on one network**, chosen when it's created or linked:
 
@@ -263,7 +264,7 @@ Sowellian oracle proposals need no keeper: `/resolveviaoracle` posts Pyth's pric
 
 ## What's not verified yet
 
-- Anything on Base or HyperEVM — no factories deployed there yet
+- A DAO lifecycle on Base Sepolia or HyperEVM testnet (factories deployed, nothing run through the bot yet); anything on the mainnets (nothing deployed)
 - **External protocol actions against the live protocols.** Each was tested on local chains through a real Board DAO:
   - Uniswap, Aerodrome, Lido-via-Aerodrome and Seaport ran against those protocols' real compiled contracts. HyperSwap and kHYPE-via-HyperSwap ran against Uniswap's real v3 contracts (HyperSwap v3 is a Uniswap v3 fork).
   - Aave, HyperLend, shMON, Nad.fun, Perpl, Flaunch and HyperCore ran against stand-ins with the protocols' exact function signatures.
@@ -310,7 +311,7 @@ docs/slack-app-manifest.yml
 The bots use long polling / sockets, so they need long-lived processes — not serverless. The bots and keepers all use `data/` (the keepers read it to find DAOs), so they must share one persistent volume. Railway attaches a volume to a single service, so there run them together in one service, leaving out any you haven't configured:
 
 ```bash
-sh -c "npm start & npm run discord & npm run slack & KEEPER_NETWORK=monad-testnet npm run keeper:sortition & wait"
+sh -c "npm start & npm run discord & npm run slack & KEEPER_NETWORK=monad-testnet npm run keeper:sortition & KEEPER_NETWORK=base-sepolia npm run keeper:sortition & KEEPER_NETWORK=hyperevm-testnet npm run keeper:sortition & wait"
 ```
 
 With "Add to Slack" enabled, give that service a public domain; Railway's `PORT` is where the install page listens. The commands:
