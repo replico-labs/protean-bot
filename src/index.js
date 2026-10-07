@@ -79,6 +79,7 @@ import { getIntegrationAction, integrationUsage } from "./integrations/index.js"
 import { integrationListLines, actionInfoText } from "./integrations/describe.js";
 import { actionAppliesTo, actionArgSpec, buildActionProposal, buildIntegrationProposal, computeHandoverProposals } from "./proposalBuilder.js";
 import { startEventListener } from "./eventListener.js";
+import { whatsappLinkConfigured, whatsappLinkRoutes } from "./platforms/whatsappLink.js";
 import { proposalPagesConfigured, startProposalApi, proposalPageUrl, proposalCreated, pendingSubmitLink, proposalStartPayload, parseProposalStartPayload, knownDaoModel } from "./proposalPages.js";
 import { back as opportunityBack } from "./opportunityMarket/encryptedBet.js";
 import { formatMarketAnalytics } from "./opportunityMarket/analyticsText.js";
@@ -4227,10 +4228,11 @@ bot.catch((err) => {
 
 run(bot);
 startEventListener(bot);
-// Proposal pages' API: Slack's install page serves it on the public port
-// when "Add to Slack" is set up; otherwise this process does.
-if (proposalPagesConfigured() && !process.env.SLACK_CLIENT_ID) {
-  startProposalApi(Number(process.env.PORT || 3000)).catch((err) => console.error("[proposalPages] API failed to start:", err));
+// Proposal pages' API and the WhatsApp link page: Slack's install page
+// serves them on the public port when "Add to Slack" is set up;
+// otherwise this process does.
+if ((proposalPagesConfigured() || whatsappLinkConfigured()) && !process.env.SLACK_CLIENT_ID) {
+  startProposalApi(Number(process.env.PORT || 3000), whatsappLinkConfigured() ? whatsappLinkRoutes() : []).catch((err) => console.error("[http] Public routes failed to start:", err));
 }
 
 /*//////////////////////////////////////////////////////////////

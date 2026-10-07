@@ -207,14 +207,16 @@ Every Telegram command also runs on Discord, Slack and WhatsApp, except `/start`
 ```bash
 npm run discord   # DISCORD_BOT_TOKEN, DISCORD_APPLICATION_ID, optional DISCORD_GUILD_ID
 npm run slack     # SLACK_APP_TOKEN + either SLACK_BOT_TOKEN (one workspace) or the "Add to Slack" settings below
-npm run whatsapp  # WHATSAPP_PHONE_NUMBER (only until the number is linked)
+npm run whatsapp  # WHATSAPP_LINK_SECRET (scan a QR) or WHATSAPP_PHONE_NUMBER (pairing code)
 ```
 
 - **Discord** registers 99 native slash commands on startup (Discord allows 100). `createdao`, `createboarddao`, `register`, `unregister`, `createmarket`, `registermarket` and `unregistermarket` are for members with *Manage Server* only. Long replies are split across messages.
 - **Slack** uses one command, `/protean <subcommand>` (e.g. `/protean vote 3 for`). Create the app from [`docs/slack-app-manifest.yml`](docs/slack-app-manifest.yml). Joining a channel with a welcome distributor sends the newcomer their tokens, as on Telegram.
 - **Slack in any workspace:** with `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`, `SLACK_STATE_SECRET` and `SLACK_PUBLIC_URL` set, the Slack process also serves an "Add to Slack" link at `<SLACK_PUBLIC_URL>/slack/install` (on `PORT`, so the service needs a public domain). Each workspace's bot token is stored encrypted under the wallets' KMS key, in Supabase's `slack_installations` table (`supabase/schema.sql`); uninstalling deletes it. Install into your own workspace through the same link, then activate public distribution. Without `SLACK_CLIENT_ID` it runs in one workspace on `SLACK_BOT_TOKEN`. Slack doesn't list Socket Mode apps in its App Directory, so share the link directly.
 - **WhatsApp** runs through [Baileys](https://baileys.wiki/), an unofficial library that links the bot's own WhatsApp number as a linked device (like WhatsApp Web). Commands are ordinary messages starting with `/` (e.g. `/vote 3 for`), in a group or a DM with the bot's number; one group links to one DAO. Add the number to a group like any contact.
-  - **Linking the number:** set `WHATSAPP_PHONE_NUMBER` (digits with country code, e.g. `2348012345678`) and start the process. The log prints a pairing code; on the bot's phone open *WhatsApp → Linked devices → Link a device → Link with phone number instead* and enter it. The session is saved in `data/whatsapp-auth/` (override with `WHATSAPP_AUTH_DIR`), so it must be on the persistent volume; later restarts reconnect without a code. If the device is unlinked from the phone, the saved session is cleared and a new code is printed.
+  - **Linking the number, by QR (like WhatsApp Web):** set `WHATSAPP_LINK_SECRET` to a long random string (e.g. `openssl rand -hex 32`) and leave `WHATSAPP_PHONE_NUMBER` unset. Open `https://<bot domain>/whatsapp/link?key=<WHATSAPP_LINK_SECRET>` on a computer or a second screen, then on the bot's phone go to *WhatsApp → Linked devices → Link a device* and scan it. The page follows WhatsApp's QR as it changes every 20 s and switches to "linked" once done. It's served on the bot's public port (the Slack install server, or the Telegram process when Slack's isn't running), and the QR is drawn by the bot itself, never sent to an outside QR service: whoever scans it links *their* WhatsApp to the bot, so keep the link private. Wrong keys are rate limited.
+  - **Or by pairing code:** set `WHATSAPP_PHONE_NUMBER` (digits with country code, e.g. `2348012345678`) instead. The log prints a code; on the bot's phone open *WhatsApp → Linked devices → Link a device → Link with phone number instead* and enter it. A code lasts about 2 minutes and a new one follows. When the number is set, it's used instead of the QR.
+  - The session is saved in `data/whatsapp-auth/` (override with `WHATSAPP_AUTH_DIR`), so it must be on the persistent volume; later restarts reconnect without scanning. If the device is unlinked from the phone, the saved session is cleared and linking starts again.
   - **Wallets** are keyed to the member's WhatsApp LID (its privacy ID), not their phone number, so a wallet survives a number change and the bot never stores numbers.
   - **Private replies:** WhatsApp has nothing like ephemeral messages, so whatever Discord/Slack show only to the caller (`wallet`, `contribute`, bets, balances, rewards, handover proposals, a proposer's edit link) goes to the caller's DM, with a one-line pointer in the group. Errors are answered in the group. If a DM can't be delivered, the bot asks the member to message it first.
   - Only one process may use the linked session at a time; a second one makes WhatsApp drop the first (the bot logs this and stops). Commands from the same person run one at a time; messages WhatsApp delivers more than 5 minutes late are ignored. Replies in groups with disappearing messages use the group's timer.
@@ -256,7 +258,7 @@ npm start
 | `MASTER_WALLET_SEED` | legacy wallets only | keep set only while old wallets still hold funds |
 | `OPPORTUNITY_MARKET_RPC_URL`, `OPPORTUNITY_MARKET_FACTORY_ADDRESS` | Opportunity Markets | Sepolia |
 | `DISCORD_*`, `SLACK_*` | Discord / Slack | see above |
-| `WHATSAPP_PHONE_NUMBER`, `WHATSAPP_AUTH_DIR` | WhatsApp | see above |
+| `WHATSAPP_LINK_SECRET`, `WHATSAPP_PHONE_NUMBER`, `WHATSAPP_AUTH_DIR` | WhatsApp | see above |
 
 ### Keepers
 

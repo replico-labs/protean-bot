@@ -21,6 +21,7 @@ import { getChatNetwork } from "../db.js";
 import { runOnNetwork } from "../networks.js";
 import { startEventListener } from "../eventListener.js";
 import { splitArgs } from "../args.js";
+import { whatsappLinkConfigured, writeLinkState, WHATSAPP_LINK_PATH } from "./whatsappLink.js";
 
 /**
  * WhatsApp front-end for the shared command core (commands.js), through
@@ -38,13 +39,16 @@ import { splitArgs } from "../args.js";
  * proposer's edit link) is sent to the caller's DM instead, with a short
  * pointer in the group.
  *
- * Run as its own process: `npm run whatsapp`. Env: WHATSAPP_PHONE_NUMBER
- * (the bot's number, digits only with country code - only needed until
- * it's linked), optional WHATSAPP_AUTH_DIR (default data/whatsapp-auth,
- * which must be on the persistent volume), plus the same chain/wallet env
- * as the Telegram bot. The first start prints a pairing code to the logs:
- * on the bot's phone open WhatsApp > Linked devices > Link a device >
- * Link with phone number instead, and enter it.
+ * Run as its own process: `npm run whatsapp`. Linking the bot's number,
+ * one of:
+ * - WHATSAPP_LINK_SECRET: scan a QR at <public url>/whatsapp/link?key=<secret>
+ *   (whatsappLink.js), like WhatsApp Web.
+ * - WHATSAPP_PHONE_NUMBER (digits with country code): the logs print a
+ *   pairing code to enter under Linked devices > Link a device > Link with
+ *   phone number instead. When set, it's used instead of the QR.
+ * Optional WHATSAPP_AUTH_DIR (default data/whatsapp-auth, which must be on
+ * the persistent volume), plus the same chain/wallet env as the Telegram
+ * bot.
  */
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -136,7 +140,14 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * One WhatsApp connection that reconnects by itself. `sock` is replaced
  * on every reconnect, so everything reads `bot.sock` at use time.
  */
-export function createWhatsAppBot({ authDir = DEFAULT_AUTH_DIR, phoneNumber, logger, socketFactory = makeWASocket, authStateFactory = useMultiFileAuthState } = {}) {
+export function createWhatsAppBot({
+  authDir = DEFAULT_AUTH_DIR,
+  phoneNumber,
+  logger,
+  socketFactory = makeWASocket,
+  authStateFactory = useMultiFileAuthState,
+  onLinkState = (state) => whatsappLinkConfigured() && writeLinkState(state),
+} = {}) {
   const log = logger ?? pino({ level: process.env.WHATSAPP_LOG_LEVEL || "warn" });
   const groupCache = new Map();
   const userQueues = new Map();
@@ -306,26 +317,39 @@ export function createWhatsAppBot({ authDir = DEFAULT_AUTH_DIR, phoneNumber, log
     });
     bot.sock = sock;
     let pairingRequested = false;
+    let qrHintShown = false;
 
     sock.ev.on("creds.update", saveCreds);
 
     sock.ev.on("connection.update", async (update) => {
       const { connection, lastDisconnect, qr } = update;
 
-      // A QR means WhatsApp is waiting for a new link; we use the
-      // phone-number pairing code instead, since a QR can't be scanned
-      // from server logs.
-      if (qr && !sock.authState.creds.registered && !pairingRequested) {
-        pairingRequested = true;
+      // A QR means WhatsApp is waiting for a new link. With a phone
+      // number we ask for a pairing code instead; without one, the QR goes
+      // to the link page (whatsappLink.js) to scan.
+      if (qr && !sock.authState.creds.registered) {
         if (!phoneNumber) {
-          console.error("[whatsapp] Not linked yet - set WHATSAPP_PHONE_NUMBER (digits only, with country code) and restart to get a pairing code.");
-          return;
-        }
-        try {
-          const code = await sock.requestPairingCode(phoneNumber.replace(/\D/g, ""));
-          console.log(`[whatsapp] Pairing code: ${code.match(/.{1,4}/g).join("-")} - on the bot's phone: WhatsApp > Linked devices > Link a device > Link with phone number instead. Only the latest code printed works; it lasts about 2 minutes.`);
-        } catch (err) {
-          console.error("[whatsapp] Couldn't get a pairing code:", err.message);
+          onLinkState({ qr });
+          if (!qrHintShown) {
+            qrHintShown = true;
+            const base = (process.env.SLACK_PUBLIC_URL || "https://<your-bot-domain>").replace(/\/+$/, "");
+            console.log(
+              whatsappLinkConfigured()
+                ? `[whatsapp] Not linked yet - open ${base}${WHATSAPP_LINK_PATH}?key=<WHATSAPP_LINK_SECRET> and scan the QR from the bot's phone (WhatsApp > Linked devices > Link a device).`
+                : "[whatsapp] Not linked yet - set WHATSAPP_LINK_SECRET to scan a QR code on the link page, or WHATSAPP_PHONE_NUMBER to get a pairing code, and restart."
+            );
+          }
+        } else if (!pairingRequested) {
+          pairingRequested = true;
+          try {
+            const digits = phoneNumber.replace(/\D/g, "");
+            const code = await sock.requestPairingCode(digits);
+            // Enough of the number to spot a typo without logging all of it.
+            console.log(`[whatsapp] Requesting a pairing code for the number ${digits.slice(0, 3)}…${digits.slice(-4)} (${digits.length} digits)`);
+            console.log(`[whatsapp] Pairing code: ${code.match(/.{1,4}/g).join("-")} - on the bot's phone: WhatsApp > Linked devices > Link a device > Link with phone number instead. Only the latest code printed works; it lasts about 2 minutes.`);
+          } catch (err) {
+            console.error("[whatsapp] Couldn't get a pairing code:", err.message);
+          }
         }
       }
 
@@ -333,21 +357,38 @@ export function createWhatsAppBot({ authDir = DEFAULT_AUTH_DIR, phoneNumber, log
         attempt = 0;
         setReady(true);
         console.log(`[whatsapp] Connected as ${jidNormalizedUser(sock.user?.id) || "unknown"}`);
+        onLinkState({ linked: true, me: jidNormalizedUser(sock.user?.id) });
       }
+
+      // The phone accepted the code; WhatsApp now restarts the connection.
+      if (update.isNewLogin) console.log("[whatsapp] Code accepted - finishing the link...");
 
       if (connection === "close") {
         setReady(false);
+        onLinkState({ linked: false });
         const status = lastDisconnect?.error?.output?.statusCode;
+        // `account` is only set once a phone has actually linked this session.
+        const linked = Boolean(sock.authState.creds.account || sock.authState.creds.registered);
+        if (status === DisconnectReason.connectionReplaced) {
+          console.error("[whatsapp] Another session took over this WhatsApp link - is a second bot process running with the same session? Stopping this one.");
+          stopped = true;
+          return;
+        }
+        if (status !== DisconnectReason.restartRequired && !linked) {
+          // Never linked (usually a pairing code expiring unused). Requesting
+          // a code saves a half-made session that WhatsApp refuses to log in
+          // with, so start the next attempt from a clean one.
+          fs.rmSync(authDir, { recursive: true, force: true });
+          if (phoneNumber) console.error("[whatsapp] Pairing code expired without being used - printing a new one.");
+          setTimeout(() => connect().catch((err) => console.error("[whatsapp] Reconnect failed:", err)), 2000);
+          return;
+        }
         if (status === DisconnectReason.loggedOut) {
           // Unlinked from the phone: the saved session is dead. Clear it
           // so the next connection prints a fresh pairing code.
           console.error("[whatsapp] Logged out (the device was unlinked). Clearing the saved session to pair again.");
           fs.rmSync(authDir, { recursive: true, force: true });
           attempt = 0;
-        } else if (status === DisconnectReason.connectionReplaced) {
-          console.error("[whatsapp] Another session took over this WhatsApp link - is a second bot process running with the same session? Stopping this one.");
-          stopped = true;
-          return;
         }
         const delay = status === DisconnectReason.restartRequired ? 0 : Math.min(RECONNECT_MAX_MS, 1000 * 2 ** attempt++);
         if (delay) console.error(`[whatsapp] Connection closed (${status ?? lastDisconnect?.error?.message ?? "unknown"}), reconnecting in ${delay / 1000}s`);
@@ -378,6 +419,7 @@ export function createWhatsAppBot({ authDir = DEFAULT_AUTH_DIR, phoneNumber, log
 
 export async function startWhatsAppBot({ phoneNumber = process.env.WHATSAPP_PHONE_NUMBER, authDir = process.env.WHATSAPP_AUTH_DIR || DEFAULT_AUTH_DIR } = {}) {
   const bot = createWhatsAppBot({ phoneNumber, authDir });
+  if (whatsappLinkConfigured()) writeLinkState({ linked: false });
   await bot.start();
   // Listener notifications wait for the connection, so a brief reconnect
   // doesn't drop them.

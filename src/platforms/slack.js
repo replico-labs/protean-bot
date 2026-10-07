@@ -7,6 +7,7 @@ import { startEventListener } from "../eventListener.js";
 import { createInstallationStore, isSlackInstallationStoreConfigured } from "./slackInstallations.js";
 import { splitArgs } from "../args.js";
 import { proposalApiRoutes, proposalPagesConfigured } from "../proposalPages.js";
+import { whatsappLinkConfigured, whatsappLinkRoutes } from "./whatsappLink.js";
 
 const { App } = bolt;
 
@@ -179,9 +180,9 @@ export async function startSlackBot({ token, appToken, oauth = null, installatio
       redirectUri: `${oauth.publicUrl}${REDIRECT_PATH}`,
       installationStore: store,
       installerOptions: { port: oauth.port, directInstall: true, redirectUriPath: REDIRECT_PATH, clientOptions },
-      // Proposal pages' API shares this public HTTP server (index.js
-      // serves it instead when Slack's install page isn't running).
-      customRoutes: proposalPagesConfigured() ? proposalApiRoutes() : [],
+      // Proposal pages' API and the WhatsApp link page share this public
+      // HTTP server (index.js serves them when Slack's isn't running).
+      customRoutes: [...(proposalPagesConfigured() ? proposalApiRoutes() : []), ...(whatsappLinkConfigured() ? whatsappLinkRoutes() : [])],
       clientOptions,
     });
   } else {

@@ -403,12 +403,19 @@ export function proposalApiRoutes() {
   return ["GET", "POST", "OPTIONS"].map((method) => ({ path: PROPOSAL_API_PATH, method, handler }));
 }
 
-/** The same routes on a plain HTTP server, for when Slack's isn't running. */
-export async function startProposalApi(port) {
+/**
+ * The same routes on a plain HTTP server, for when Slack's isn't running,
+ * plus `extraRoutes` ({ path, handler }, exact path, GET) such as the
+ * WhatsApp link page.
+ */
+export async function startProposalApi(port, extraRoutes = []) {
   const { createServer } = await import("node:http");
   const re = /^\/api\/proposals\/([^/]+)\/([^/]+)\/([^/]+)\/?$/;
   const server = createServer((req, res) => {
-    const m = re.exec(new URL(req.url, "http://localhost").pathname);
+    const pathname = new URL(req.url, "http://localhost").pathname;
+    const extra = extraRoutes.find((r) => r.path === pathname.replace(/\/+$/, "") && req.method === (r.method ?? "GET"));
+    if (extra) return extra.handler(req, res);
+    const m = re.exec(pathname);
     if (!m) {
       res.writeHead(404);
       return res.end();
@@ -416,6 +423,6 @@ export async function startProposalApi(port) {
     return handle(req, res, { network: decodeURIComponent(m[1]), dao: decodeURIComponent(m[2]), id: decodeURIComponent(m[3]) });
   });
   await new Promise((resolve) => server.listen(port, resolve));
-  console.log(`[proposalPages] API on port ${port}`);
+  console.log(`[http] Public routes on port ${port}`);
   return server;
 }
