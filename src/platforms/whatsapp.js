@@ -297,7 +297,9 @@ export function createWhatsAppBot({ authDir = DEFAULT_AUTH_DIR, phoneNumber, log
     const sock = socketFactory({
       auth: state,
       logger: log,
-      browser: Browsers.ubuntu("Protean DAO"),
+      // Pairing codes are only accepted from a browser WhatsApp knows
+      // (Chrome, Firefox, Safari...); a custom name gets "couldn't link".
+      browser: Browsers.ubuntu("Chrome"),
       markOnlineOnConnect: false,
       syncFullHistory: false,
       cachedGroupMetadata: async (jid) => groupCache.get(jid)?.metadata,
@@ -321,7 +323,7 @@ export function createWhatsAppBot({ authDir = DEFAULT_AUTH_DIR, phoneNumber, log
         }
         try {
           const code = await sock.requestPairingCode(phoneNumber.replace(/\D/g, ""));
-          console.log(`[whatsapp] Pairing code: ${code.match(/.{1,4}/g).join("-")} - on the bot's phone: WhatsApp > Linked devices > Link a device > Link with phone number instead.`);
+          console.log(`[whatsapp] Pairing code: ${code.match(/.{1,4}/g).join("-")} - on the bot's phone: WhatsApp > Linked devices > Link a device > Link with phone number instead. Only the latest code printed works; it lasts about 2 minutes.`);
         } catch (err) {
           console.error("[whatsapp] Couldn't get a pairing code:", err.message);
         }
