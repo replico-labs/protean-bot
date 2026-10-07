@@ -34,10 +34,10 @@ import { whatsappLinkConfigured, writeLinkState, WHATSAPP_LINK_PATH } from "./wh
  * LID is WhatsApp's per-account privacy ID, which stays the same if a
  * member changes phone number and never exposes the number itself.
  *
- * WhatsApp has no private-in-group replies, so anything Discord/Slack
- * show only to the caller (wallet details, confidential bets, a
- * proposer's edit link) is sent to the caller's DM instead, with a short
- * pointer in the group.
+ * WhatsApp has no private-in-group replies, so results that are actually
+ * private (confidential bets and balances, the treasury address, a
+ * proposer's edit link) go to the caller's DM instead, with a short
+ * pointer in the group. Everything else is answered in the group.
  *
  * Run as its own process: `npm run whatsapp`. Linking the bot's number,
  * one of:
@@ -112,15 +112,24 @@ export function isGroupAdmin(metadata, jids) {
 }
 
 /**
- * Where each part of a command's result goes. Commands Discord answers
- * privately (`ephemeralByDefault` - wallet, contribute, confidential
- * bets...) go to the caller's DM when run in a group; errors stay in the
- * group as a reply to the command; `privateFollowUp` always goes to DM.
+ * Discord shows these only to the caller just to keep the channel tidy;
+ * nothing in them is private (a wallet address is public on-chain), and
+ * Telegram answers them in the group too.
  */
-export function routeResult(command, result, isDirect) {
+export const ANSWER_IN_GROUP = new Set(["help", "wallet", "listactions", "actioninfo"]);
+
+/**
+ * Where each part of a command's result goes. Results that are actually
+ * private (confidential bets and balances, rewards, the treasury address
+ * from contribute, handover proposals) go to the caller's DM when run in a
+ * group, with a pointer in the group; everything else, errors included,
+ * is answered in the group. `privateFollowUp` (a proposer's edit link)
+ * always goes to DM.
+ */
+export function routeResult(name, command, result, isDirect) {
   const toDm = [];
   const toChat = [];
-  if (!isDirect && command?.ephemeralByDefault) {
+  if (!isDirect && command?.ephemeralByDefault && !ANSWER_IN_GROUP.has(name)) {
     toDm.push(result.text);
     toChat.push("📩 Sent you the details in a private message.");
   } else {
@@ -250,7 +259,7 @@ export function createWhatsAppBot({
     }
 
     const result = await runCommand(name, ctx);
-    const { toChat, toDm } = routeResult(command, result, isDirect);
+    const { toChat, toDm } = routeResult(name, command, result, isDirect);
     for (const text of toDm) {
       await send(lid, { text }).catch(async (err) => {
         log.warn({ err: err.message }, "couldn't DM a WhatsApp user");
