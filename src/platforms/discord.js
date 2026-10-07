@@ -136,6 +136,8 @@ export async function handleInteraction(interaction) {
   }
   const private_ = Boolean(result.ephemeral || command.ephemeralByDefault);
   for (const content of more) await interaction.followUp({ content, ...(private_ ? privateFlags : {}) });
+  // Something only the caller should see after a public reply (a proposal's edit link).
+  if (result.privateFollowUp) await interaction.followUp({ content: toDiscordMarkdown(result.privateFollowUp), ...privateFlags });
 }
 
 export async function startDiscordBot({ token, applicationId, guildId } = {}) {

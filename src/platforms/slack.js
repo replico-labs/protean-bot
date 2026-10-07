@@ -6,6 +6,7 @@ import { runOnNetwork } from "../networks.js";
 import { startEventListener } from "../eventListener.js";
 import { createInstallationStore, isSlackInstallationStoreConfigured } from "./slackInstallations.js";
 import { splitArgs } from "../args.js";
+import { proposalApiRoutes, proposalPagesConfigured } from "../proposalPages.js";
 
 const { App } = bolt;
 
@@ -89,6 +90,8 @@ export async function handleSlashCommand({ command, ack, respond, client }) {
   // Public results post to the channel so the whole group sees votes and
   // proposals, same as Telegram; errors and private details stay ephemeral.
   await respond({ response_type: result.ephemeral ? "ephemeral" : "in_channel", text: result.text, mrkdwn: true });
+  // Something only the caller should see after a public reply (a proposal's edit link).
+  if (result.privateFollowUp) await respond({ response_type: "ephemeral", text: result.privateFollowUp, mrkdwn: true });
 }
 
 /**
@@ -176,6 +179,9 @@ export async function startSlackBot({ token, appToken, oauth = null, installatio
       redirectUri: `${oauth.publicUrl}${REDIRECT_PATH}`,
       installationStore: store,
       installerOptions: { port: oauth.port, directInstall: true, redirectUriPath: REDIRECT_PATH, clientOptions },
+      // Proposal pages' API shares this public HTTP server (index.js
+      // serves it instead when Slack's install page isn't running).
+      customRoutes: proposalPagesConfigured() ? proposalApiRoutes() : [],
       clientOptions,
     });
   } else {

@@ -1,4 +1,5 @@
 import { createPublicClient, createWalletClient, http, formatEther } from "viem";
+import { failOnRevert } from "../receipts.js";
 import { fitGasLimit, contractTx } from "../gasLimit.js";
 import { sepolia } from "viem/chains";
 import { SepoliaConfig } from "@zama-fhe/relayer-sdk/node";
@@ -16,10 +17,12 @@ const SEPOLIA_RPC_URL = process.env.OPPORTUNITY_MARKET_RPC_URL || sepolia.rpcUrl
 
 export const opportunityMarketChain = sepolia;
 
-export const opportunityPublicClient = createPublicClient({
-  chain: opportunityMarketChain,
-  transport: http(SEPOLIA_RPC_URL),
-});
+export const opportunityPublicClient = failOnRevert(
+  createPublicClient({
+    chain: opportunityMarketChain,
+    transport: http(SEPOLIA_RPC_URL),
+  })
+);
 
 /**
  * Sepolia counterpart to contracts.js's walletClientFor - same pattern,

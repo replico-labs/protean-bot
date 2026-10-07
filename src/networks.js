@@ -2,6 +2,7 @@ import "dotenv/config";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createPublicClient, createWalletClient, http, defineChain, parseEther } from "viem";
 import { monad, monadTestnet, base, baseSepolia, hyperEvm, hyperliquidEvmTestnet } from "viem/chains";
+import { failOnRevert } from "./receipts.js";
 
 /**
  * Every chain the governance side of the bot can run on. Opportunity
@@ -159,7 +160,7 @@ export function getNetwork(id) {
       first: gasEnv("GAS_TOPUP_FIRST", def.gas.first),
       repeat: gasEnv("GAS_TOPUP_REPEAT", def.gas.repeat),
     },
-    publicClient: createPublicClient({ chain, transport: http() }),
+    publicClient: failOnRevert(createPublicClient({ chain, transport: http() })),
     walletClient: null, // set by attachOperator
   };
   built.set(canonical, network);

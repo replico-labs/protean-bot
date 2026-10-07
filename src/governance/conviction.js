@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { getAddress, parseEther } from "viem";
+import { getAddress, parseEther, formatEther, formatUnits, decodeFunctionData, parseAbi, zeroAddress } from "viem";
 import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer } from "../config.js";
 import { currentNetwork, networkEnvName } from "../networks.js";
 
@@ -53,16 +53,160 @@ function contractFor(address) {
 export async function propose(client, governanceAddress, actions, metadataURI) {
   const gov = contractFor(governanceAddress);
 
+  // Spending budgets (BUDGET_VERSION 2): declare what the actions may take
+  // from the Treasury, or execution reverts the moment a listed asset leaves.
+  const budget = (await hasBudgets(governanceAddress)) ? await deriveBudget(governanceAddress, actions) : null;
   const hash = await writeWithGasBuffer(client, {
     ...gov,
-    functionName: "propose",
-    args: [actions, metadataURI],
+    ...(budget ? { functionName: "proposeWithBudget", args: [actions, metadataURI, budget] } : { functionName: "propose", args: [actions, metadataURI] }),
   });
   await publicClient.waitForTransactionReceipt({ hash });
 
   const proposalId = await publicClient.readContract({ ...gov, functionName: "proposalCount" });
 
-  return { hash, proposalId };
+  return { hash, proposalId, budget };
+}
+
+/*//////////////////////////////////////////////////////////////
+    SPENDING BUDGETS - ConvictionGovernance BUDGET_VERSION 2
+//////////////////////////////////////////////////////////////*/
+
+const budgetVersions = new Map();
+
+/** Whether this DAO checks spending budgets (DAOs from the newer factory). */
+export async function hasBudgets(governanceAddress) {
+  const key = `${currentNetwork().id}:${getAddress(governanceAddress)}`;
+  if (!budgetVersions.has(key)) {
+    const version = await publicClient
+      .readContract({ ...contractFor(governanceAddress), functionName: "BUDGET_VERSION" })
+      .catch(() => 0n);
+    budgetVersions.set(key, Number(version));
+  }
+  return budgetVersions.get(key) >= 2;
+}
+
+// How a proposal can take assets from the Treasury - checked against
+// Treasury.sol and the ERC20 standard.
+const TREASURY_SPEND_ABI = parseAbi([
+  "function transferETH(address recipient, uint256 amount)",
+  "function transferERC20(address token, address recipient, uint256 amount)",
+  "function execute(address target, uint256 value, bytes data)",
+]);
+const TOKEN_SPEND_ABI = parseAbi([
+  "function approve(address spender, uint256 amount)",
+  "function increaseAllowance(address spender, uint256 addedValue)",
+  "function transfer(address to, uint256 amount)",
+]);
+
+function decodeOrNull(abi, data) {
+  try {
+    return decodeFunctionData({ abi, data });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The most each listed asset can leave the Treasury through these
+ * actions: native sent by transferETH or with an execute call, and
+ * tokens moved by transferERC20 or approved/transferred through
+ * execute. An approval caps what a protocol can pull (the contract
+ * revokes whatever is left afterwards), so it's the budget for that
+ * leg even if less is used. Only listed assets go in - the contract
+ * rejects anything else.
+ */
+export async function deriveBudget(governanceAddress, actions) {
+  const gov = contractFor(governanceAddress);
+  const [treasury, [assets]] = await Promise.all([
+    publicClient.readContract({ ...gov, functionName: "treasury" }),
+    publicClient.readContract({ ...gov, functionName: "listedAssets" }),
+  ]);
+  const listed = new Set(assets.map((a) => a.toLowerCase()));
+  const totals = new Map();
+  const add = (asset, amount) => {
+    const key = asset.toLowerCase();
+    if (amount > 0n && listed.has(key)) totals.set(key, (totals.get(key) ?? 0n) + amount);
+  };
+
+  for (const action of actions) {
+    if (getAddress(action.target) !== getAddress(treasury)) continue;
+    const call = decodeOrNull(TREASURY_SPEND_ABI, action.data);
+    if (!call) continue;
+    if (call.functionName === "transferETH") add(zeroAddress, call.args[1]);
+    else if (call.functionName === "transferERC20") add(call.args[0], call.args[2]);
+    else {
+      const [target, value, inner] = call.args;
+      add(zeroAddress, value);
+      const tokenCall = decodeOrNull(TOKEN_SPEND_ABI, inner);
+      if (tokenCall) add(target, tokenCall.args[1]);
+    }
+  }
+  return [...totals].map(([asset, amount]) => ({ asset: getAddress(asset), amount }));
+}
+
+const ASSET_META_ABI = parseAbi(["function symbol() view returns (string)", "function decimals() view returns (uint8)", "function balanceOf(address) view returns (uint256)"]);
+
+async function assetMeta(asset) {
+  if (asset === zeroAddress) return { symbol: currentNetwork().nativeSymbol, decimals: 18 };
+  const [symbol, decimals] = await Promise.all([
+    publicClient.readContract({ address: asset, abi: ASSET_META_ABI, functionName: "symbol" }).catch(() => `${asset.slice(0, 8)}…`),
+    publicClient.readContract({ address: asset, abi: ASSET_META_ABI, functionName: "decimals" }).catch(() => 18),
+  ]);
+  return { symbol, decimals: Number(decimals) };
+}
+
+async function holdingOf(asset, holder) {
+  return asset === zeroAddress
+    ? publicClient.getBalance({ address: holder })
+    : publicClient.readContract({ address: asset, abi: ASSET_META_ABI, functionName: "balanceOf", args: [holder] });
+}
+
+/** "10 USDC, 0.5 MON" - a budget in readable units. */
+export async function describeBudget(budget) {
+  const parts = await Promise.all(
+    budget.map(async ({ asset, amount }) => {
+      const { symbol, decimals } = await assetMeta(getAddress(asset));
+      return `${formatUnits(amount, decimals)} ${symbol}`;
+    })
+  );
+  return parts.join(", ");
+}
+
+/**
+ * The DAO's listed assets: weight (extra conviction to spend all of it),
+ * what the Treasury holds, and any weight cut or removal waiting out its
+ * delay.
+ */
+export async function getAssets(governanceAddress) {
+  const gov = contractFor(governanceAddress);
+  const [treasury, [assets, weights]] = await Promise.all([
+    publicClient.readContract({ ...gov, functionName: "treasury" }),
+    publicClient.readContract({ ...gov, functionName: "listedAssets" }),
+  ]);
+  return Promise.all(
+    assets.map(async (asset, i) => {
+      const [meta, holding, pending] = await Promise.all([
+        assetMeta(asset),
+        holdingOf(asset, treasury),
+        publicClient.readContract({ ...gov, functionName: "pendingAssetChange", args: [asset] }),
+      ]);
+      const [pendingWeight, effectiveAt, remove] = pending;
+      return {
+        asset,
+        ...meta,
+        weight: formatEther(weights[i]),
+        holding: formatUnits(holding, meta.decimals),
+        pending: Number(effectiveAt) ? { weight: formatEther(pendingWeight), effectiveAt: Number(effectiveAt), remove } : null,
+      };
+    })
+  );
+}
+
+/** Applies a weight cut or removal whose delay has passed. Anyone may. */
+export async function applyAssetChange(client, governanceAddress, asset) {
+  const hash = await writeWithGasBuffer(client, { ...contractFor(governanceAddress), functionName: "applyAssetChange", args: [getAddress(asset)] });
+  await publicClient.waitForTransactionReceipt({ hash });
+  return { hash };
 }
 
 export async function vote() {
@@ -134,8 +278,18 @@ export async function getProposal(governanceAddress, proposalId) {
     publicClient.readContract({ ...gov, functionName: "previewConviction", args: [BigInt(proposalId)] }),
   ]);
 
+  let budget;
+  if (await hasBudgets(governanceAddress)) {
+    const [entries, weakens] = await Promise.all([
+      publicClient.readContract({ ...gov, functionName: "proposalBudget", args: [BigInt(proposalId)] }),
+      publicClient.readContract({ ...gov, functionName: "weakensRules", args: [BigInt(proposalId)] }),
+    ]);
+    budget = { text: entries.length ? await describeBudget(entries) : null, weakensRules: weakens };
+  }
+
   return {
     ...proposal,
+    budget,
     stateIndex: Number(stateIndex),
     stateLabel: CONVICTION_STATE_LABELS[Number(stateIndex)] ?? "Unknown",
     executableAfter,

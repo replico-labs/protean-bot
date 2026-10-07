@@ -79,12 +79,14 @@ import { getIntegrationAction, integrationUsage } from "./integrations/index.js"
 import { integrationListLines, actionInfoText } from "./integrations/describe.js";
 import { actionAppliesTo, actionArgSpec, buildActionProposal, buildIntegrationProposal, computeHandoverProposals } from "./proposalBuilder.js";
 import { startEventListener } from "./eventListener.js";
+import { proposalPagesConfigured, startProposalApi, proposalPageUrl, proposalCreated, pendingSubmitLink, proposalStartPayload, parseProposalStartPayload, knownDaoModel } from "./proposalPages.js";
 import { back as opportunityBack } from "./opportunityMarket/encryptedBet.js";
 import { formatMarketAnalytics } from "./opportunityMarket/analyticsText.js";
 import { getBalance as opportunityGetBalance, getBet as opportunityGetBet, getAllBets as opportunityGetAllBets, getMarketAnalytics as opportunityGetAnalytics } from "./opportunityMarket/decrypt.js";
 import { revealAndCompleteWinningTotal, revealAndCompleteWithdrawal } from "./opportunityMarket/publicReveal.js";
 import { sendNativeSponsored } from "./gasSponsor.js";
 import { splitArgs } from "./args.js";
+import { budgetLine, assetsText } from "./governance/budgetText.js";
 
 // Checked here rather than in config.js, so the keepers and the Discord
 // and Slack entrypoints (which share config.js) don't need a Telegram token.
@@ -289,9 +291,88 @@ async function requireGuardWrapper(ctx) {
                             /start, /help
 //////////////////////////////////////////////////////////////*/
 
-bot.command("start", (ctx) =>
-  ctx.reply("👋 I'm Protean — I connect this chat to an on-chain DAO.\n\nRun /help to see what I can do.")
-);
+bot.command("start", async (ctx) => {
+  // t.me/<bot>?start=pp_... - a proposer collecting their edit link in a
+  // private chat (sent here when the bot couldn't message them first).
+  const wanted = parseProposalStartPayload(ctx.match);
+  if (wanted && ctx.chat.type === "private") {
+    await sendEditLink(ctx, wanted.network, wanted.dao, wanted.proposalId);
+    return;
+  }
+  await ctx.reply("👋 I'm Protean — I connect this chat to an on-chain DAO.\n\nRun /help to see what I can do.");
+});
+
+/** The caller's bot wallet address, or null if they have none. */
+async function walletAddressOf(userId) {
+  try {
+    return await getUserAddress(userId);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Sends the proposer of `proposalId` its submit link in this private
+ * chat - only to the on-chain proposer, and only while details can still
+ * be submitted.
+ */
+async function sendEditLink(ctx, network, dao, proposalId) {
+  const model = knownDaoModel(network, dao);
+  if (!model) {
+    await ctx.reply("I don't know that DAO any more.");
+    return;
+  }
+  try {
+    const text = await pendingSubmitLink({ network, dao, model, proposalId, platform: "telegram", userId: ctx.from.id, walletAddress: await walletAddressOf(ctx.from.id), cmd: TG_CMD });
+    await ctx.reply(text ?? `Nothing to send: only the proposer can add details to #${proposalId}, once, before anyone votes or backs it.`, { link_preview_options: { is_disabled: true } });
+  } catch (err) {
+    await ctx.reply(err.shortMessage || err.message);
+  }
+}
+
+/**
+ * /proposal run by the proposer before they've submitted details: the
+ * submit link again, privately (DM, or a t.me link when the bot can't
+ * message them first). Silent for everyone else.
+ */
+async function resendSubmitLink(ctx, address, proposalId) {
+  if (!proposalPagesConfigured()) return;
+  const network = currentNetwork().id;
+  const text = await pendingSubmitLink({
+    network, dao: address, model: getChatModel(ctx.chat.id), proposalId, platform: "telegram", userId: ctx.from.id,
+    walletAddress: await walletAddressOf(ctx.from.id), cmd: TG_CMD,
+  }).catch(() => null);
+  if (!text) return;
+  const delivered = await ctx.api.sendMessage(ctx.from.id, text, { link_preview_options: { is_disabled: true } }).then(() => true, () => false);
+  if (ctx.chat.type === "private") return;
+  await ctx.reply(
+    delivered
+      ? "Proposer: I've sent you the link to add the details privately."
+      : `Proposer: open https://t.me/${ctx.me.username}?start=${proposalStartPayload(network, address, proposalId)} to get your link for adding the details.`,
+    { link_preview_options: { is_disabled: true } }
+  ).catch(() => {});
+}
+
+/**
+ * After a proposal is created in Telegram: a public message with its page
+ * link, and the edit link sent privately to the proposer. A bot can only
+ * message someone who has started a private chat with it, so when that
+ * fails the group gets a t.me link that opens one and delivers it.
+ */
+async function tgProposalPage(ctx, address, model, proposalId) {
+  const network = currentNetwork().id;
+  const page = await proposalCreated({ network, dao: address, model, proposalId, platform: "telegram", userId: ctx.from.id, cmd: TG_CMD });
+  if (!page) return;
+  const isPrivate = ctx.chat.type === "private";
+  const delivered = await ctx.api
+    .sendMessage(ctx.from.id, page.editText, { link_preview_options: { is_disabled: true } })
+    .then(() => true, () => false);
+  if (isPrivate) return;
+  const how = delivered
+    ? "The proposer got a private link to add the details."
+    : `Proposer: open ${`https://t.me/${ctx.me.username}?start=${proposalStartPayload(network, address, proposalId)}`} to get your private link for adding the details.`;
+  await ctx.reply(`📄 Proposal #${proposalId}: ${page.page}\n${how}`, { link_preview_options: { is_disabled: true } }).catch(() => {});
+}
 
 /**
  * Per-model DAO-lifecycle command block. Deliberately NOT derived from a
@@ -374,6 +455,7 @@ const MODEL_HELP_BLOCKS = {
     "/support `<id>` — commit your entire staked balance behind a proposal; your influence on it grows the longer you keep it committed",
     "/withdrawsupport — stop backing whatever proposal you're currently supporting",
     "/mysupport — check which proposal (if any) you're currently backing",
+    "/assets — what proposals must budget for, how much each asset counts, and pending weight changes (Conviction DAOs from the newer factory)",
     "/queue `<id>` — once accumulated support clears the threshold, start the timelock",
     "/execute `<id>` — carry out the proposal once its timelock has cleared",
     "/cancel `<id>` — withdraw your own proposal before execution",
@@ -441,7 +523,7 @@ bot.command("help", async (ctx) => {
       "/tip `<amount> <recipient> [tokenAddressOrTicker]` — distribute tokens from the DAO's own operator-held supply (creator only) — this is how newly-created tokens actually reach people",
       "/send `<amount> <recipient> [tokenAddressOrTicker]` — send tokens YOU personally hold to anyone, no restrictions — add the native symbol (`MON`, `ETH`, `HYPE`) or `native` at the end to send native currency instead of a token",
       "/proposals — see every proposal this DAO has, with current status",
-      "/proposal `<id>` — full detail on one specific proposal"
+      "/proposal `<id>` — full detail on one specific proposal, with its page link (and, for its proposer, the private link to add the details if they haven't yet)"
     );
     if (hasToken(model)) {
       lines.push(
@@ -1832,6 +1914,7 @@ bot.command("proposal", async (ctx) => {
       if ("quorumVotes" in p) lines.push(`Quorum needed: ${formatEther(p.quorumVotes)}`);
     } else if ("requiredConviction" in p) {
       lines.push(`Conviction: ${formatEther(p.currentConviction)} / ${formatEther(p.requiredConviction)} needed`);
+      if (p.budget) lines.push(budgetLine(p.budget));
     } else if ("confirmations" in p) {
       lines.push(`Confirmations: ${p.confirmations}`);
     } else if ("passTWAP" in p) {
@@ -1860,8 +1943,11 @@ bot.command("proposal", async (ctx) => {
     if (p.queuedAt > 0n) lines.push(`Queued at: ${formatDate(p.queuedAt)}`);
     if (p.executableAfter > 0n) lines.push(`Executable after: ${formatDate(p.executableAfter)}`);
     lines.push(`Actions: ${p.actions.length}`);
+    const page = proposalPageUrl(currentNetwork().id, address, id);
+    if (page) lines.push("", `📄 Details and live status: ${page}`);
 
     await ctx.reply(lines.join("\n"), { parse_mode: "Markdown" });
+    await resendSubmitLink(ctx, address, id);
   } catch (err) {
     console.error(err);
     await ctx.reply(`Couldn't find proposal #${id} — check the ID and try again.`);
@@ -1979,6 +2065,7 @@ bot.command("propose", async (ctx) => {
       statusMsg.message_id,
       `✅ Proposal #${proposalId} created.\n\nUse /proposal ${proposalId} to check on it, or /vote ${proposalId} for|against|abstain once voting opens.`
     );
+    await tgProposalPage(ctx, address, getChatModel(ctx.chat.id), proposalId);
   } catch (err) {
     console.error(err);
     await ctx.api.editMessageText(
@@ -2106,6 +2193,7 @@ bot.command("proposeaction", async (ctx) => {
       `✅ Proposal #${proposalId} created via \`${actionId}\`.\n\n${proposalNextStep(model, proposalId, TG_CMD)}`,
       { parse_mode: "Markdown" }
     );
+    await tgProposalPage(ctx, address, getChatModel(ctx.chat.id), proposalId);
   } catch (err) {
     console.error(err);
     await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `Couldn't create the proposal: ${err.shortMessage || err.message}`);
@@ -2149,6 +2237,7 @@ async function proposeIntegrationTelegram(ctx, address, actionId, allWords) {
       `✅ Proposal #${proposalId} created via \`${actionId}\` (${actions.length} step${actions.length === 1 ? "" : "s"}).\n\n${summary}\n\n${proposalNextStep(model, proposalId, TG_CMD)}`,
       { parse_mode: "Markdown" }
     );
+    await tgProposalPage(ctx, address, getChatModel(ctx.chat.id), proposalId);
   } catch (err) {
     console.error(err);
     await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `Couldn't create the proposal: ${err.shortMessage || err.message}`);
@@ -2264,6 +2353,7 @@ bot.command("proposecriteria", async (ctx) => {
       statusMsg.message_id,
       `✅ Proposal #${proposalId} created. Use /proposal ${proposalId} to follow it through approval voting.`
     );
+    await tgProposalPage(ctx, address, getChatModel(ctx.chat.id), proposalId);
   } catch (err) {
     console.error(err);
     await ctx.api.editMessageText(
@@ -2343,6 +2433,7 @@ bot.command("proposemarket", async (ctx) => {
       statusMsg.message_id,
       `✅ Proposal #${proposalId} created, both markets are live. Use /trade to back Pass or Fail.`
     );
+    await tgProposalPage(ctx, address, getChatModel(ctx.chat.id), proposalId);
   } catch (err) {
     console.error(err);
     await ctx.api.editMessageText(
@@ -2871,6 +2962,43 @@ bot.command("withdrawsupport", async (ctx) => {
   } catch (err) {
     console.error(err);
     await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `Couldn't withdraw support: ${err.shortMessage || err.message}`);
+  }
+});
+
+bot.command("assets", async (ctx) => {
+  const address = await requireDAO(ctx);
+  if (!address) return;
+  const model = getChatModel(ctx.chat.id);
+  const adapter = getAdapter(model);
+  if (typeof adapter.getAssets !== "function" || !(await adapter.hasBudgets(address))) {
+    await ctx.reply(
+      model === "conviction"
+        ? "This Conviction DAO predates spending budgets - only DAOs from the newer Conviction factory have an asset list."
+        : `This DAO uses ${model} governance, which has no spending budgets.`
+    );
+    return;
+  }
+  const [sub, assetRaw] = (ctx.match?.trim() ?? "").split(/\s+/);
+  try {
+    if (String(sub).toLowerCase() === "apply") {
+      if (!assetRaw || !isAddress(assetRaw)) {
+        await ctx.reply("Usage: `/assets apply <asset address>` (0x0000000000000000000000000000000000000000 for native)", { parse_mode: "Markdown" });
+        return;
+      }
+      if (!isWalletStoreConfigured()) {
+        await ctx.reply("Wallets aren't set up on this bot yet - ask an admin.");
+        return;
+      }
+      const account = await getOrCreateUserAccount(ctx.from.id);
+      await ensureGasFunded(account);
+      await adapter.applyAssetChange(walletClientFor(account), address, assetRaw);
+      await ctx.reply(`✅ Applied the pending change for \`${short(assetRaw)}\`.`, { parse_mode: "Markdown" });
+      return;
+    }
+    await ctx.reply(assetsText(await adapter.getAssets(address), TG_CMD), { parse_mode: "Markdown" });
+  } catch (err) {
+    console.error(err);
+    await ctx.reply(`Couldn't read the asset list: ${err.shortMessage || err.message}`);
   }
 });
 
@@ -4099,6 +4227,11 @@ bot.catch((err) => {
 
 run(bot);
 startEventListener(bot);
+// Proposal pages' API: Slack's install page serves it on the public port
+// when "Add to Slack" is set up; otherwise this process does.
+if (proposalPagesConfigured() && !process.env.SLACK_CLIENT_ID) {
+  startProposalApi(Number(process.env.PORT || 3000)).catch((err) => console.error("[proposalPages] API failed to start:", err));
+}
 
 /*//////////////////////////////////////////////////////////////
                     WELCOME DISTRIBUTION

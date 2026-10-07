@@ -1,4 +1,7 @@
-import { encodeFunctionData, getAddress, parseEther, parseUnits } from "viem";
+import { encodeFunctionData, getAddress, parseEther, parseUnits, zeroAddress } from "viem";
+
+// Words that mean a chain's native currency where an asset slot accepts it.
+const NATIVE_WORDS = new Set(["native", "mon", "eth", "hype"]);
 
 /**
  * Every entry here is already fully verified - real ABI fragments,
@@ -108,6 +111,37 @@ export const ACTION_LIBRARY = [
       ]}],
     }],
     params: [{ name: "newConfig", type: "tuple", fields: ["convictionGrowthRate", "minThresholdConviction", "thresholdMultiplier", "proposalThreshold", "timelockDelay", "executionPeriod"] }],
+  },
+
+  // Conviction spending budgets (ConvictionGovernance BUDGET_VERSION 2):
+  // the asset list and how much each asset counts. A weight is the extra
+  // conviction a proposal needs to spend ALL the Treasury holds of it.
+  {
+    id: "conviction-add-asset",
+    label: "List an asset so proposals must budget for it (Conviction)",
+    appliesTo: ["conviction"],
+    targetKind: "governance",
+    functionName: "addAsset",
+    abi: [{ type: "function", name: "addAsset", stateMutability: "nonpayable", inputs: [{ name: "asset", type: "address" }, { name: "weight", type: "uint256" }], outputs: [] }],
+    params: [{ name: "asset", type: "address", nativeOk: true }, { name: "weightWhole", type: "uint256", scaled: true }],
+  },
+  {
+    id: "conviction-set-asset-weight",
+    label: "Change how much an asset counts (Conviction; a cut waits 7 days and needs the highest conviction)",
+    appliesTo: ["conviction"],
+    targetKind: "governance",
+    functionName: "setAssetWeight",
+    abi: [{ type: "function", name: "setAssetWeight", stateMutability: "nonpayable", inputs: [{ name: "asset", type: "address" }, { name: "weight", type: "uint256" }], outputs: [] }],
+    params: [{ name: "asset", type: "address", nativeOk: true }, { name: "weightWhole", type: "uint256", scaled: true }],
+  },
+  {
+    id: "conviction-remove-asset",
+    label: "Stop checking an asset (Conviction; waits 7 days and needs the highest conviction)",
+    appliesTo: ["conviction"],
+    targetKind: "governance",
+    functionName: "removeAsset",
+    abi: [{ type: "function", name: "removeAsset", stateMutability: "nonpayable", inputs: [{ name: "asset", type: "address" }], outputs: [] }],
+    params: [{ name: "asset", type: "address", nativeOk: true }],
   },
   {
     id: "update-config-optimistic",
@@ -479,7 +513,8 @@ export function encodeAction(actionId, args, { tokenDecimals } = {}) {
       targetFromArgs = getAddress(raw.toLowerCase());
       continue;
     }
-    if (param.type === "address") values.push(getAddress(raw.toLowerCase()));
+    if (param.type === "address" && param.nativeOk && NATIVE_WORDS.has(String(raw).toLowerCase())) values.push(zeroAddress);
+    else if (param.type === "address") values.push(getAddress(raw.toLowerCase()));
     else if (param.type === "address[]") values.push(raw.split(",").map((s) => getAddress(s.trim().toLowerCase())));
     else if (param.scaled && param.decimalsOf) {
       if (tokenDecimals === undefined) throw new Error(`${action.id} needs the token's decimals to scale ${param.name}`);

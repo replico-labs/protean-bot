@@ -6,6 +6,7 @@ import { isWalletStoreConfigured } from "../../walletStore.js";
 import { VOTE_CHOICES } from "../../display.js";
 import { short } from "../../format.js";
 import { UserError, reply, requireAdapterFn, requireModel, parseId, userClient, weightNote, adapterWrite, callerAddress, NO_WALLETS } from "../helpers.js";
+import { assetsText } from "../../governance/budgetText.js";
 
 /**
  * Model-specific steps for Board, Liquid, Optimistic, Conviction,
@@ -127,6 +128,26 @@ export const MODEL_COMMANDS = {
       if (!isWalletStoreConfigured()) throw new UserError(NO_WALLETS);
       const proposalId = await adapter.getCurrentSupport(address, await callerAddress(ctx));
       return reply(proposalId === 0n ? "You're not currently backing any proposal." : `You're currently backing proposal #${proposalId}.`, { ephemeral: true });
+    },
+  },
+
+  assets: {
+    section: "Deciding",
+    models: ["conviction"],
+    usage: "[apply <asset>]",
+    description: "Listed assets, their weights and pending changes",
+    options: [{ name: "args", description: "apply <asset address> - apply a weight cut or removal that's due", required: false }],
+    async run(ctx) {
+      const { address, adapter } = requireAdapterFn(ctx, "getAssets", "This DAO uses {model} governance, which has no spending budgets.");
+      if (!(await adapter.hasBudgets(address))) throw new UserError("This Conviction DAO predates spending budgets - only DAOs from the newer Conviction factory have an asset list.");
+      if (String(ctx.args[0] ?? "").toLowerCase() === "apply") {
+        const asset = ctx.args[1];
+        if (!asset || !isAddress(asset)) throw new UserError(`Usage: \`${ctx.cmd("assets")} apply <asset address>\` (0x0000000000000000000000000000000000000000 for native)`);
+        const { client } = await userClient(ctx);
+        await adapter.applyAssetChange(client, address, asset);
+        return reply(`✅ Applied the pending change for \`${short(asset)}\`.`);
+      }
+      return reply(assetsText(await adapter.getAssets(address), ctx.cmd), { ephemeral: true });
     },
   },
 

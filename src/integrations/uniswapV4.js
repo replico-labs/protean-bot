@@ -53,8 +53,12 @@ export const protocol = {
       v4Quoter: "0x869834d127b230283fe63e0d0a9beb67216a94c7",
       universalRouter: "0x1b7bfcd2870329b987191910d85c22c7287f3c22",
       permit2: "0x000000000022d473030f116ddee9f6b43ac78ba3",
-      // Monad maintains the testnet deployment; Uniswap's own SDK covers Monad mainnet.
-      sources: ["monad-crypto/protocols testnet registry (\"Uniswap v4\", Monad-maintained)"],
+      // Monad maintains the testnet deployment (it differs from mainnet);
+      // Uniswap's own SDK covers Monad mainnet.
+      sources: [
+        "monad-crypto/protocols testnet registry (\"Uniswap v4\", Monad-maintained)",
+        "docs.monad.xyz Uniswap v4 hooks guide, Monad Testnet contract addresses (monad-developers/uniswap-v4-hooks-example shared-infrastructure.json)",
+      ],
     },
     base: {
       poolManager: "0x498581ff718922c3f8e6a244956af099b2652b2b",

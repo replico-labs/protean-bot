@@ -15,7 +15,7 @@ import { encodeFunctionData } from "viem";
  *    the call succeeds within is found by simulating (eth_call) at
  *    halving limits below the estimate, to within 2%.
  * 2. Each candidate limit (that base +15%, +20%, then the estimate +15%,
- *    +20%) is tried with eth_call capped at that limit; the first one the
+ *    +20%, each plus NEXT_BLOCK_MARGIN) is tried with eth_call capped at that limit; the first one the
  *    call succeeds within is used. That catches calls whose real need is
  *    above what they end up using (gas refunds, the 63/64 rule on nested
  *    calls).
@@ -25,7 +25,13 @@ import { encodeFunctionData } from "viem";
  */
 
 const BUFFERS = [115n, 120n];
-const withBuffer = (gas, pct) => (gas * pct + 99n) / 100n;
+// The simulation runs against the latest block but the transaction lands
+// in the next one, and code that settles "up to this block" (conviction,
+// accruals) can then write storage the simulation skipped - measured at
+// ~17% more on a Conviction support(). This covers one fresh storage
+// write on top of the percentage.
+const NEXT_BLOCK_MARGIN = 25_000n;
+const withBuffer = (gas, pct) => (gas * pct + 99n) / 100n + NEXT_BLOCK_MARGIN;
 
 async function gasUsedBySimulation(publicClient, tx) {
   try {

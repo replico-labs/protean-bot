@@ -6,6 +6,8 @@ import { walletClientFor } from "../governance/common.js";
 import { getOrCreateUserAccount } from "../walletResolver.js";
 import { isWalletStoreConfigured } from "../walletStore.js";
 import { opportunityWalletClientFor } from "../opportunityMarket/config.js";
+import { currentNetwork } from "../networks.js";
+import { proposalCreated } from "../proposalPages.js";
 
 /**
  * Shared building blocks for the platform command groups in
@@ -22,6 +24,25 @@ export class UserError extends Error {}
 
 export function reply(text, extra = {}) {
   return { text, ...extra };
+}
+
+/**
+ * The reply after a proposal is created: the public message plus its
+ * page link, and the proposer's private edit link as a follow-up only
+ * they see (when proposal pages are set up).
+ */
+export async function proposalReply(ctx, governanceAddress, model, proposalId, text) {
+  const page = await proposalCreated({
+    network: currentNetwork().id,
+    dao: governanceAddress,
+    model,
+    proposalId,
+    platform: ctx.platform,
+    userId: ctx.userId,
+    cmd: ctx.cmd,
+  });
+  if (!page) return reply(text);
+  return reply(`${text}\n\n📄 ${page.page} - the proposer is adding the details there.`, { privateFollowUp: page.editText });
 }
 
 /** A reply only the caller sees - the equivalent of Telegram's DM delivery for sensitive results. */

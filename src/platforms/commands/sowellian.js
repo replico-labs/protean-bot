@@ -2,7 +2,7 @@ import { isAddress, getAddress, zeroHash } from "viem";
 import { resolveOracleWord, oracleGoalValue } from "../../modelProposal.js";
 import { getAdapter } from "../../governance/index.js";
 import { VOTE_CHOICES } from "../../display.js";
-import { UserError, reply, requireModel, requireAdapterFn, parseId, userClient, weightNote, adapterWrite, ZERO_ADDRESS } from "../helpers.js";
+import { UserError, reply, requireModel, requireAdapterFn, parseId, userClient, weightNote, adapterWrite, ZERO_ADDRESS, proposalReply } from "../helpers.js";
 
 /** The Sowellian lifecycle: criteria, approval, positions, both resolution tracks, adjudication. Ported from index.js. */
 
@@ -102,7 +102,7 @@ export const SOWELLIAN_COMMANDS = {
         direction === "min",
         measurementPeriod
       );
-      return reply(`✅ Proposal #${proposalId} created. Follow it with \`${ctx.cmd("proposal")} ${proposalId}\`.`);
+      return proposalReply(ctx, address, "sowellian", proposalId, `✅ Proposal #${proposalId} created. Follow it with \`${ctx.cmd("proposal")} ${proposalId}\`.`);
     },
   },
 

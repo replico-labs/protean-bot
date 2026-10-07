@@ -13,7 +13,10 @@ import { getIntegrationAction, integrationUsage, IntegrationError } from "../../
 import { integrationListLines, actionInfoText } from "../../integrations/describe.js";
 import { CONFIG_DISPLAY_BY_MODEL, VOTE_CHOICES } from "../../display.js";
 import { short, stateLine, formatDate } from "../../format.js";
-import { NO_WALLETS, UserError, reply, requireDao, parseId, parseAmount, userClient, mayManageLink, callerAddress } from "../helpers.js";
+import { NO_WALLETS, UserError, reply, requireDao, parseId, parseAmount, userClient, mayManageLink, callerAddress, proposalReply } from "../helpers.js";
+import { budgetLine } from "../../governance/budgetText.js";
+import { proposalPageUrl, pendingSubmitLink } from "../../proposalPages.js";
+import { getUserAddress } from "../../walletResolver.js";
 
 /** The everyday governance loop - linking, DAO info, wallet, staking, proposing, deciding. */
 export const CORE_COMMANDS = {
@@ -185,6 +188,7 @@ export const CORE_COMMANDS = {
         if ("quorumVotes" in p) lines.push(`Quorum needed: ${formatEther(p.quorumVotes)}`);
       } else if ("requiredConviction" in p) {
         lines.push(`Conviction: ${formatEther(p.currentConviction)} / ${formatEther(p.requiredConviction)} needed`);
+        if (p.budget) lines.push(budgetLine(p.budget));
       } else if ("confirmations" in p) {
         lines.push(`Confirmations: ${p.confirmations}`);
       } else if ("passTWAP" in p) {
@@ -198,7 +202,22 @@ export const CORE_COMMANDS = {
       if (p.queuedAt > 0n) lines.push(`Queued at: ${formatDate(p.queuedAt)}`);
       if (p.executableAfter > 0n) lines.push(`Executable after: ${formatDate(p.executableAfter)}`);
       if (p.actions) lines.push(`Actions: ${p.actions.length}`);
-      return reply(lines.join("\n"));
+      const page = proposalPageUrl(currentNetwork().id, address, id);
+      if (page) lines.push("", `📄 Details and live status: ${page}`);
+      // The proposer, before submitting details: their link again, privately.
+      const submitLink = page
+        ? await pendingSubmitLink({
+            network: currentNetwork().id,
+            dao: address,
+            model: getChatModel(ctx.chatId, ctx.platform),
+            proposalId: id,
+            platform: ctx.platform,
+            userId: ctx.userId,
+            walletAddress: await getUserAddress(ctx.userId, ctx.platform).catch(() => null),
+            cmd: ctx.cmd,
+          }).catch(() => null)
+        : null;
+      return reply(lines.join("\n"), submitLink ? { privateFollowUp: submitLink } : {});
     },
   },
 
@@ -300,7 +319,7 @@ export const CORE_COMMANDS = {
       const { target, data } = await buildActionProposal({ model, governanceAddress: address, actionId, actionArgs, guardWrapperAddress });
       const { client } = await userClient(ctx, { forceFullTopup: true });
       const { proposalId } = await proposeForModel({ model, client, governanceAddress: address, actions: [{ target, value: 0n, data }], description, options });
-      return reply(`✅ Proposal #${proposalId} created via \`${actionId}\`.\n\n${proposalNextStep(model, proposalId, ctx.cmd)}`);
+      return proposalReply(ctx, address, model, proposalId, `✅ Proposal #${proposalId} created via \`${actionId}\`.\n\n${proposalNextStep(model, proposalId, ctx.cmd)}`);
     },
   },
 
@@ -341,7 +360,7 @@ export const CORE_COMMANDS = {
       const { client } = await userClient(ctx, { forceFullTopup: true });
       const actions = [{ target: getAddress(target), value: BigInt(value), data }];
       const { proposalId } = await getAdapter(model).propose(client, address, actions, description);
-      return reply(`✅ Proposal #${proposalId} created. Use \`${ctx.cmd("proposal")} ${proposalId}\` to check on it.`);
+      return proposalReply(ctx, address, model, proposalId, `✅ Proposal #${proposalId} created. Use \`${ctx.cmd("proposal")} ${proposalId}\` to check on it.`);
     },
   },
 
@@ -446,5 +465,5 @@ async function proposeIntegration(ctx, address, actionId, rest) {
   const { client } = await userClient(ctx, { forceFullTopup: true });
   const { proposalId } = await proposeForModel({ model, client, governanceAddress: address, actions: built.actions, description: built.description, options: modelOptions });
   const steps = built.actions.length;
-  return reply(`✅ Proposal #${proposalId} created via \`${actionId}\` (${steps} step${steps === 1 ? "" : "s"}).\n\n${built.summary}\n\n${proposalNextStep(model, proposalId, ctx.cmd)}`);
+  return proposalReply(ctx, address, model, proposalId, `✅ Proposal #${proposalId} created via \`${actionId}\` (${steps} step${steps === 1 ? "" : "s"}).\n\n${built.summary}\n\n${proposalNextStep(model, proposalId, ctx.cmd)}`);
 }

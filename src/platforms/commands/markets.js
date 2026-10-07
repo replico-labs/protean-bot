@@ -1,7 +1,7 @@
 import { isAddress, getAddress } from "viem";
 import { getAdapter } from "../../governance/index.js";
 import { getProposalVaults, splitTokens, mergeTokens, redeemTokens, unwrapWmon } from "../../governance/decisionMarkets.js";
-import { UserError, reply, requireModel, requireAdapterFn, userClient, adapterWrite } from "../helpers.js";
+import { UserError, reply, requireModel, requireAdapterFn, userClient, adapterWrite, proposalReply } from "../helpers.js";
 
 /** Decision markets (futarchy): seeding, conditional tokens, trading, resolution. Ported from index.js. */
 
@@ -64,7 +64,7 @@ export const MARKET_COMMANDS = {
         baseSeedAmount,
         quoteSeedAmount
       );
-      return reply(`✅ Proposal #${proposalId} created and both markets are live. Use \`${ctx.cmd("trade")}\` to back pass or fail.`);
+      return proposalReply(ctx, address, "decisionMarkets", proposalId, `✅ Proposal #${proposalId} created and both markets are live. Use \`${ctx.cmd("trade")}\` to back pass or fail.`);
     },
   },
 

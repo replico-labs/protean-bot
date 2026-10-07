@@ -53,7 +53,7 @@ The network word can go anywhere after the model; without one, the bot's default
 What changes between networks, handled automatically:
 
 - **Block-counted voting periods are rescaled.** Several governance periods are counted in blocks, and the defaults were written for Monad's 400 ms blocks: 50,400 blocks is ~5.6 h on Monad but ~28 h on Base. New DAOs get their block-counted fields scaled to the same wall-clock length (10,080 on Base, 20,160 on HyperEVM). Periods counted in seconds (timelocks, execution windows, Sowellian's challenge period) are unchanged.
-- **Gas.** Monad charges the full gas limit, not gas used, and its `eth_estimateGas` can come back far too high (a Board execute that used ~150k was estimated at ~9.94M). So no limit is a guess (`src/gasLimit.js`): each write is simulated once with `eth_createAccessList` to get the gas it really uses (or, where a node lacks that, the smallest limit `eth_call` succeeds within, found by halving), then sent at that +15%, or +20% if a simulation capped at +15% fails. Contract writes, deployments, native sends, Board execute (no longer pinned at 400k) and the Sepolia market writes all use it. On HyperEVM the limit is capped at the 2M small-block limit; a transaction that genuinely needs more fails with an explanation, since its sender would have to switch to big blocks. Every model's DAO creation fits under 2M (the heaviest, Delegate, is ~1.29M).
+- **Gas.** Monad charges the full gas limit, not gas used, and its `eth_estimateGas` can come back far too high (a Board execute that used ~150k was estimated at ~9.94M). So no limit is a guess (`src/gasLimit.js`): each write is simulated once with `eth_createAccessList` to get the gas it really uses (or, where a node lacks that, the smallest limit `eth_call` succeeds within, found by halving), then sent at that +15%, or +20% if a simulation capped at +15% fails, plus 25,000 gas because the simulation runs against the latest block while the transaction lands in the next one (code that settles "up to this block", like Conviction's support, can write storage the simulation skipped). A transaction that is mined but reverts is reported as an error, never as success. Contract writes, deployments, native sends, Board execute (no longer pinned at 400k) and the Sepolia market writes all use it. On HyperEVM the limit is capped at the 2M small-block limit; a transaction that genuinely needs more fails with an explanation, since its sender would have to switch to big blocks. Every model's DAO creation fits under 2M (the heaviest, Delegate, is ~1.29M).
 - **The native token.** `/send 1 0x... ETH` on Base, `HYPE` on HyperEVM, `MON` on Monad — or `native` anywhere.
 
 Opportunity Markets are separate and always on Ethereum Sepolia; Zama's FHE coprocessor doesn't exist on Monad, Base or HyperEVM.
@@ -96,7 +96,7 @@ Opportunity Markets are separate and always on Ethereum Sepolia; Zama's FHE copr
 | Board | `/confirm <id>`, `/revoke <id>` |
 | Liquid | `/delegate <address>`, `/undelegate`, `/resolvedelegations <id> [address]` |
 | Optimistic | `/challenge <id>` |
-| Conviction | `/support <id>`, `/withdrawsupport`, `/mysupport` |
+| Conviction | `/support <id>`, `/withdrawsupport`, `/mysupport`, `/assets [apply <asset>]` |
 | Delegate | `/startelection`, `/declarecandidacy`, `/voteinelection`, `/finalizeelection`, `/initiaterecall`, `/voterecall`, `/finalizerecall`, `/council` |
 | Sortition | `/registereligible`, `/withdraweligibility`, `/startsortition`, `/finalizesortition`, `/council` |
 | Sowellian | `/proposecriteria`, `/castapprovalvote`, `/finalizeapproval`, `/takeposition`, `/resolveviaoracle`, `/proposeresolution`, `/challengeresolution`, `/finalizeunchallenged`, `/castadjudicationvote`, `/finalizeadjudication`, `/claimposition` |
@@ -124,6 +124,17 @@ Bonds and seeds (Optimistic challenges, Sowellian bonds and positions, Decision 
 - **Sowellian:** `track=human|oracle` (default human); on the oracle track `feed=<Pyth price feed ID>` and `goal=<price>` (e.g. 3000, sent as 18 decimals) are required and `oracle=` defaults to `pyth`, this network's `PYTH_PRICE_ADAPTER`; `when=min|max` (default min), `measure=<duration>` (default 7d). `/actioninfo` lists them in a Sowellian chat.
 - **Decision Markets:** `seed=<DAO tokens>` and `quote=<native>`, both required.
 - `/proposecriteria` and `/proposemarket` remain for raw calls the library doesn't cover.
+
+### Proposal pages
+Every proposal gets a page on the website, `PROPOSAL_SITE_URL/p/<network>/<dao>/<id>`, with details its proposer writes there next to live on-chain data (state, votes or conviction, budget, timelock, actions).
+- **After proposing**, the group sees the page link and the proposer gets a private link to add the details: a Telegram DM (or, if the bot can't message them first, a `t.me/<bot>?start=…` link that opens one), or a message only they can see on Discord and Slack.
+- **Submitted once, never changed.** The proposer submits the details a single time, before anyone votes or backs the proposal and within 72 hours, so what people back is what they read. The page shows the details' fingerprint (sha256).
+- **`/proposal <id>`** ends with the page link. Run by the proposer before they've submitted, it also re-sends their link privately.
+- **How it's served:** the website is static; it reads `GET /api/proposals/<network>/<dao>/<id>` from the bot and the form `POST`s back. The routes share the Slack install page's HTTP server when "Add to Slack" is set up, otherwise the Telegram process listens on `PORT`. Only DAOs registered with the bot are served; CORS allows only `PROPOSAL_SITE_URL`. Edit links are HMAC-signed with `PROPOSAL_LINK_SECRET` and expire with the edit window.
+- **Setup:** run the `proposal_details` part of `supabase/schema.sql`, then set `PROPOSAL_SITE_URL` and `PROPOSAL_LINK_SECRET` (a long random string). Without them the bot behaves as before.
+
+### Conviction spending budgets
+Conviction DAOs from the newer factory check what each proposal spends (see Spaces' README, "Conviction spending budgets"). The bot fills in the budget itself: native sent by `transferETH` or with a `Treasury.execute` step, and tokens moved by `transferERC20` or approved/transferred inside `Treasury.execute` - which covers every action in `/listactions`, the protocol integrations and raw `/propose` calls of those shapes. `/proposal` shows "May spend: 10 USDC, 0.5 MON", or a warning when a proposal weakens the rules. `/assets` lists the assets, their weights, the Treasury's holdings and pending cuts (`/assets apply <asset>` once one is due). The list changes by proposal: `conviction-add-asset`, `conviction-set-asset-weight`, `conviction-remove-asset` (native: `MON`/`ETH`/`HYPE` or `native`). Older Conviction DAOs keep proposing the old way.
 
 ### Sowellian oracle proposals (raw calls)
 ```
@@ -198,7 +209,7 @@ npm run discord   # DISCORD_BOT_TOKEN, DISCORD_APPLICATION_ID, optional DISCORD_
 npm run slack     # SLACK_APP_TOKEN + either SLACK_BOT_TOKEN (one workspace) or the "Add to Slack" settings below
 ```
 
-- **Discord** registers 98 native slash commands on startup (Discord allows 100). `createdao`, `createboarddao`, `register`, `unregister`, `createmarket`, `registermarket` and `unregistermarket` are for members with *Manage Server* only. Long replies are split across messages.
+- **Discord** registers 99 native slash commands on startup (Discord allows 100). `createdao`, `createboarddao`, `register`, `unregister`, `createmarket`, `registermarket` and `unregistermarket` are for members with *Manage Server* only. Long replies are split across messages.
 - **Slack** uses one command, `/protean <subcommand>` (e.g. `/protean vote 3 for`). Create the app from [`docs/slack-app-manifest.yml`](docs/slack-app-manifest.yml). Joining a channel with a welcome distributor sends the newcomer their tokens, as on Telegram.
 - **Slack in any workspace:** with `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`, `SLACK_STATE_SECRET` and `SLACK_PUBLIC_URL` set, the Slack process also serves an "Add to Slack" link at `<SLACK_PUBLIC_URL>/slack/install` (on `PORT`, so the service needs a public domain). Each workspace's bot token is stored encrypted under the wallets' KMS key, in Supabase's `slack_installations` table (`supabase/schema.sql`); uninstalling deletes it. Install into your own workspace through the same link, then activate public distribution. Without `SLACK_CLIENT_ID` it runs in one workspace on `SLACK_BOT_TOKEN`. Slack doesn't list Socket Mode apps in its App Directory, so share the link directly.
 - **Privacy:** anything Telegram sends by DM (bets, confidential balances, rewards, handover proposals, the treasury address from `contribute`) is shown only to the caller: an ephemeral reply on Discord (which also hides the options typed), an ephemeral response on Slack. So `back` takes its opportunity and amount directly — they never appear in the channel.
@@ -230,6 +241,7 @@ npm start
 | `FACTORY_ADDRESS` + `<MODEL>_FACTORY_ADDRESS` | `/createdao` per model | per network with a prefix (`BASE_FACTORY_ADDRESS`); a model with no address can't be created there, but can still be `/register`ed |
 | `SORTITION_RANDOMNESS_SOURCE` | `/createdao ... sortition` | deployed `PythEntropyRandomnessAdapter` (Spaces), per network |
 | `PYTH_PRICE_ADAPTER` | Sowellian oracle track (`oracle=pyth`) | deployed `PythPriceFeedAdapter` (Spaces), per network |
+| `PROPOSAL_SITE_URL`, `PROPOSAL_LINK_SECRET` | proposal pages | the website's URL, e.g. `https://yoursite.com` and a long random secret for signing edit links; plus the `proposal_details` table |
 | `PYTH_API_KEY` | `/resolveviaoracle` price updates | API key from Pyth Terminal; Hermes refuses price requests without one |
 | `PYTH_HERMES_URL` | `/resolveviaoracle` price updates | optional, default `https://pyth.dourolabs.app/hermes` |
 | `KMS_KEY_ID`, `AWS_REGION`, AWS credentials | KMS wallets | symmetric KMS key |

@@ -44,3 +44,27 @@ create table if not exists slack_installations (
 -- Same as wallets: RLS on with no policies, so only the backend's
 -- service_role key can read or write it.
 alter table slack_installations enable row level security;
+
+-- Proposal pages: details a proposer writes on the website for each
+-- proposal (see src/proposalPages.js). One row per proposal, created by
+-- the bot when the proposal is made; the bot fills in the rest when the
+-- proposer saves the form with their signed edit link.
+create table if not exists proposal_details (
+  network text not null,               -- networks.js id, e.g. "monad-testnet"
+  dao text not null,                   -- governance address, lowercase
+  proposal_id text not null,
+  model text not null,
+  chat_platform text,                  -- where it was proposed: telegram, discord, slack, whatsapp
+  title text,
+  summary text,
+  body text,
+  links jsonb not null default '[]',
+  content_hash text,                   -- sha256 of the saved details
+  created_at timestamptz not null default now(),
+  updated_at timestamptz,
+  primary key (network, dao, proposal_id)
+);
+
+-- Same as the tables above: only the bot's service_role key reads or
+-- writes it. The website reads through the bot's API, never directly.
+alter table proposal_details enable row level security;
