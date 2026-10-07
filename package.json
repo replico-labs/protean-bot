@@ -8,6 +8,7 @@
     "dev": "node --watch src/index.js",
     "discord": "node src/platforms/discord.js",
     "slack": "node src/platforms/slack.js",
+    "whatsapp": "node src/platforms/whatsapp.js",
     "keeper:sortition": "node src/keepers/sortitionKeeper.js",
     "verify:integrations": "node scripts/verify-integrations.js"
   },
@@ -18,9 +19,11 @@
     "@slack/bolt": "^5.1.0",
     "@supabase/supabase-js": "^2.116.0",
     "@zama-fhe/relayer-sdk": "^0.4.4",
+    "baileys": "7.0.0-rc14",
     "discord.js": "^14.27.0",
     "dotenv": "^16.4.5",
     "grammy": "^1.45.1",
+    "pino": "^9.14.0",
     "viem": "^2.21.0"
   }
 }

@@ -13,13 +13,13 @@ import { OPPORTUNITY_COMMANDS } from "./commands/opportunity.js";
 export { UserError };
 
 /**
- * Platform-neutral command registry for the Discord and Slack front-ends.
+ * Platform-neutral command registry for the Discord, Slack and WhatsApp front-ends.
  * Every Telegram command is here except /start (use help) and
  * /migratewallet (legacy seed wallets only ever existed for Telegram IDs).
  *
  * Each command takes a context and returns a reply; the platform file
  * only handles transport. Context:
- *   platform  "discord" | "slack" - the db.js / walletStore.js key prefix
+ *   platform  "discord" | "slack" | "whatsapp" - the db.js / walletStore.js key prefix
  *   chatId    channel ID - one channel links to one DAO, like a Telegram group
  *   userId    platform user ID - one KMS wallet per (platform, userId)
  *   command   this command's name (set by runCommand)
@@ -127,8 +127,9 @@ export const COMMANDS = {
 /**
  * Creating, linking and unlinking a channel's DAO or market decides what
  * the whole channel operates, so only owners and admins may run these:
- * Discord's Manage Server permission, Slack's workspace admins and owners
- * (ctx.isAdmin). A Slack DM (ctx.isDirect) has no one else to protect.
+ * Discord's Manage Server permission, Slack's workspace admins and owners,
+ * WhatsApp's group admins (ctx.isAdmin). A Slack or WhatsApp DM
+ * (ctx.isDirect) has no one else to protect.
  */
 export const ADMIN_COMMANDS = new Set(["createdao", "createboarddao", "register", "unregister", "createmarket", "registermarket", "unregistermarket"]);
 
@@ -144,7 +145,7 @@ export async function runCommand(name, ctx) {
     return reply(
       ctx.isAdmin === undefined
         ? "Couldn't confirm you're an admin here - try again in a moment."
-        : `Only this ${ctx.platform === "discord" ? "server's" : "workspace's"} owners or admins can create, register or unregister a DAO or market.`,
+        : `Only this ${{ discord: "server's", slack: "workspace's", whatsapp: "group's" }[ctx.platform] ?? "chat's"} owners or admins can create, register or unregister a DAO or market.`,
       { ephemeral: true }
     );
   }

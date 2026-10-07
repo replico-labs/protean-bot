@@ -1,6 +1,6 @@
-# Protean — DAO Governance Bot for Telegram, Discord and Slack
+# Protean — DAO Governance Bot for Telegram, Discord, Slack and WhatsApp
 
-Turns a group chat into a fully functioning DAO. Deploy a governance system under any of ten models, get a wallet, stake, propose, vote, trade decision markets, and place confidential bets — all without leaving the chat. Runs on Telegram, Discord and Slack. Deployed on Monad testnet, Base Sepolia and HyperEVM testnet; the mainnets are supported but not yet deployed.
+Turns a group chat into a fully functioning DAO. Deploy a governance system under any of ten models, get a wallet, stake, propose, vote, trade decision markets, and place confidential bets — all without leaving the chat. Runs on Telegram, Discord, Slack and WhatsApp. Deployed on Monad testnet, Base Sepolia and HyperEVM testnet; the mainnets are supported but not yet deployed.
 
 Contracts live in the companion repo, [`Spaces`](https://github.com/replico-labs/Spaces). See its README for deployed addresses per network.
 
@@ -10,7 +10,7 @@ Contracts live in the companion repo, [`Spaces`](https://github.com/replico-labs
 - **Live on Monad testnet:** the full create → propose → vote → queue → execute loop has run through Telegram for token-weighted and Board DAOs, with real receipts.
 - **Tested end to end on local chains** (anvil, with the real contracts deployed from source): every model's full lifecycle through the Discord and Slack handlers — the same command code Telegram uses for the shared paths — about 230 checks, including a GuardWrapper handover with a treasury payout confirmed by signers. The network layer has its own two-chain test: one bot process serving a "Monad" chain and a "Base" chain at once.
 - **Deployed on Base Sepolia and HyperEVM testnet:** all ten factories plus the Pyth Entropy and price-feed adapters, built with Spaces' `size-limited` profile (addresses in Spaces' README).
-- **Not yet run live:** the other eight models on Monad testnet, any DAO lifecycle on Base Sepolia or HyperEVM testnet, the mainnets (nothing deployed), real Discord and Slack workspaces, the FHE relayer round-trip, and Pyth Entropy / Hermes on a live chain. See [What's not verified yet](#whats-not-verified-yet).
+- **Not yet run live:** the other eight models on Monad testnet, any DAO lifecycle on Base Sepolia or HyperEVM testnet, the mainnets (nothing deployed), real Discord and Slack workspaces, a real WhatsApp number, the FHE relayer round-trip, and Pyth Entropy / Hermes on a live chain. See [What's not verified yet](#whats-not-verified-yet).
 
 ## How wallets work
 
@@ -127,7 +127,7 @@ Bonds and seeds (Optimistic challenges, Sowellian bonds and positions, Decision 
 
 ### Proposal pages
 Every proposal gets a page on the website, `PROPOSAL_SITE_URL/p/<network>/<dao>/<id>`, with details its proposer writes there next to live on-chain data (state, votes or conviction, budget, timelock, actions).
-- **After proposing**, the group sees the page link and the proposer gets a private link to add the details: a Telegram DM (or, if the bot can't message them first, a `t.me/<bot>?start=…` link that opens one), or a message only they can see on Discord and Slack.
+- **After proposing**, the group sees the page link and the proposer gets a private link to add the details: a Telegram DM (or, if the bot can't message them first, a `t.me/<bot>?start=…` link that opens one), a message only they can see on Discord and Slack, or a WhatsApp DM.
 - **Submitted once, never changed.** The proposer submits the details a single time, before anyone votes or backs the proposal and within 72 hours, so what people back is what they read. The page shows the details' fingerprint (sha256).
 - **`/proposal <id>`** ends with the page link. Run by the proposer before they've submitted, it also re-sends their link privately.
 - **How it's served:** the website is static; it reads `GET /api/proposals/<network>/<dao>/<id>` from the bot and the form `POST`s back. The routes share the Slack install page's HTTP server when "Add to Slack" is set up, otherwise the Telegram process listens on `PORT`. Only DAOs registered with the bot are served; CORS allows only `PROPOSAL_SITE_URL`. Edit links are HMAC-signed with `PROPOSAL_LINK_SECRET` and expire with the edit window.
@@ -200,24 +200,31 @@ The Treasury can't receive NFTs (it has no ERC721/ERC1155 receiver hooks), so **
 - Sale proceeds go back to the Treasury with `nftwrapper-sweep-native` / `-erc20`.
 - Every one of those is a proposal (`/proposeaction`). To buy an NFT, first move funds from the Treasury to the wrapper (`treasury-transfer-eth` / `-erc20`).
 
-## Discord and Slack
+## Discord, Slack and WhatsApp
 
-Every Telegram command also runs on Discord and Slack, except `/start` (use `help`) and `/migratewallet` (legacy seed wallets only ever existed for Telegram IDs). Each platform runs as its own process sharing the same `data/` volume, wallet store and chain config as the Telegram bot. Neither needs `TELEGRAM_BOT_TOKEN`.
+Every Telegram command also runs on Discord, Slack and WhatsApp, except `/start` (use `help`) and `/migratewallet` (legacy seed wallets only ever existed for Telegram IDs). Each platform runs as its own process sharing the same `data/` volume, wallet store and chain config as the Telegram bot. None needs `TELEGRAM_BOT_TOKEN`.
 
 ```bash
 npm run discord   # DISCORD_BOT_TOKEN, DISCORD_APPLICATION_ID, optional DISCORD_GUILD_ID
 npm run slack     # SLACK_APP_TOKEN + either SLACK_BOT_TOKEN (one workspace) or the "Add to Slack" settings below
+npm run whatsapp  # WHATSAPP_PHONE_NUMBER (only until the number is linked)
 ```
 
 - **Discord** registers 99 native slash commands on startup (Discord allows 100). `createdao`, `createboarddao`, `register`, `unregister`, `createmarket`, `registermarket` and `unregistermarket` are for members with *Manage Server* only. Long replies are split across messages.
 - **Slack** uses one command, `/protean <subcommand>` (e.g. `/protean vote 3 for`). Create the app from [`docs/slack-app-manifest.yml`](docs/slack-app-manifest.yml). Joining a channel with a welcome distributor sends the newcomer their tokens, as on Telegram.
 - **Slack in any workspace:** with `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`, `SLACK_STATE_SECRET` and `SLACK_PUBLIC_URL` set, the Slack process also serves an "Add to Slack" link at `<SLACK_PUBLIC_URL>/slack/install` (on `PORT`, so the service needs a public domain). Each workspace's bot token is stored encrypted under the wallets' KMS key, in Supabase's `slack_installations` table (`supabase/schema.sql`); uninstalling deletes it. Install into your own workspace through the same link, then activate public distribution. Without `SLACK_CLIENT_ID` it runs in one workspace on `SLACK_BOT_TOKEN`. Slack doesn't list Socket Mode apps in its App Directory, so share the link directly.
-- **Privacy:** anything Telegram sends by DM (bets, confidential balances, rewards, handover proposals, the treasury address from `contribute`) is shown only to the caller: an ephemeral reply on Discord (which also hides the options typed), an ephemeral response on Slack. So `back` takes its opportunity and amount directly — they never appear in the channel.
+- **WhatsApp** runs through [Baileys](https://baileys.wiki/), an unofficial library that links the bot's own WhatsApp number as a linked device (like WhatsApp Web). Commands are ordinary messages starting with `/` (e.g. `/vote 3 for`), in a group or a DM with the bot's number; one group links to one DAO. Add the number to a group like any contact.
+  - **Linking the number:** set `WHATSAPP_PHONE_NUMBER` (digits with country code, e.g. `2348012345678`) and start the process. The log prints a pairing code; on the bot's phone open *WhatsApp → Linked devices → Link a device → Link with phone number instead* and enter it. The session is saved in `data/whatsapp-auth/` (override with `WHATSAPP_AUTH_DIR`), so it must be on the persistent volume; later restarts reconnect without a code. If the device is unlinked from the phone, the saved session is cleared and a new code is printed.
+  - **Wallets** are keyed to the member's WhatsApp LID (its privacy ID), not their phone number, so a wallet survives a number change and the bot never stores numbers.
+  - **Private replies:** WhatsApp has nothing like ephemeral messages, so whatever Discord/Slack show only to the caller (`wallet`, `contribute`, bets, balances, rewards, handover proposals, a proposer's edit link) goes to the caller's DM, with a one-line pointer in the group. Errors are answered in the group. If a DM can't be delivered, the bot asks the member to message it first.
+  - Only one process may use the linked session at a time; a second one makes WhatsApp drop the first (the bot logs this and stops). Commands from the same person run one at a time; messages WhatsApp delivers more than 5 minutes late are ignored. Replies in groups with disappearing messages use the group's timer.
+  - **Risk:** Baileys is not an official WhatsApp API. WhatsApp can ban numbers it judges to be automated, so use a dedicated number (not anyone's personal one). The bot only ever replies to commands, which keeps that risk low.
+- **Privacy:** anything Telegram sends by DM (bets, confidential balances, rewards, handover proposals, the treasury address from `contribute`) is shown only to the caller: an ephemeral reply on Discord (which also hides the options typed), an ephemeral response on Slack, a DM on WhatsApp. So `back` takes its opportunity and amount directly — they never appear in the channel.
 - **Link vs creator:** whoever runs `register` becomes the channel's *linker* (can relink/unlink); whoever runs `createdao`/`createboarddao` is the DAO's *creator* (can also `tip`, deploy wrappers and distributors). Registering an existing DAO never grants creator rights.
-- **Owners and admins only:** creating, registering and unregistering a DAO or market (`createdao`, `createboarddao`, `register`, `unregister`, `createmarket`, `registermarket`, `unregistermarket`) is limited to the group's owner and admins on Telegram (anonymous admins count; a DM is allowed), *Manage Server* on Discord, and workspace admins/owners on Slack.
+- **Owners and admins only:** creating, registering and unregistering a DAO or market (`createdao`, `createboarddao`, `register`, `unregister`, `createmarket`, `registermarket`, `unregistermarket`) is limited to the group's owner and admins on Telegram (anonymous admins count; a DM is allowed), *Manage Server* on Discord, workspace admins/owners on Slack, and group admins on WhatsApp (a DM is allowed).
 - **Errors** name the contract's reason, e.g. `AlreadyConfirmed`.
 
-Command logic lives in `src/platforms/commands/` (grouped as core, setup, tokens, models, sowellian, markets, opportunity); `discord.js` and `slack.js` only handle transport.
+Command logic lives in `src/platforms/commands/` (grouped as core, setup, tokens, models, sowellian, markets, opportunity); `discord.js`, `slack.js` and `whatsapp.js` only handle transport.
 
 ## Notifications
 
@@ -249,6 +256,7 @@ npm start
 | `MASTER_WALLET_SEED` | legacy wallets only | keep set only while old wallets still hold funds |
 | `OPPORTUNITY_MARKET_RPC_URL`, `OPPORTUNITY_MARKET_FACTORY_ADDRESS` | Opportunity Markets | Sepolia |
 | `DISCORD_*`, `SLACK_*` | Discord / Slack | see above |
+| `WHATSAPP_PHONE_NUMBER`, `WHATSAPP_AUTH_DIR` | WhatsApp | see above |
 
 ### Keepers
 
@@ -284,6 +292,7 @@ Sowellian oracle proposals need no keeper: `/resolveviaoracle` posts Pyth's pric
   - HyperCore's action bytes were also compared with those produced by hyper-evm-lib.
 
 - Real Discord and Slack workspaces
+- WhatsApp against WhatsApp's real servers (tested end to end with a stand-in socket, real commands and a real DAO on a local chain)
 - Pyth Entropy and Hermes price updates on a live chain (tested locally against the real Spaces contracts with Pyth's mocks and a stand-in Hermes)
 
 ## Not built yet
@@ -295,7 +304,7 @@ Sowellian oracle proposals need no keeper: `/resolveviaoracle` posts Pyth's pric
 ```
 src/
 ├── index.js              Telegram command handlers, model-aware /help
-├── platforms/            Discord + Slack front-ends over a shared command core
+├── platforms/            Discord, Slack and WhatsApp front-ends over a shared command core
 ├── networks.js           network registry, per-call network context, block scaling, per-network gas
 ├── config.js             viem clients and settings that follow the current network, operator wallet
 ├── contracts.js          token-weighted reads/writes, wrapper/distributor deploys
@@ -324,7 +333,7 @@ docs/slack-app-manifest.yml
 The bots use long polling / sockets, so they need long-lived processes — not serverless. The bots and keepers all use `data/` (the keepers read it to find DAOs), so they must share one persistent volume. Railway attaches a volume to a single service, so there run them together in one service, leaving out any you haven't configured:
 
 ```bash
-sh -c "npm start & npm run discord & npm run slack & KEEPER_NETWORK=monad-testnet npm run keeper:sortition & KEEPER_NETWORK=base-sepolia npm run keeper:sortition & KEEPER_NETWORK=hyperevm-testnet npm run keeper:sortition & wait"
+sh -c "npm start & npm run discord & npm run slack & npm run whatsapp & KEEPER_NETWORK=monad-testnet npm run keeper:sortition & KEEPER_NETWORK=base-sepolia npm run keeper:sortition & KEEPER_NETWORK=hyperevm-testnet npm run keeper:sortition & wait"
 ```
 
 With "Add to Slack" enabled, give that service a public domain; Railway's `PORT` is where the install page listens. The commands:
@@ -334,6 +343,7 @@ With "Add to Slack" enabled, give that service a public domain; Railway's `PORT`
 | Telegram bot | `npm start` |
 | Discord bot | `npm run discord` |
 | Slack bot | `npm run slack` |
+| WhatsApp bot | `npm run whatsapp` |
 | Sortition keeper (per network) | `KEEPER_NETWORK=<id> npm run keeper:sortition` |
 
 ## Try it live
