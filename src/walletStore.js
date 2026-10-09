@@ -149,3 +149,51 @@ export async function recordGasTopup(address) {
   if (updateError) throw new Error(`Supabase update failed: ${updateError.message}`);
   return newCount;
 }
+
+/*//////////////////////////////////////////////////////////////
+                        SOLANA WALLETS
+//////////////////////////////////////////////////////////////*/
+
+/**
+ * A user's Solana wallet lives on the same row as their EVM wallet, in
+ * the `solana` jsonb column (supabase/schema.sql): { address, ciphertext,
+ * encryptedDataKey, iv, authTag, topups } - the secret key, base58,
+ * envelope-encrypted under the same KMS key. Same durability rule as the
+ * EVM key: lose the row and the wallet is gone.
+ */
+export async function findSolanaWallet(platform, platformUserId) {
+  const record = await findWalletRecord(platform, platformUserId);
+  return record?.solana ?? null;
+}
+
+/**
+ * Stores a new Solana wallet on an existing row, only if it has none yet
+ * (so two concurrent first uses can't overwrite each other). Returns the
+ * wallet that ends up stored - this one, or the one that won the race.
+ */
+export async function storeSolanaWallet(platform, platformUserId, solana) {
+  const { error } = await getSupabaseClient()
+    .from("wallets")
+    .update({ solana })
+    .eq("platform", platform)
+    .eq("platform_user_id", String(platformUserId))
+    .is("solana", null);
+  if (error) throw new Error(`Supabase update failed: ${error.message}`);
+  const stored = await findSolanaWallet(platform, platformUserId);
+  if (!stored) throw new Error(`No wallet row for ${platform}:${platformUserId} to add a Solana wallet to`);
+  return stored;
+}
+
+/** Counts one SOL top-up for this user (see recordGasTopup); returns the new count. */
+export async function recordSolanaTopup(platform, platformUserId) {
+  const solana = await findSolanaWallet(platform, platformUserId);
+  if (!solana) return null;
+  const topups = (solana.topups ?? 0) + 1;
+  const { error } = await getSupabaseClient()
+    .from("wallets")
+    .update({ solana: { ...solana, topups } })
+    .eq("platform", platform)
+    .eq("platform_user_id", String(platformUserId));
+  if (error) throw new Error(`Supabase update failed: ${error.message}`);
+  return topups;
+}

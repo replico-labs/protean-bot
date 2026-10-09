@@ -14,9 +14,12 @@
   },
   "dependencies": {
     "@aws-sdk/client-kms": "^3.1131.0",
+    "@coral-xyz/anchor": "0.32.1",
     "@flaunch/sdk": "0.17.1",
     "@grammyjs/runner": "^2.0.3",
     "@slack/bolt": "^5.1.0",
+    "@solana/spl-token": "0.4.14",
+    "@solana/web3.js": "1.98.4",
     "@supabase/supabase-js": "^2.116.0",
     "@zama-fhe/relayer-sdk": "^0.4.4",
     "baileys": "7.0.0-rc14",

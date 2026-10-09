@@ -26,6 +26,10 @@ create table if not exists wallets (
 -- role, held only by the backend, can touch this table at all.
 alter table wallets enable row level security;
 
+-- Solana: each user's Solana wallet, on the same row as their EVM wallet
+-- (src/walletStore.js). Run this once before turning SOLANA_ENABLED on.
+alter table wallets add column if not exists solana jsonb;
+
 -- Slack: one row per workspace that installed the bot through
 -- "Add to Slack" (only used when SLACK_CLIENT_ID is set). The whole
 -- installation - including that workspace's bot token - is

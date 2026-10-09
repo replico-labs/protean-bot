@@ -58,6 +58,38 @@ What changes between networks, handled automatically:
 
 Opportunity Markets are separate and always on Ethereum Sepolia; Zama's FHE coprocessor doesn't exist on Monad, Base or HyperEVM.
 
+### Solana (Vortexes)
+
+Solana DAOs run on [Vortexes](https://github.com/replico-labs/Vortexes), the Solana version of Spaces: one hub program holds every DAO's treasury, and the DAO's governance program decides. It's off unless `SOLANA_ENABLED=true` (see `.env.example`); with it off, nothing changes on any platform.
+
+Naming a Solana network creates or links a Solana DAO:
+
+```
+/createdao ArkDAO ARK 1000000 10000000 solana
+/createboarddao ArkBoard <solana address> <solana address> solana
+/register <dao address> solana
+```
+
+So far the bot creates **token-weighted** and **board** DAOs on **Solana devnet** (`solana` and `solana-devnet` both mean devnet until mainnet is deployed). In a chat linked to a Solana DAO:
+
+| Command | Does |
+|---|---|
+| `/dao`, `/treasury` | the DAO's treasury (SOL and tokens), rules or signers |
+| `/wallet`, `/balance` | your Solana wallet, its SOL, tokens and stake |
+| `/stake`, `/unstake <amount>` | stake tokens to vote (token-weighted) |
+| `/tip <amount> <address\|treasury>` | hand out the starting tokens (the DAO's creator) |
+| `/propose <recipient> <amount> <SOL\|token> <description>` | a payment from the treasury, in SOL, the DAO's token or any token by mint |
+| `/vote <id> for\|against\|abstain`, `/queue <id>` | token-weighted voting |
+| `/confirm`, `/revoke <id>` | board signers |
+| `/execute <id>`, `/cancel <id>`, `/proposals`, `/proposal <id>` | as on EVM |
+
+- **Wallets.** Each user gets a Solana wallet next to their EVM one, encrypted with the same KMS key and stored on the same Supabase row (`wallets.solana`). `/wallet` shows both. The bot tops it up with a little SOL when it needs fees or rent.
+- **Tokens.** The DAO's token has 6 decimals; its whole initial supply goes to the bot's Solana wallet, handed out with `/tip`. There's no fixed maximum: the treasury is the mint authority, so new tokens can only be minted by a passed proposal.
+- **Defaults** match the EVM ones: 10% quorum, 60% approval, ~5.6 h votes, 1-day timelock, 7 days to run; boards need a majority of signers. `SOLANA_DEVNET_FAST_TIMINGS=true` shortens them for testing.
+- **Not yet:** the other four models (quadratic, optimistic, conviction, delegate), event notifications, proposal pages and `/proposeaction` on Solana. Other DAO commands in a Solana chat say they aren't available yet; Opportunity Market commands work as usual. On Discord, `/propose` keeps its EVM option names (target, value, data, description) - fill them in as recipient, amount, SOL or token, description.
+
+`scripts/test-solana-local.mjs` runs these commands end to end against a local validator running the Vortexes programs.
+
 ## Commands
 
 `/help` is model-aware: it only shows commands that apply to the current chat's governance model and linked wrappers/markets.

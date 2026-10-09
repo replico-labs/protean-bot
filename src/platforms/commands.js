@@ -3,6 +3,7 @@ import { runOnNetwork } from "../networks.js";
 import { hasToken } from "../governance/common.js";
 import { UserError, reply } from "./helpers.js";
 import { CORE_COMMANDS } from "./commands/core.js";
+import { runSolanaCommand } from "../solana/commands.js";
 import { SETUP_COMMANDS } from "./commands/setup.js";
 import { TOKEN_COMMANDS } from "./commands/tokens.js";
 import { MODEL_COMMANDS } from "./commands/models.js";
@@ -149,6 +150,10 @@ export async function runCommand(name, ctx) {
       { ephemeral: true }
     );
   }
+  // A Solana DAO's chat, or a Solana DAO being created or linked: handled in
+  // src/solana (null when it isn't a Solana matter, or Solana is off).
+  const solana = await runSolanaCommand(name, { ...ctx, command: name });
+  if (solana) return { ...solana, ephemeral: solana.ephemeral ?? Boolean(command.ephemeralByDefault) };
   try {
     // Every command runs on its channel's network (networks.js).
     return await runOnNetwork(getChatNetwork(ctx.chatId, ctx.platform), () => command.run({ ...ctx, command: name }));

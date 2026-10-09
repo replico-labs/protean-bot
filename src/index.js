@@ -1,4 +1,6 @@
 import { Bot } from "grammy";
+import { SOLANA_ENABLED } from "./solana/config.js";
+import { runSolanaCommand, solanaWalletLine, isSlowSolanaCommand } from "./solana/commands.js";
 import { run, sequentialize } from "@grammyjs/runner";
 import { isAddress, getAddress, parseEther, formatUnits } from "viem";
 import { BOT_TOKEN, publicClient, sortitionRandomnessSource, walletClient } from "./config.js";
@@ -153,6 +155,37 @@ bot.command(ADMIN_ONLY_COMMANDS, async (ctx, next) => {
     return;
   }
   return next();
+});
+
+/**
+ * Solana (Vortexes) DAOs: in a chat linked to one, or when a command names
+ * a Solana network (/createdao ... solana), src/solana answers - the same
+ * code Discord, Slack and WhatsApp use. Anything else carries on to the
+ * handlers below. Does nothing unless SOLANA_ENABLED=true.
+ */
+bot.on("message:text", async (ctx, next) => {
+  if (!SOLANA_ENABLED) return next();
+  const m = ctx.message.text.match(/^\/([a-z0-9_]+)(?:@\S+)?(?:\s+([\s\S]*))?$/i);
+  if (!m) return next();
+  const name = m[1].toLowerCase();
+  const solanaCtx = {
+    platform: "telegram",
+    chatId: ctx.chat.id,
+    userId: ctx.from.id,
+    args: splitArgs(m[2] ?? ""),
+    isDirect: ctx.chat.type === "private",
+    isAdmin: undefined, // admin-only commands were already checked above
+    cmd: (n) => `/${n}`,
+  };
+  if (isSlowSolanaCommand(name)) await ctx.replyWithChatAction("typing").catch(() => {});
+  const result = await runSolanaCommand(name, solanaCtx);
+  if (!result) return next();
+  try {
+    await ctx.reply(result.text, { parse_mode: "Markdown", link_preview_options: { is_disabled: true } });
+  } catch {
+    // Text from members (a proposal's description) can break Markdown - send it plain.
+    await ctx.reply(result.text, { link_preview_options: { is_disabled: true } });
+  }
 });
 
 /**
@@ -1310,8 +1343,9 @@ bot.command("wallet", async (ctx) => {
 
   try {
     const account = await getOrCreateUserAccount(ctx.from.id);
+    const solana = await solanaWalletLine(ctx.from.id, "telegram");
     await ctx.reply(
-      `Your wallet:\n\`${account.address}\`\n\nTap the address above to copy it. This wallet is generated automatically from your Telegram account — no separate connect step needed.`,
+      `Your wallet:\n\`${account.address}\`${solana ? `\n${solana}` : ""}\n\nTap the address above to copy it. This wallet is generated automatically from your Telegram account — no separate connect step needed.`,
       { parse_mode: "Markdown" }
     );
   } catch (err) {

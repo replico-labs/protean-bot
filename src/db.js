@@ -67,6 +67,11 @@ export function registerChat(chatId, governanceAddress, model = "tokenWeighted",
       ? { creatorPlatformUserId: String(creatorPlatformUserId) }
       : {};
     let previous = db[k] ?? {};
+    // An EVM DAO replaces a Solana one linked here (see registerSolanaChat).
+    if (previous.solana) {
+      const { solana, ...rest } = previous;
+      previous = rest;
+    }
     // Wrappers, distributors and registered tickers are contracts on the
     // old DAO's chain - carrying them to another chain would point commands
     // at addresses that don't exist there (or are someone else's).
@@ -324,4 +329,41 @@ export function getGovernanceDaosByModel(model) {
     }
   }
   return [...seen.values()];
+}
+/*//////////////////////////////////////////////////////////////
+                          SOLANA DAOS
+//////////////////////////////////////////////////////////////*/
+
+/**
+ * Links a chat to a Solana (Vortexes) DAO. Kept in its own `solana` field,
+ * never in governanceAddress, so nothing EVM - commands, the event
+ * listener, keepers, proposal pages - ever sees a Solana address. Linking
+ * one replaces whatever EVM DAO (and its wrappers, distributor and
+ * tickers) the chat had; an Opportunity Market link is untouched.
+ *
+ * `link`: { network, dao, model, mint?, symbol?, creatorPlatformUserId? }
+ */
+export function registerSolanaChat(chatId, link, platform = "telegram") {
+  updateDb((db) => {
+    const k = key(chatId, platform);
+    const {
+      governanceAddress, model, network, creatorPlatformUserId, linkedByPlatformUserId,
+      tokens, distributorAddress, wrapperAddress, guardWrapperAddress, solana, ...rest
+    } = db[k] ?? {};
+    db[k] = { ...rest, platform, solana: { ...link, registeredAt: Date.now() } };
+  });
+}
+
+/** This chat's Solana DAO link, or null. */
+export function getChatSolana(chatId, platform = "telegram") {
+  return readDb()[key(chatId, platform)]?.solana ?? null;
+}
+
+/** Removes this chat's Solana DAO link (leaving any market link). */
+export function unregisterSolanaChat(chatId, platform = "telegram") {
+  updateDb((db) => {
+    const k = key(chatId, platform);
+    if (!db[k]?.solana) return false;
+    delete db[k].solana;
+  });
 }

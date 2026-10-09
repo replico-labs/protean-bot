@@ -1,4 +1,5 @@
 import { takeModelOptions, checkModelOptions, modelOptionsUsage, proposeForModel, proposalNextStep } from "../../modelProposal.js";
+import { solanaWalletLine } from "../../solana/commands.js";
 import { isAddress, getAddress, formatEther } from "viem";
 import { currentNetwork, takeNetworkArg, runOnNetwork, getNetwork, ENABLED_NETWORKS, describeNetwork } from "../../networks.js";
 import { registerChat, recordChatLinker, getChatDAO, getChatModel, unregisterChat, getChatNftWrapper, getChatGuardWrapper, getChatNetwork, getRegisteredToken } from "../../db.js";
@@ -122,7 +123,8 @@ export const CORE_COMMANDS = {
     async run(ctx) {
       if (!isWalletStoreConfigured()) throw new UserError(NO_WALLETS);
       const account = await getOrCreateUserAccount(ctx.userId, ctx.platform);
-      return reply(`Your wallet:\n\`${account.address}\`\n\nCreated automatically for your ${ctx.platform} account — no connect step needed.`, { ephemeral: true });
+      const solana = await solanaWalletLine(ctx.userId, ctx.platform);
+      return reply(`Your wallet:\n\`${account.address}\`${solana ? `\n${solana}` : ""}\n\nCreated automatically for your ${ctx.platform} account — no connect step needed.`, { ephemeral: true });
     },
   },
 
