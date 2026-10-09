@@ -7,6 +7,7 @@ import { publicClient, walletClient } from "./config.js";
 import { resolveDelegationsBehind, activeProposalIds, queueSweep } from "./governance/liquid.js";
 import { runOnNetwork } from "./networks.js";
 import { readJson, writeJsonAtomic } from "./jsonFile.js";
+import { startSolanaListener } from "./solana/listener.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // One state file per platform process: Telegram keeps the original file
@@ -274,4 +275,6 @@ export function startEventListener(target, pollIntervalMs = 20_000) {
   console.log(`Event listener (${platform}) starting - polling every ${pollIntervalMs / 1000}s`);
   pollOnce();
   setInterval(pollOnce, pollIntervalMs);
+  // Chats linked to Solana DAOs (src/solana; nothing unless SOLANA_ENABLED).
+  startSolanaListener({ platform, notify });
 }

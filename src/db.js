@@ -359,6 +359,26 @@ export function getChatSolana(chatId, platform = "telegram") {
   return readDb()[key(chatId, platform)]?.solana ?? null;
 }
 
+/** Merges `fields` into this chat's Solana link (e.g. its model after a switch). */
+export function updateChatSolana(chatId, fields, platform = "telegram") {
+  updateDb((db) => {
+    const k = key(chatId, platform);
+    if (!db[k]?.solana) return false;
+    db[k].solana = { ...db[k].solana, ...fields };
+  });
+}
+
+/** Every chat linked to a Solana DAO: [{ chatId, platform, link }]. */
+export function getAllSolanaChats() {
+  const chats = [];
+  for (const [k, entry] of Object.entries(readDb())) {
+    if (!entry?.solana) continue;
+    const [platform, ...rest] = k.split(":");
+    chats.push({ chatId: rest.join(":"), platform, link: entry.solana });
+  }
+  return chats;
+}
+
 /** Removes this chat's Solana DAO link (leaving any market link). */
 export function unregisterSolanaChat(chatId, platform = "telegram") {
   updateDb((db) => {

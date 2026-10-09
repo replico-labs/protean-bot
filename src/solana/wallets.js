@@ -48,15 +48,18 @@ export async function getSolanaAddress(platformUserId, platform = "telegram") {
 /**
  * Tops the user's wallet up with SOL from the operator when it's below
  * the network's minimum, so they can pay fees and rent (voter, proposal
- * and vote accounts). The first top-up is larger than later ones.
+ * and vote accounts). The first top-up is larger than later ones. `need`
+ * (lamports) is what the next action costs, such as a proposal account's
+ * rent: the wallet is topped up to cover it plus the minimum.
  */
-export async function ensureSolFunded(network, platformUserId, platform, address) {
+export async function ensureSolFunded(network, platformUserId, platform, address, need = 0) {
   const operator = getSolanaOperator();
   if (!operator) return;
   const balance = await network.connection.getBalance(address);
-  if (balance >= network.topup.min) return;
+  if (balance >= network.topup.min + need) return;
   const stored = await findSolanaWallet(platform, platformUserId);
-  const amount = (stored?.topups ?? 0) === 0 ? network.topup.first : network.topup.repeat;
+  const usual = (stored?.topups ?? 0) === 0 ? network.topup.first : network.topup.repeat;
+  const amount = Math.max(usual, network.topup.min + need - balance);
   const tx = new Transaction().add(SystemProgram.transfer({ fromPubkey: operator.publicKey, toPubkey: address, lamports: amount }));
   await sendAndConfirmTransaction(network.connection, tx, [operator], { commitment: "confirmed" });
   await recordSolanaTopup(platform, platformUserId);

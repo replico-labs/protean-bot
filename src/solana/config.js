@@ -50,8 +50,8 @@ export function resolveSolanaNetwork(word) {
   return ALIASES[w] ?? null;
 }
 
-/** Models Solana DAOs can be created with from the bot (stage 1). */
-export const SOLANA_MODELS = ["tokenWeighted", "board"];
+/** Models Solana DAOs can be created with from the bot (all six Vortexes programs). */
+export const SOLANA_MODELS = ["tokenWeighted", "quadratic", "optimistic", "conviction", "delegate", "board"];
 
 const env = (id, name) => process.env[`${DEFINITIONS[id].envPrefix}_${name}`] || undefined;
 

@@ -343,9 +343,10 @@ export const CORE_COMMANDS = {
   propose: {
     description: "Propose a raw contract call (advanced)",
     options: [
-      { name: "target", description: "Target contract address", required: true },
-      { name: "value", description: "Native value in wei", required: true },
-      { name: "data", description: "Hex calldata, or 0x", required: true },
+      // Solana DAOs (src/solana) read the same four fields as recipient, amount, asset, description.
+      { name: "target", description: "EVM: target contract address · Solana: the recipient's address", required: true },
+      { name: "value", description: "EVM: native value in wei · Solana: the amount, e.g. 0.5", required: true },
+      { name: "data", description: "EVM: hex calldata, or 0x · Solana: SOL, token, or a token's mint address", required: true },
       { name: "description", description: "What this proposal does", required: true, rest: true },
     ],
     async run(ctx) {
