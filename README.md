@@ -81,7 +81,7 @@ All six Vortexes models work: **token-weighted**, **quadratic**, **optimistic**,
 | `/stake`, `/unstake <amount>` | stake the DAO's token (every model but board) |
 | `/tip <amount> <address\|treasury>` | hand out the starting tokens (the DAO's creator) |
 | `/propose <recipient> <amount> <SOL\|token> <description>` | a payment from the treasury, in SOL, the DAO's token or any token by mint |
-| `/listactions`, `/actioninfo`, `/proposeaction` | other proposals: mint tokens, board signers, conviction assets, switch to another model |
+| `/listactions`, `/actioninfo`, `/proposeaction` | transfer SOL or tokens, mint tokens, board signers, conviction assets, switch to another model |
 | `/vote <id> for\|against\|abstain`, `/queue <id>` | token-weighted, quadratic, delegate (council), and optimistic once challenged |
 | `/challenge <id>` | optimistic: dispute a proposal with a bond, forcing a vote |
 | `/support <id>`, `/withdrawsupport`, `/mysupport`, `/assets` | conviction |

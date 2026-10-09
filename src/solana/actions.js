@@ -71,6 +71,44 @@ function switchTo(model, extra) {
 }
 
 export const ACTIONS = {
+  transfersol: {
+    models: "all",
+    args: [
+      { name: "<amount>", about: "SOL, e.g. 0.5" },
+      { name: "<recipient>", about: "a Solana address" },
+    ],
+    about: "Pay SOL from the treasury (the same as `propose <recipient> <amount> SOL`).",
+    async build(c) {
+      const [amount, to] = c.args;
+      const recipient = key(to, "the recipient");
+      const raw = v.parseUnits(amount, 9);
+      const { instructions, budget } = await v.paymentInstructions(c.network, c.d, { recipient, raw });
+      return { instructions, budget, summary: `pay ${v.formatUnits(raw, 9)} SOL to \`${recipient.toBase58()}\`` };
+    },
+  },
+
+  transfertoken: {
+    models: "all",
+    args: [
+      { name: "<token>", about: "`token` for this DAO's own token, or any token's mint address" },
+      { name: "<amount>", about: "whole tokens, e.g. 100 or 2.5" },
+      { name: "<recipient>", about: "a Solana address (the treasury opens their token account if needed)" },
+    ],
+    about: "Pay tokens from the treasury (the same as `propose <recipient> <amount> <token>`).",
+    async build(c) {
+      const [token, amount, to] = c.args;
+      const own = token.toLowerCase() === "token";
+      if (own && !c.governance.mint) fail("A board DAO has no token of its own - give the token's mint address instead.");
+      const mint = own ? c.governance.mint : key(token, "the token's mint");
+      const { decimals } = await v.mintInfo(c.network, mint);
+      const recipient = key(to, "the recipient");
+      const raw = v.parseUnits(amount, decimals);
+      const { instructions, budget } = await v.paymentInstructions(c.network, c.d, { recipient, raw, mint });
+      const label = own || (c.governance.mint && mint.equals(c.governance.mint)) ? c.link.symbol ?? "tokens" : `of token \`${mint.toBase58()}\``;
+      return { instructions, budget, summary: `pay ${v.formatUnits(raw, decimals)} ${label} to \`${recipient.toBase58()}\`` };
+    },
+  },
+
   mint: {
     models: v.TOKEN_MODELS,
     args: [
@@ -181,7 +219,7 @@ export function listActionsText(model, cmd) {
   lines.push(
     "",
     `Propose one: \`${cmd("proposeaction")} <action> <args...> <description>\`. Details: \`${cmd("actioninfo")} <action>\`.`,
-    `Payments have their own command: \`${cmd("propose")}\`. A model switch applies 2 days after its proposal runs; the bot applies it then.`
+    `Payments also work with \`${cmd("propose")}\`. A model switch applies 2 days after its proposal runs; the bot applies it then.`
   );
   return lines.join("\n");
 }

@@ -346,7 +346,9 @@ export function createWhatsAppBot({
           onLinkState({ qr });
           if (!qrHintShown) {
             qrHintShown = true;
-            const base = (process.env.SLACK_PUBLIC_URL || "https://<your-bot-domain>").replace(/\/+$/, "");
+            // Standalone, the page is on this service's own domain (Railway sets RAILWAY_PUBLIC_DOMAIN).
+            const own = process.env.WHATSAPP_STANDALONE === "true" && process.env.RAILWAY_PUBLIC_DOMAIN;
+            const base = (own ? `https://${own}` : process.env.SLACK_PUBLIC_URL || "https://<your-bot-domain>").replace(/\/+$/, "");
             console.log(
               whatsappLinkConfigured()
                 ? `[whatsapp] Not linked yet - open ${base}${WHATSAPP_LINK_PATH}?key=<WHATSAPP_LINK_SECRET> and scan the QR from the bot's phone (WhatsApp > Linked devices > Link a device).`
