@@ -21,7 +21,8 @@ import { getChatNetwork } from "../db.js";
 import { runOnNetwork } from "../networks.js";
 import { startEventListener } from "../eventListener.js";
 import { splitArgs } from "../args.js";
-import { whatsappLinkConfigured, writeLinkState, WHATSAPP_LINK_PATH } from "./whatsappLink.js";
+import { whatsappLinkConfigured, writeLinkState, whatsappLinkRoutes, WHATSAPP_LINK_PATH } from "./whatsappLink.js";
+import { startProposalApi } from "../proposalPages.js";
 
 /**
  * WhatsApp front-end for the shared command core (commands.js), through
@@ -49,6 +50,10 @@ import { whatsappLinkConfigured, writeLinkState, WHATSAPP_LINK_PATH } from "./wh
  * Optional WHATSAPP_AUTH_DIR (default data/whatsapp-auth, which must be on
  * the persistent volume), plus the same chain/wallet env as the Telegram
  * bot.
+ *
+ * WHATSAPP_STANDALONE=true runs it as its own service (its own container
+ * and volume): it then serves the QR link page itself on PORT, since the
+ * Telegram process that otherwise serves it can't read this volume.
  */
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -429,6 +434,10 @@ export function createWhatsAppBot({
 export async function startWhatsAppBot({ phoneNumber = process.env.WHATSAPP_PHONE_NUMBER, authDir = process.env.WHATSAPP_AUTH_DIR || DEFAULT_AUTH_DIR } = {}) {
   const bot = createWhatsAppBot({ phoneNumber, authDir });
   if (whatsappLinkConfigured()) writeLinkState({ linked: false });
+  if (process.env.WHATSAPP_STANDALONE === "true" && whatsappLinkConfigured()) {
+    await startProposalApi(Number(process.env.PORT || 3000), whatsappLinkRoutes());
+    console.log(`[whatsapp] Standalone: the link page is at ${WHATSAPP_LINK_PATH}?key=<WHATSAPP_LINK_SECRET> on this service's domain`);
+  }
   await bot.start();
   // Listener notifications wait for the connection, so a brief reconnect
   // doesn't drop them.
