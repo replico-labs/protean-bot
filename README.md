@@ -10,7 +10,7 @@ Contracts live in the companion repo, [`Spaces`](https://github.com/replico-labs
 - **Live on Monad testnet:** all ten models' full lifecycles pass `scripts/test-evm-models.mjs` (174 steps, every proposal paying out of its treasury): votes, challenges, conviction with a spending budget, delegate elections and recalls, a sortition draw with Pyth Entropy, a Sowellian adjudication and a decision-market finalization. Earlier, the create → propose → vote → queue → execute loop also ran through Telegram for token-weighted and Board DAOs.
 - **Tested end to end on local chains** (anvil, with the real contracts deployed from source): every model's full lifecycle through the Discord and Slack handlers — the same command code Telegram uses for the shared paths — about 230 checks, including a GuardWrapper handover with a treasury payout confirmed by signers. The network layer has its own two-chain test: one bot process serving a "Monad" chain and a "Base" chain at once.
 - **Deployed on Base Sepolia and HyperEVM testnet:** all ten factories plus the Pyth Entropy and price-feed adapters, built with Spaces' `size-limited` profile (addresses in Spaces' README).
-- **Not yet run live:** any DAO lifecycle on Base Sepolia or HyperEVM testnet, the mainnets (nothing deployed), real Discord and Slack workspaces, a real WhatsApp number, the FHE relayer round-trip, and Hermes price updates on a live chain. See [What's not verified yet](#whats-not-verified-yet).
+- **Not yet run live:** any DAO lifecycle on Base Sepolia or HyperEVM testnet, the mainnets (nothing deployed), and real Discord and Slack workspaces. (WhatsApp runs live as its own Railway service; Pyth Entropy and Hermes prices have both run on Monad testnet; an Opportunity Market has run end to end through Telegram on Sepolia, FHE relayer included.) See [What's not verified yet](#whats-not-verified-yet).
 
 ## How wallets work
 
@@ -94,7 +94,7 @@ All six Vortexes models work: **token-weighted**, **quadratic**, **optimistic**,
 - **Defaults** match the EVM ones: 10% quorum, 60% approval, ~5.6 h votes, 1-day timelock, 7 days to run; optimistic challenges post a 100-token bond; delegate councils serve 2-day terms and a majority of seats passes a proposal; boards need a majority of signers. Conviction bars scale with the token's supply: the larger of 1% of supply and 20% of all staked tokens, plus a proposal's spending budget (SOL and the DAO's token each weigh a quarter of supply). `SOLANA_DEVNET_FAST_TIMINGS=true` shortens every period to minutes for testing.
 - **Switching models.** The `switch...` actions move a DAO to another model with the same treasury and token. The switch applies 2 days after its proposal runs; the bot applies it then (the next time anyone uses the DAO, or from the notifier) and updates the chat.
 - **Notifications.** Each platform's event listener also watches its Solana chats: new proposals, challenges, queued and executed proposals, cancellations, elections and recalls.
-- **Not on Solana:** proposal pages, and the EVM-only extras (wrappers, distributors, integrations, liquid delegation, sortition). Those commands say so in a Solana chat; Opportunity Market commands work as usual. On Discord, `/propose`'s fields read target/value/data for EVM and recipient/amount/asset for Solana.
+- **Not on Solana:** the EVM-only extras (wrappers, distributors, integrations, liquid delegation, sortition). Those commands say so in a Solana chat; Opportunity Market commands work as usual. On Discord, `/propose`'s fields read target/value/data for EVM and recipient/amount/asset for Solana.
 
 `scripts/test-solana-local.mjs` runs these commands end to end against a local validator running the Vortexes programs.
 
@@ -314,7 +314,7 @@ Sowellian oracle proposals need no keeper: `/resolveviaoracle` posts Pyth's pric
 
 ### Testing every model at once
 
-`node scripts/test-evm-models.mjs --network monad-testnet` runs all ten models' lifecycles side by side through the bot's own adapters: a fresh DAO per model, proposals voted (or confirmed, supported, challenged, traded) through to execution with a real treasury payment, plus delegate elections and recalls, a sortition draw, a challenged optimistic vote, a Sowellian adjudication, a Sowellian proposal resolved by a live Pyth price (`sowellianOracle`: the ETH/USD feed looked up on Hermes, a signed update posted, read through `PYTH_PRICE_ADAPTER`) and a decision-market finalization. It uses the bot's `.env` (operator key, factory addresses, `SORTITION_RANDOMNESS_SOURCE`, `PYTH_PRICE_ADAPTER`, and `PYTH_API_KEY` if your Hermes needs one), creates its DAOs with fast timings whatever the bot's own setting, and writes a report of every failed step and its revert to `data/evm-tests/`. About 20 minutes; `--models board,conviction` runs a subset. Throwaway member wallets get their leftover gas swept back to the operator.
+`node scripts/test-evm-models.mjs --network monad-testnet` runs all ten models' lifecycles side by side through the bot's own adapters: a fresh DAO per model, proposals voted (or confirmed, supported, challenged, traded) through to execution with a real treasury payment, plus delegate elections and recalls, a sortition draw, a challenged optimistic vote, a Sowellian adjudication, a Sowellian proposal resolved by a live Pyth price (`sowellianOracle`, passed on Monad testnet: the ETH/USD feed looked up on Hermes, a signed update posted, read through `PYTH_PRICE_ADAPTER`) and a decision-market finalization. It uses the bot's `.env` (operator key, factory addresses, `SORTITION_RANDOMNESS_SOURCE`, `PYTH_PRICE_ADAPTER`, and `PYTH_API_KEY` if your Hermes needs one), creates its DAOs with fast timings whatever the bot's own setting, and writes a report of every failed step and its revert to `data/evm-tests/`. About 20 minutes; `--models board,conviction` runs a subset. Throwaway member wallets get their leftover gas swept back to the operator.
 
 To try it on a local chain first: start `anvil --chain-id 10143 --block-time 1`, build Spaces (`FOUNDRY_PROFILE=size-limited forge build`, plus `forge build test/PythAdapters.t.sol` for the stand-in Entropy), run `node scripts/deploy-local-evm.mjs > local.env`, and run the test with those variables, `BLOCK_TIME_MS=1000` and an anvil account as `OPERATOR_PRIVATE_KEY`.
 
@@ -344,8 +344,6 @@ To try it on a local chain first: start `anvil --chain-id 10143 --block-time 1`,
   - HyperCore's action bytes were also compared with those produced by hyper-evm-lib.
 
 - Real Discord and Slack workspaces
-- WhatsApp against WhatsApp's real servers (tested end to end with a stand-in socket, real commands and a real DAO on a local chain)
-- Hermes price updates on a live chain (Pyth Entropy itself has run on Monad testnet: the sortition draw in the model test)
 
 ## Not built yet
 

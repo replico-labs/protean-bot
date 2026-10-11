@@ -2,7 +2,7 @@ import "dotenv/config";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createPublicClient, createWalletClient, http, defineChain, parseEther } from "viem";
 import { monad, monadTestnet, base, baseSepolia, hyperEvm, hyperliquidEvmTestnet } from "viem/chains";
-import { failOnRevert } from "./receipts.js";
+import { failOnRevert, monotonicReads } from "./receipts.js";
 import { pacedFetch } from "./rpcPacing.js";
 
 /**
@@ -43,6 +43,8 @@ const DEFINITIONS = {
     inflightBlocks: 3,
   },
   base: {
+    // A pool of nodes behind one URL: pin reads so they never go back in time (receipts.js).
+    consistentReads: true,
     chain: base,
     envPrefix: "BASE",
     blockTimeMs: 2000,
@@ -50,6 +52,8 @@ const DEFINITIONS = {
     maxContractSize: 24_576,
   },
   "base-sepolia": {
+    // A pool of nodes behind one URL: pin reads so they never go back in time (receipts.js).
+    consistentReads: true,
     chain: baseSepolia,
     envPrefix: "BASE_SEPOLIA",
     blockTimeMs: 2000,
@@ -57,6 +61,8 @@ const DEFINITIONS = {
     maxContractSize: 24_576,
   },
   hyperevm: {
+    // A pool of nodes behind one URL: pin reads so they never go back in time (receipts.js).
+    consistentReads: true,
     chain: hyperEvm,
     envPrefix: "HYPEREVM",
     // HyperEVM's small blocks (1s, 2M gas). Anything bigger than 2M gas
@@ -67,6 +73,8 @@ const DEFINITIONS = {
     smallBlockGasLimit: 2_000_000n,
   },
   "hyperevm-testnet": {
+    // A pool of nodes behind one URL: pin reads so they never go back in time (receipts.js).
+    consistentReads: true,
     chain: hyperliquidEvmTestnet,
     envPrefix: "HYPEREVM_TESTNET",
     blockTimeMs: 1000,
@@ -175,7 +183,7 @@ export function getNetwork(id) {
     },
     /** A viem transport for this network's RPC, paced - use for every client. */
     transport,
-    publicClient: failOnRevert(createPublicClient({ chain, transport: transport() })),
+    publicClient: failOnRevert(def.consistentReads ? monotonicReads(createPublicClient({ chain, transport: transport() })) : createPublicClient({ chain, transport: transport() })),
     walletClient: null, // set by attachOperator
   };
   built.set(canonical, network);

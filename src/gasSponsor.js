@@ -169,6 +169,7 @@ export async function estimateWithFunding(client, contractParams) {
   try {
     return await publicClient.estimateContractGas(params);
   } catch (err) {
+    if (bareRevert(err)) return publicClient.estimateContractGas({ ...params, account: client.account.address }).catch(() => Promise.reject(err));
     if (!unaffordable(err) || isOperator(client.account.address)) throw err;
     const { gasCost } = await feesFor(ESTIMATE_FUNDING_GAS);
     await ensureCanAfford(client.account.address, gasCost, contractParams.value ?? 0n);
@@ -182,12 +183,23 @@ export async function estimateTxWithFunding(client, tx, fundingGas = ESTIMATE_FU
   try {
     return await publicClient.estimateGas(params);
   } catch (err) {
+    if (bareRevert(err)) return publicClient.estimateGas({ ...params, account: client.account.address }).catch(() => Promise.reject(err));
     if (!unaffordable(err) || isOperator(client.account.address)) throw err;
     const { gasCost } = await feesFor(fundingGas);
     await ensureCanAfford(client.account.address, gasCost, tx.value ?? 0n);
     return publicClient.estimateGas(params);
   }
 }
+
+// viem sends a local account's estimate with fees, and some nodes (anvil
+// among them) then cap its gas at what the balance pays for and report
+// running out as a revert with no reason - not as "insufficient funds".
+// Asked again without fees (the account as a bare address), the node
+// estimates the call itself; funding for that limit happens afterwards.
+const bareRevert = (err) => {
+  const text = `${err.shortMessage || ""} ${err.details || ""} ${err.message}`;
+  return /execution reverted/i.test(text) && !/following (signature|reason)|custom error|reason:/i.test(text);
+};
 
 /** Current fees, and the up-front cost of a transaction with this gas limit at them. */
 export async function feesFor(gasLimit) {

@@ -163,6 +163,7 @@ class Run {
       this.log(`✓ ${name}`);
       return result;
     } catch (err) {
+      if (process.env.TEST_STACKS) console.error(err.stack); // TEST_STACKS=1 prints where a step failed
       const d = describeError(err);
       this.steps.push({ name, ok: false, ms: Date.now() - t, extra, ...d });
       this.log(`✗ ${name}: ${d.revert ?? d.message}`);
@@ -708,15 +709,19 @@ async function runModel(model) {
 async function sweep() {
   const fees = await publicClient.estimateFeesPerGas();
   const cost = 21_000n * fees.maxFeePerGas;
+  // Left behind on purpose: rollups like Base add a data fee on top of gas,
+  // so sending everything but the gas comes up a little short.
+  const margin = cost + parseEther("0.000002");
   let total = 0n;
   for (const account of testWallets) {
     try {
       const balance = await nativeBalance(account.address);
-      if (balance <= cost * 2n) continue;
+      if (balance <= cost + margin * 2n) continue;
+      const value = balance - cost - margin;
       const client = common.walletClientFor(account);
-      const hash = await client.sendTransaction({ to: operatorAccount.address, value: balance - cost, gas: 21_000n, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas });
+      const hash = await client.sendTransaction({ to: operatorAccount.address, value, gas: 21_000n, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas });
       await publicClient.waitForTransactionReceipt({ hash });
-      total += balance - cost;
+      total += value;
     } catch (err) {
       console.error(`Couldn't sweep ${account.address}: ${err.shortMessage || err.message}`);
     }
