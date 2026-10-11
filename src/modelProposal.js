@@ -49,7 +49,7 @@ export function modelOptionsHelp(model) {
     return [
       "*Sowellian settings* (name=value, anywhere after the action ID):",
       "• `track` — human (people resolve it) or oracle (an on-chain metric does) (default human)",
-      "• `feed` — oracle track: the price pair, e.g. ETH/USD or BTC/USD (looked up in Pyth's feed list), or a Pyth feed ID (0x + 64 hex)",
+      "• `feed` — oracle track: the price pair, e.g. ETH/USD, BTC/USD, EUR/USD or XAU/USD (looked up in Pyth's feed list - search it with feeds, e.g. `feeds eth`), or a Pyth feed ID (0x + 64 hex)",
       "• `goal` — oracle track: the price it's compared against, e.g. 3000 or 0.95",
       "• `oracle` — optional: `pyth` (default, this network's Pyth adapter) or an adapter address",
       "• `when` — min: success if the result is at least goal; max: at most (default min)",
@@ -165,15 +165,30 @@ export async function proposeForModel({ model, client, governanceAddress, action
   const adapter = getAdapter(model);
   if (model === "sowellian") {
     const c = sowellianCriteria(options);
-    // A pair name ("ETH/USD") becomes its feed ID from Pyth's own feed list.
-    if (c.resolutionMethod === 0) c.oracleSelector = await adapter.resolvePythFeed(c.oracleSelector);
-    return adapter.proposeWithCriteria(client, governanceAddress, actions, description, c.resolutionMethod, c.oracle, c.oracleSelector, c.targetValue, c.targetIsMinimum, c.measurementPeriod);
+    // A pair name ("ETH/USD") becomes its feed ID from Pyth's own feed list;
+    // the reply names the feed and its price now, so people can check it.
+    let oracleFeed = null;
+    if (c.resolutionMethod === 0) {
+      oracleFeed = await adapter.lookupPythFeed(c.oracleSelector);
+      c.oracleSelector = oracleFeed.id;
+      oracleFeed.price = await adapter.fetchPythUpdate(oracleFeed.id).then((u) => u.price, () => null);
+    }
+    const result = await adapter.proposeWithCriteria(client, governanceAddress, actions, description, c.resolutionMethod, c.oracle, c.oracleSelector, c.targetValue, c.targetIsMinimum, c.measurementPeriod);
+    return { ...result, oracleFeed };
   }
   if (model === "decisionMarkets") {
     checkModelOptions(model, options);
     return adapter.proposeWithSeed(client, governanceAddress, actions, description, options.seed, options.quote);
   }
   return adapter.propose(client, governanceAddress, actions, description);
+}
+
+/** "📈 Resolved by Pyth's Crypto.ETH/USD feed (0xff61…0ace), now 2532.91." for an oracle-track proposal, else null. */
+export function oracleFeedLine(oracleFeed) {
+  if (!oracleFeed) return null;
+  const id = `${oracleFeed.id.slice(0, 6)}…${oracleFeed.id.slice(-4)}`;
+  const name = oracleFeed.symbol ? `Pyth's ${oracleFeed.symbol} feed (${id})` : `Pyth feed ${id}`;
+  return `📈 Resolved by ${name}${oracleFeed.price ? `, now ${oracleFeed.price}` : ""}.`;
 }
 
 /** What to do next with a new proposal, by model. `cmd(name)` renders a command. */

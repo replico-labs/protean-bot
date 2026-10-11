@@ -1,4 +1,5 @@
-import { takeModelOptions, checkModelOptions, modelOptionsUsage, proposeForModel, proposalNextStep } from "../../modelProposal.js";
+import { takeModelOptions, checkModelOptions, modelOptionsUsage, proposeForModel, proposalNextStep, oracleFeedLine } from "../../modelProposal.js";
+import { feedsText } from "../../governance/sowellian.js";
 import { solanaWalletLine } from "../../solana/commands.js";
 import { isAddress, getAddress, formatEther } from "viem";
 import { currentNetwork, takeNetworkArg, runOnNetwork, getNetwork, ENABLED_NETWORKS, describeNetwork } from "../../networks.js";
@@ -320,8 +321,18 @@ export const CORE_COMMANDS = {
 
       const { target, data } = await buildActionProposal({ model, governanceAddress: address, actionId, actionArgs, guardWrapperAddress });
       const { client } = await userClient(ctx, { forceFullTopup: true });
-      const { proposalId } = await proposeForModel({ model, client, governanceAddress: address, actions: [{ target, value: 0n, data }], description, options });
-      return proposalReply(ctx, address, model, proposalId, `✅ Proposal #${proposalId} created via \`${actionId}\`.\n\n${proposalNextStep(model, proposalId, ctx.cmd)}`);
+      const { proposalId, oracleFeed } = await proposeForModel({ model, client, governanceAddress: address, actions: [{ target, value: 0n, data }], description, options });
+      const feed = oracleFeedLine(oracleFeed);
+      return proposalReply(ctx, address, model, proposalId, `✅ Proposal #${proposalId} created via \`${actionId}\`.${feed ? `\n${feed}` : ""}\n\n${proposalNextStep(model, proposalId, ctx.cmd)}`);
+    },
+  },
+
+  feeds: {
+    description: "Search Pyth's price feeds, for a Sowellian oracle proposal's feed=",
+    ephemeralByDefault: true,
+    options: [{ name: "search", description: "e.g. eth, btc/usd, eur, gold", required: false, rest: true }],
+    async run(ctx) {
+      return reply(await feedsText(ctx.args.join(" ").trim(), ctx.cmd), { ephemeral: true });
     },
   },
 
@@ -466,7 +477,8 @@ async function proposeIntegration(ctx, address, actionId, rest) {
     throw new UserError(`Add a description at the end: \`${ctx.cmd("proposeaction")} ${actionId} ${integrationUsage(getIntegrationAction(actionId))}${extra ? ` ${extra}` : ""} <description>\``);
   }
   const { client } = await userClient(ctx, { forceFullTopup: true });
-  const { proposalId } = await proposeForModel({ model, client, governanceAddress: address, actions: built.actions, description: built.description, options: modelOptions });
+  const { proposalId, oracleFeed } = await proposeForModel({ model, client, governanceAddress: address, actions: built.actions, description: built.description, options: modelOptions });
   const steps = built.actions.length;
-  return proposalReply(ctx, address, model, proposalId, `✅ Proposal #${proposalId} created via \`${actionId}\` (${steps} step${steps === 1 ? "" : "s"}).\n\n${built.summary}\n\n${proposalNextStep(model, proposalId, ctx.cmd)}`);
+  const feed = oracleFeedLine(oracleFeed);
+  return proposalReply(ctx, address, model, proposalId, `✅ Proposal #${proposalId} created via \`${actionId}\` (${steps} step${steps === 1 ? "" : "s"}).\n\n${built.summary}${feed ? `\n${feed}` : ""}\n\n${proposalNextStep(model, proposalId, ctx.cmd)}`);
 }

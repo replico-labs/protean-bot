@@ -6,7 +6,8 @@ import { run, sequentialize } from "@grammyjs/runner";
 import { isAddress, getAddress, parseEther, formatUnits } from "viem";
 import { BOT_TOKEN, publicClient, sortitionRandomnessSource, walletClient } from "./config.js";
 import { fitGasLimit } from "./gasLimit.js";
-import { takeModelOptions, checkModelOptions, modelOptionsUsage, proposeForModel, proposalNextStep, resolveOracleWord, oracleGoalValue } from "./modelProposal.js";
+import { takeModelOptions, checkModelOptions, modelOptionsUsage, proposeForModel, proposalNextStep, resolveOracleWord, oracleGoalValue, oracleFeedLine } from "./modelProposal.js";
+import { feedsText } from "./governance/sowellian.js";
 import { rewardComputedText, withdrawnText } from "./opportunityMarket/payoutText.js";
 import { marketSendMode, sendFromMarketWallet, marketWalletBalances } from "./opportunityMarket/send.js";
 import { currentNetwork, explorerAddressLine, isNativeTokenWord, runOnNetwork, takeNetworkArg, describeNetwork, ENABLED_NETWORKS, getNetwork, blocksToDuration } from "./networks.js";
@@ -582,6 +583,7 @@ bot.command("help", async (ctx) => {
       "/proposeaction `<actionId> <args...> <description>` — propose one of them; the bot encodes every step",
       "/actioninfo `<actionId>` — what any action does, its arguments and their units (and, for protocol actions, where addresses were checked)"
     );
+    if (model === "sowellian") lines.push("/feeds `<search>` — find a Pyth price feed for an oracle proposal's `feed=`, e.g. /feeds eth");
   } else {
     lines.push("", "_This group isn't linked to a DAO yet - run /register or /createdao to see DAO commands here._");
   }
@@ -2234,12 +2236,13 @@ bot.command("proposeaction", async (ctx) => {
 
     await ensureGasFunded(account, true);
     const actions = [{ target, value: 0n, data }];
-    const { proposalId } = await proposeForModel({ model, client, governanceAddress: address, actions, description, options: modelOptions });
+    const { proposalId, oracleFeed } = await proposeForModel({ model, client, governanceAddress: address, actions, description, options: modelOptions });
+    const feed = oracleFeedLine(oracleFeed);
 
     await ctx.api.editMessageText(
       ctx.chat.id,
       statusMsg.message_id,
-      `✅ Proposal #${proposalId} created via \`${actionId}\`.\n\n${proposalNextStep(model, proposalId, TG_CMD)}`,
+      `✅ Proposal #${proposalId} created via \`${actionId}\`.${feed ? `\n${feed}` : ""}\n\n${proposalNextStep(model, proposalId, TG_CMD)}`,
       { parse_mode: "Markdown" }
     );
     await tgProposalPage(ctx, address, getChatModel(ctx.chat.id), proposalId);
@@ -2279,11 +2282,12 @@ async function proposeIntegrationTelegram(ctx, address, actionId, allWords) {
     const account = await getOrCreateUserAccount(ctx.from.id);
     const client = walletClientFor(account);
     await ensureGasFunded(account, true);
-    const { proposalId } = await proposeForModel({ model, client, governanceAddress: address, actions, description, options: modelOptions });
+    const { proposalId, oracleFeed } = await proposeForModel({ model, client, governanceAddress: address, actions, description, options: modelOptions });
+    const feed = oracleFeedLine(oracleFeed);
     await ctx.api.editMessageText(
       ctx.chat.id,
       statusMsg.message_id,
-      `✅ Proposal #${proposalId} created via \`${actionId}\` (${actions.length} step${actions.length === 1 ? "" : "s"}).\n\n${summary}\n\n${proposalNextStep(model, proposalId, TG_CMD)}`,
+      `✅ Proposal #${proposalId} created via \`${actionId}\` (${actions.length} step${actions.length === 1 ? "" : "s"}).\n\n${summary}${feed ? `\n${feed}` : ""}\n\n${proposalNextStep(model, proposalId, TG_CMD)}`,
       { parse_mode: "Markdown" }
     );
     await tgProposalPage(ctx, address, getChatModel(ctx.chat.id), proposalId);
@@ -2296,6 +2300,15 @@ async function proposeIntegrationTelegram(ctx, address, actionId, allWords) {
 /*//////////////////////////////////////////////////////////////
                             /actioninfo
 //////////////////////////////////////////////////////////////*/
+
+bot.command("feeds", async (ctx) => {
+  try {
+    const text = await feedsText(ctx.match?.trim() ?? "", TG_CMD);
+    await ctx.reply(text, { parse_mode: "Markdown" }).catch(() => ctx.reply(text));
+  } catch (err) {
+    await ctx.reply(`Couldn't search Pyth's feeds: ${err.message}`);
+  }
+});
 
 bot.command("actioninfo", async (ctx) => {
   const actionId = ctx.match?.trim();

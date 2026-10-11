@@ -1,5 +1,8 @@
 import { Client, Events, GatewayIntentBits, PermissionFlagsBits, REST, Routes, SlashCommandBuilder, MessageFlags } from "discord.js";
 import { COMMANDS, runCommand, ADMIN_COMMANDS } from "./commands.js";
+import { OPPORTUNITY_COMMANDS } from "./commands/opportunity.js";
+import { SOWELLIAN_COMMANDS } from "./commands/sowellian.js";
+import { MARKET_COMMANDS } from "./commands/markets.js";
 import { startEventListener } from "../eventListener.js";
 
 /**
@@ -23,6 +26,28 @@ const DISCORD_MAX_MESSAGE = 2000;
 // Changing which DAO a channel points at is a server-management action.
 // Hidden from members without Manage Server (runCommand enforces it too).
 const MANAGE_COMMANDS = ADMIN_COMMANDS;
+
+/**
+ * Discord allows 100 slash commands per bot, and the bot has more. The
+ * specialist ones are grouped under one command each as subcommands
+ * (up to 25 per group): /market back, /sowellian takeposition,
+ * /decision-market trade, /guard confirminstruction. Subcommands keep the
+ * names every other platform uses. Admin commands stay top-level, since
+ * Discord can only hide a whole command from non-admins.
+ */
+export const DISCORD_GROUPS = {
+  market: { description: "Opportunity Market: deposit, back, bets, rewards", names: Object.keys(OPPORTUNITY_COMMANDS).filter((n) => !MANAGE_COMMANDS.has(n)) },
+  sowellian: { description: "Sowellian DAO: criteria, approval votes, positions, resolution", names: Object.keys(SOWELLIAN_COMMANDS) },
+  "decision-market": { description: "Decision Markets DAO: propose, split, trade, finalize, redeem", names: Object.keys(MARKET_COMMANDS) },
+  guard: {
+    description: "Guard wrapper: deploy, hand over, confirm or reject instructions",
+    names: ["deployguardwrapper", "registerguardwrapper", "handovertowrapper", "guardwrapper", "instruction", "confirminstruction", "rejectinstruction", "revokeconfirmation"],
+  },
+};
+const GROUP_OF = Object.fromEntries(Object.entries(DISCORD_GROUPS).flatMap(([group, g]) => g.names.map((n) => [n, group])));
+
+/** How a command is typed on Discord: "/market back" for a grouped one, "/vote" otherwise. */
+export const discordCommand = (name) => (GROUP_OF[name] ? `/${GROUP_OF[name]} ${name}` : `/${name}`);
 
 /** Telegram-style *bold* -> Discord **bold**, leaving `code` spans alone. */
 export function toDiscordMarkdown(text) {
@@ -55,25 +80,41 @@ export function splitForDiscord(text, limit = DISCORD_MAX_MESSAGE) {
   return chunks.length ? chunks : [""];
 }
 
+/** Adds a command's options to a slash command or subcommand builder. */
+function addOptions(builder, command) {
+  // Discord requires every required option to come before any optional one.
+  const ordered = [...command.options].sort((a, b) => Number(b.required) - Number(a.required));
+  for (const opt of ordered) {
+    const configure = (o) => {
+      o.setName(opt.name).setDescription(opt.description.slice(0, 100)).setRequired(Boolean(opt.required));
+      if (opt.choices) o.addChoices(...opt.choices.slice(0, 25).map((c) => ({ name: c, value: c })));
+      return o;
+    };
+    if (opt.type === "integer") builder.addIntegerOption((o) => configure(o).setMinValue(1));
+    else builder.addStringOption(configure);
+  }
+  return builder;
+}
+
 /** Builds the slash-command definitions Discord's API expects, from the core's option lists. */
 export function buildSlashCommands() {
-  return Object.entries(COMMANDS).map(([name, command]) => {
-    const builder = new SlashCommandBuilder().setName(name).setDescription(command.description.slice(0, 100)).setDMPermission(false);
-    if (MANAGE_COMMANDS.has(name)) builder.setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild);
-
-    // Discord requires every required option to come before any optional one.
-    const ordered = [...command.options].sort((a, b) => Number(b.required) - Number(a.required));
-    for (const opt of ordered) {
-      const configure = (o) => {
-        o.setName(opt.name).setDescription(opt.description.slice(0, 100)).setRequired(Boolean(opt.required));
-        if (opt.choices) o.addChoices(...opt.choices.slice(0, 25).map((c) => ({ name: c, value: c })));
-        return o;
-      };
-      if (opt.type === "integer") builder.addIntegerOption((o) => configure(o).setMinValue(1));
-      else builder.addStringOption(configure);
+  const single = Object.entries(COMMANDS)
+    .filter(([name]) => !GROUP_OF[name])
+    .map(([name, command]) => {
+      const builder = new SlashCommandBuilder().setName(name).setDescription(command.description.slice(0, 100)).setDMPermission(false);
+      if (MANAGE_COMMANDS.has(name)) builder.setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild);
+      return addOptions(builder, command).toJSON();
+    });
+  const grouped = Object.entries(DISCORD_GROUPS).map(([group, g]) => {
+    const builder = new SlashCommandBuilder().setName(group).setDescription(g.description.slice(0, 100)).setDMPermission(false);
+    for (const name of g.names) {
+      builder.addSubcommand((sub) => addOptions(sub.setName(name).setDescription(COMMANDS[name].description.slice(0, 100)), COMMANDS[name]));
     }
     return builder.toJSON();
   });
+  const all = [...single, ...grouped];
+  if (all.length > 100) throw new Error(`Discord allows 100 slash commands; the bot now has ${all.length}. Group more of them in DISCORD_GROUPS.`);
+  return all;
 }
 
 /**
@@ -104,7 +145,9 @@ async function registerCommands(token, applicationId, guildId) {
 /** Handles one slash-command interaction. Exported for tests. */
 export async function handleInteraction(interaction) {
   if (!interaction.isChatInputCommand()) return;
-  const command = COMMANDS[interaction.commandName];
+  // A grouped command arrives as /<group> <name>.
+  const name = DISCORD_GROUPS[interaction.commandName] ? interaction.options.getSubcommand(false) : interaction.commandName;
+  const command = COMMANDS[name];
   if (!command) return;
 
   // Only ephemeral commands (help, wallet, listactions) stay private;
@@ -118,10 +161,10 @@ export async function handleInteraction(interaction) {
     args: argsFromOptions(command, (n) => interaction.options.get(n)?.value),
     named: Object.fromEntries(command.options.map((o) => [o.name, interaction.options.get(o.name)?.value?.toString()])),
     isAdmin: interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ?? false,
-    cmd: (name) => `/${name}`,
+    cmd: discordCommand,
   };
 
-  const result = await runCommand(interaction.commandName, ctx);
+  const result = await runCommand(name, ctx);
   const [first, ...more] = splitForDiscord(toDiscordMarkdown(result.text));
   const privateFlags = { flags: MessageFlags.Ephemeral };
 

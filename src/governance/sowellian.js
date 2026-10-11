@@ -352,25 +352,70 @@ export function isFeedWord(word) {
  * still ambiguous is refused with what was found.
  */
 export async function resolvePythFeed(word) {
+  return (await lookupPythFeed(word)).id;
+}
+
+/** Pyth's feed list entries for `query` (Hermes GET /v2/price_feeds). */
+async function pythFeedList(query) {
+  const res = await fetch(`${hermesUrl()}/v2/price_feeds?query=${encodeURIComponent(query)}`, { headers: hermesHeaders() });
+  if (!res.ok) throw new Error(`Pyth's Hermes service answered ${res.status} when listing price feeds${res.status === 401 ? " - set PYTH_API_KEY" : ""}.`);
+  const feeds = await res.json();
+  return Array.isArray(feeds) ? feeds : [];
+}
+
+const hexId = (id) => (id.startsWith("0x") ? id : `0x${id}`).toLowerCase();
+
+/** The full symbol Pyth gives a feed ("Crypto.ETH/USD"), from its attributes. */
+const feedSymbol = (f) => f.attributes?.symbol ?? Object.values(f.attributes ?? {}).find((v) => String(v).includes("/")) ?? hexId(f.id);
+
+/** What a member types for a feed: the bare pair for a plain price ("Crypto.ETH/USD" -> ETH/USD), else the full symbol. */
+export function feedWord(symbol) {
+  const parts = String(symbol).split(".");
+  return parts.length === 2 && parts[1].includes("/") ? parts[1] : String(symbol);
+}
+
+/**
+ * Feeds matching `query` for members to choose from: [{ word, symbol, id }],
+ * plain prices first. `word` is what to type after feed=.
+ */
+export async function searchPythFeeds(query) {
+  const feeds = await pythFeedList(String(query).trim());
+  const rows = feeds.map((f) => ({ symbol: feedSymbol(f), id: hexId(f.id) })).map((r) => ({ ...r, word: feedWord(r.symbol) }));
+  const plain = (r) => (r.word === r.symbol ? 1 : 0);
+  return rows.sort((a, b) => plain(a) - plain(b) || a.symbol.localeCompare(b.symbol));
+}
+
+/** /feeds output: what to type for each match, in `cmd`'s syntax. */
+export async function feedsText(query, cmd) {
+  if (!query) return `Search Pyth's price feeds: \`${cmd("feeds")} eth\`, \`${cmd("feeds")} eur\`, \`${cmd("feeds")} gold\`. Then use the name it shows as \`feed=\` on a Sowellian oracle proposal.`;
+  const rows = await searchPythFeeds(query);
+  if (!rows.length) return `Pyth has no price feeds matching "${query}".`;
+  const shown = rows.slice(0, 15);
+  const lines = [`*Pyth price feeds matching "${query}"* - use the name as \`feed=<name>\`:`, ...shown.map((r) => `• \`${r.word}\`${r.word === r.symbol ? "" : ` (${r.symbol})`}`)];
+  if (rows.length > shown.length) lines.push(`…and ${rows.length - shown.length} more - search more narrowly, e.g. \`${cmd("feeds")} ${query}/usd\`.`);
+  lines.push("", "A plain pair like ETH/USD is the market price; longer names (FundingRate…, Rates…) are other kinds of data.");
+  return lines.join("\n");
+}
+
+/** A feed word resolved to { id, symbol } (symbol is null for a raw ID). */
+export async function lookupPythFeed(word) {
   const text = String(word).trim();
-  if (FEED_ID.test(text)) return text.startsWith("0x") ? text : `0x${text}`;
+  if (FEED_ID.test(text)) return { id: hexId(text), symbol: null };
   const full = (text.includes("/") ? text : `${text}/USD`).toUpperCase();
   // "FundingRate.Hyperliquid.ETH/USD": the class prefix is part of the name asked for.
   const qualified = full.split("/")[0].includes(".");
   const pair = qualified ? full.slice(full.lastIndexOf(".", full.indexOf("/")) + 1) : full;
   const base = pair.split("/")[0];
-  const res = await fetch(`${hermesUrl()}/v2/price_feeds?query=${encodeURIComponent(base)}`, { headers: hermesHeaders() });
-  if (!res.ok) throw new Error(`Pyth's Hermes service answered ${res.status} when looking up the ${pair} feed${res.status === 401 ? " - set PYTH_API_KEY" : ""}.`);
-  const feeds = await res.json();
+  const feeds = await pythFeedList(base);
   const names = (f) => Object.values(f.attributes ?? {}).map((v) => String(v).toUpperCase());
-  let matching = (Array.isArray(feeds) ? feeds : []).filter((f) => names(f).some((v) => v === pair || v.endsWith(`.${pair}`)));
+  let matching = feeds.filter((f) => names(f).some((v) => v === pair || v.endsWith(`.${pair}`)));
   if (qualified) matching = matching.filter((f) => names(f).includes(full));
   else {
     // One class word before the pair: "CRYPTO.ETH/USD", not "FUNDINGRATE.DERIBIT.8H.ETH/USD".
     const plain = matching.filter((f) => names(f).some((v) => v.endsWith(`.${pair}`) && !v.slice(0, -pair.length - 1).includes(".")));
     if (plain.length) matching = plain;
   }
-  const ids = [...new Set(matching.map((f) => (f.id.startsWith("0x") ? f.id : `0x${f.id}`).toLowerCase()))];
+  const ids = [...new Set(matching.map((f) => hexId(f.id)))];
   if (ids.length === 0) {
     const err = new Error(`Pyth has no ${qualified ? full : pair} price feed. Check the name, or pass the feed ID (0x + 64 hex) from Pyth's price feed list.`);
     err.userFacing = true;
@@ -382,7 +427,7 @@ export async function resolvePythFeed(word) {
     err.userFacing = true;
     throw err;
   }
-  return ids[0];
+  return { id: ids[0], symbol: feedSymbol(matching[0]) };
 }
 
 export async function postPythPrice(client, oracleAddress, priceId) {
