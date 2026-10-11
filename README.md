@@ -46,7 +46,7 @@ The operator wallet pays users' gas, never the amounts they send.
 /register 0xGovernance... tokenWeighted base
 ```
 
-The network word can go anywhere after the model; without one, the bot's default network is used. From then on every command in that chat reads and writes that chain. `/network` shows which one. Chats registered before networks existed are Monad testnet.
+Creating a DAO **requires** a network word (anywhere after the supplies, or after the name for `/createboarddao`); without one the bot refuses and lists the network codes it accepts (the enabled networks, plus `solana` when Solana is on). `/register` still falls back to the bot's default network. From then on every command in that chat reads and writes that chain. `/network` shows which one. Chats registered before networks existed are Monad testnet.
 
 **Enabling a network** takes, per network: an entry in `NETWORKS`, factory addresses under that network's prefix (`BASE_FACTORY_ADDRESS`, `BASE_QUADRATIC_FACTORY_ADDRESS`, ...), and native gas in the operator wallet. An RPC is optional (`BASE_RPC_URL`; viem's public RPC otherwise). See `.env.example`.
 

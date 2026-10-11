@@ -1,6 +1,7 @@
 import { isAddress, getAddress } from "viem";
 import { walletClient, sortitionRandomnessSource } from "../../config.js";
-import { ENABLED_NETWORKS, takeNetworkArg, runOnNetwork, currentNetwork, getNetwork, networkEnvName } from "../../networks.js";
+import { runOnNetwork, currentNetwork, getNetwork, networkEnvName } from "../../networks.js";
+import { networkCodes, networkCodesText, requireNetworkArg, exampleNetwork } from "../../networkChoice.js";
 import {
   registerChat,
   recordChatLinker,
@@ -67,13 +68,13 @@ const CREATE_DAO_FUNCTIONS = {
   delegate: (n, s, i, m, extra) => createDelegateDAO(n, s, i, m, extra.council),
   sortition: (n, s, i, m, extra) => createSortitionDAO(n, s, i, m, extra.randomnessSource, extra.council),
 };
-/** Discord choices / help for the optional network argument. */
-const NETWORK_OPTION = { name: "network", description: "Network (default: this bot's default)", required: false, choices: ENABLED_NETWORKS };
+/** Discord choices for the network a new DAO goes on - required: the bot never picks one. */
+const NETWORK_OPTION = { name: "network", description: "Network to create it on", required: true, choices: networkCodes().map((n) => n.code) };
 
-/** A user-facing error for a network word that is known but not enabled. */
-function networkArg(args) {
+/** The network named in a create command; a user-facing error listing the codes if none (or one not enabled) is. */
+function networkArg(args, example) {
   try {
-    return takeNetworkArg(args);
+    return requireNetworkArg(args, example);
   } catch (err) {
     throw new UserError(err.message);
   }
@@ -113,7 +114,7 @@ export { attemptClaim };
 export const SETUP_COMMANDS = {
   createdao: {
     section: "Setup",
-    usage: "<name> <symbol> <initialSupply> <maxSupply> [model] [network] [council...]",
+    usage: "<name> <symbol> <initialSupply> <maxSupply> [model] <network> [council...]",
     description: "Create a new DAO and link it to this channel",
     options: [
       { name: "name", description: "DAO name (spaces allowed)", required: true },
@@ -126,20 +127,21 @@ export const SETUP_COMMANDS = {
     ],
     async run(ctx) {
       const [name, symbol, initialSupplyStr, maxSupplyStr, ...tail] = ctx.args;
-      // The network word can be anywhere after the supplies (Discord drops
-      // omitted options, so positions shift) - take it out first.
-      const { network, rest: afterNetwork } = networkArg(tail);
-      const [modelArg, ...rest] = afterNetwork;
       if (!maxSupplyStr) {
         throw new UserError(
           [
-            `Usage: \`${ctx.cmd("createdao")} <name> <symbol> <initialSupply> <maxSupply> [model] [network] [council...]\``,
-            `Example: \`${ctx.cmd("createdao")} ArkDAO ARK 1000000 10000000\``,
-            `A name with spaces goes in quotes: \`${ctx.cmd("createdao")} "Ark DAO" ARK 1000000 10000000\`.`,
+            `Usage: \`${ctx.cmd("createdao")} <name> <symbol> <initialSupply> <maxSupply> [model] <network> [council...]\``,
+            `Example: \`${ctx.cmd("createdao")} ArkDAO ARK 1000000 10000000 ${exampleNetwork()}\``,
+            `A name with spaces goes in quotes: \`${ctx.cmd("createdao")} "Ark DAO" ARK 1000000 10000000 ${exampleNetwork()}\`.`,
             `Models: ${Object.keys(CREATE_DAO_FUNCTIONS).join(", ")} (default tokenWeighted). Delegate and sortition also need starting council addresses. For a token-less multisig use \`${ctx.cmd("createboarddao")}\`.`,
+            `Networks: ${networkCodesText()}.`,
           ].join("\n")
         );
       }
+      // The network word can be anywhere after the supplies (Discord drops
+      // omitted options, so positions shift) - take it out first.
+      const { network, rest: afterNetwork } = networkArg(tail, `${ctx.cmd("createdao")} ${name} ${symbol} ${initialSupplyStr} ${maxSupplyStr} ${tail[0] && !/^0x/i.test(tail[0]) ? tail[0] + " " : ""}${exampleNetwork()}`);
+      const [modelArg, ...rest] = afterNetwork;
       assertMayRelink(ctx);
       const model = modelArg || "tokenWeighted";
       const initialSupply = Number(initialSupplyStr);
@@ -192,7 +194,7 @@ export const SETUP_COMMANDS = {
 
   createboarddao: {
     section: "Setup",
-    usage: "<name> <signer1> <signer2> ... [network]",
+    usage: "<name> <signer1> <signer2> ... <network>",
     description: "Create a Board (multisig) DAO and link it here",
     options: [
       { name: "name", description: "DAO name (spaces allowed)", required: true },
@@ -201,8 +203,9 @@ export const SETUP_COMMANDS = {
     ],
     async run(ctx) {
       const [name, ...signerArgs] = ctx.args;
-      const { network, rest: signers } = networkArg(signerArgs);
-      if (!name || signers.length === 0) throw new UserError(`Usage: \`${ctx.cmd("createboarddao")} <name> <signer1> <signer2> ...\``);
+      if (!name || signerArgs.length === 0) throw new UserError(`Usage: \`${ctx.cmd("createboarddao")} <name> <signer1> <signer2> ... <network>\`\nNetworks: ${networkCodesText()}.`);
+      const { network, rest: signers } = networkArg(signerArgs, `${ctx.cmd("createboarddao")} ${name} ${signerArgs.join(" ")} ${exampleNetwork()}`);
+      if (signers.length === 0) throw new UserError(`Usage: \`${ctx.cmd("createboarddao")} <name> <signer1> <signer2> ... <network>\``);
       if (!signers.every((s) => isAddress(s, { strict: false }))) throw new UserError("All signer addresses must be valid.");
       assertMayRelink(ctx);
       let result;

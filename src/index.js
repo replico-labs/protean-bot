@@ -1,5 +1,6 @@
 import { Bot } from "grammy";
 import { SOLANA_ENABLED } from "./solana/config.js";
+import { requireNetworkArg, networkCodesText, exampleNetwork } from "./networkChoice.js";
 import { runSolanaCommand, solanaWalletLine, isSlowSolanaCommand } from "./solana/commands.js";
 import { run, sequentialize } from "@grammyjs/runner";
 import { isAddress, getAddress, parseEther, formatUnits } from "viem";
@@ -527,8 +528,8 @@ const MODEL_HELP_BLOCKS = {
 bot.command("help", async (ctx) => {
   const lines = [
     "*Setup*",
-    "/createdao `<name> <symbol> <initialSupply> <maxSupply> [model] [network]` — the main \"spin up a new DAO\" command: deploys a token, treasury, and governance contract, all linked to this chat (group owner/admins). Models: " + SUPPORTED_MODELS.filter((m) => m !== "board").join(", "),
-    "/createboarddao `<name> <signer1> <signer2> ... [network]` — for a Board (multisig) DAO specifically — no token at all, so it's a separate command (group owner/admins)",
+    "/createdao `<name> <symbol> <initialSupply> <maxSupply> [model] <network>` — the main \"spin up a new DAO\" command: deploys a token, treasury, and governance contract, all linked to this chat (group owner/admins). Models: " + SUPPORTED_MODELS.filter((m) => m !== "board").join(", "),
+    "/createboarddao `<name> <signer1> <signer2> ... <network>` — for a Board (multisig) DAO specifically — no token at all, so it's a separate command (group owner/admins)",
     "/network — which chain this chat's DAO is on, and which networks this bot supports",
     "/register `<governance_address> [model] [network]` — already have a DAO deployed elsewhere? Link it to this chat instead of creating a new one (group owner/admins)",
     "/unregister — unlink whatever DAO is connected here (group owner/admins) — doesn't touch the DAO itself, just this chat's connection to it",
@@ -658,16 +659,16 @@ bot.command("createdao", async (ctx) => {
   if (args.length < 4) {
     await ctx.reply(
       [
-        "Usage: `/createdao <name> <symbol> <initialSupply> <maxSupply> [model] [network] [extra...]`",
+        "Usage: `/createdao <name> <symbol> <initialSupply> <maxSupply> [model] <network> [extra...]`",
         "",
-        "Example: `/createdao ArkDAO ARK 1000000 10000000`",
-        "Example (quadratic): `/createdao ArkDAO ARK 1000000 10000000 quadratic`",
-        "Example (delegate, needs a starting council): `/createdao ArkDAO ARK 1000000 10000000 delegate 0xA... 0xB... 0xC...`",
-        "Example (sortition, needs a starting council - randomness source is configured by the bot admin): `/createdao ArkDAO ARK 1000000 10000000 sortition 0xA... 0xB... 0xC...`",
+        `Example: \`/createdao ArkDAO ARK 1000000 10000000 ${exampleNetwork()}\``,
+        `Example (quadratic): \`/createdao ArkDAO ARK 1000000 10000000 quadratic ${exampleNetwork()}\``,
+        `Example (delegate, needs a starting council): \`/createdao ArkDAO ARK 1000000 10000000 delegate ${exampleNetwork()} 0xA... 0xB... 0xC...\``,
+        `Example (sortition, needs a starting council - randomness source is configured by the bot admin): \`/createdao ArkDAO ARK 1000000 10000000 sortition ${exampleNetwork()} 0xA... 0xB... 0xC...\``,
         "",
         `Models: ${Object.keys(CREATE_DAO_FUNCTIONS).join(", ")} (defaults to tokenWeighted). Board has no token at all - use /createboarddao instead.`,
         "",
-        `Network can go anywhere after the model (e.g. \`base\`, \`hyperevm\`) - defaults to this bot's default network. Enabled here: ${ENABLED_NETWORKS.join(", ")}.`,
+        `The network is required and can go anywhere after the supplies. Networks: ${networkCodesText()}.`,
         "",
         "A name with spaces goes in quotes: `/createdao \"Ark DAO\" ARK 1000000 10000000`. The symbol is one word.",
       ].join("\n"),
@@ -676,21 +677,22 @@ bot.command("createdao", async (ctx) => {
     return;
   }
 
-  const [name, symbol, initialSupplyStr, maxSupplyStr, modelArg, ...restArgs] = args;
-  const model = modelArg || "tokenWeighted";
+  const [name, symbol, initialSupplyStr, maxSupplyStr, ...tail] = args;
   const initialSupply = Number(initialSupplyStr);
   const maxSupply = Number(maxSupplyStr);
 
-  // Network is detected anywhere in the trailing args, not a fixed
-  // position - a network name (a plain word) can never collide with a
-  // council address (always 0x-prefixed hex).
-  let network, rest;
+  // Network is required and detected anywhere after the supplies, not a
+  // fixed position - a network name (a plain word) can never collide with
+  // a council address (always 0x-prefixed hex).
+  let network, modelArg, rest;
   try {
-    ({ network, rest } = takeNetworkArg(restArgs));
+    const example = `/createdao ${name} ${symbol} ${initialSupplyStr} ${maxSupplyStr} ${tail[0] && !/^0x/i.test(tail[0]) ? tail[0] + " " : ""}${exampleNetwork()}`;
+    ({ network, rest: [modelArg, ...rest] } = requireNetworkArg(tail, example));
   } catch (err) {
-    await ctx.reply(err.message);
+    await ctx.reply(err.message, { parse_mode: "Markdown" }).catch(() => ctx.reply(err.message));
     return;
   }
+  const model = modelArg || "tokenWeighted";
 
   // Everything from here - config checks, the factory call - runs on the chosen network.
   return runOnNetwork(network, async () => {
@@ -777,9 +779,11 @@ bot.command("createboarddao", async (ctx) => {
   if (args.length < 2) {
     await ctx.reply(
       [
-        "Usage: `/createboarddao <name> <signer1> <signer2> ... [network]`",
+        "Usage: `/createboarddao <name> <signer1> <signer2> ... <network>`",
         "",
-        "Example: `/createboarddao ArkBoard 0xAaa... 0xBbb... 0xCcc...`",
+        `Example: \`/createboarddao ArkBoard 0xAaa... 0xBbb... 0xCcc... ${exampleNetwork()}\``,
+        "",
+        `Networks: ${networkCodesText()}.`,
         "",
         "⚠️ Board has no token at all - signers approve directly. A name with spaces goes in quotes: `/createboarddao \"Ark Board\" 0xAaa... 0xBbb...`",
       ].join("\n"),
@@ -791,9 +795,9 @@ bot.command("createboarddao", async (ctx) => {
   const [name, ...signerArgs] = args;
   let network, signers;
   try {
-    ({ network, rest: signers } = takeNetworkArg(signerArgs));
+    ({ network, rest: signers } = requireNetworkArg(signerArgs, `/createboarddao ${name} ${signerArgs.join(" ")} ${exampleNetwork()}`));
   } catch (err) {
-    await ctx.reply(err.message);
+    await ctx.reply(err.message, { parse_mode: "Markdown" }).catch(() => ctx.reply(err.message));
     return;
   }
   if (signers.length === 0 || !signers.every((s) => isAddress(s, { strict: false }))) {
