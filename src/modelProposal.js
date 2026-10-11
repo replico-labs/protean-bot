@@ -1,6 +1,7 @@
 import { getAddress, isAddress, parseUnits, zeroAddress, zeroHash } from "viem";
 import { pythPriceAdapter } from "./config.js";
 import { getAdapter } from "./governance/index.js";
+import { isFeedWord } from "./governance/sowellian.js";
 import { parseDuration } from "./integrations/common.js";
 
 /**
@@ -16,7 +17,7 @@ import { parseDuration } from "./integrations/common.js";
  *
  *   sowellian        track=human|oracle (default human)
  *                    oracle=pyth (default) | <adapter address> (oracle track)
- *                    feed=<Pyth price feed ID>               (oracle track)
+ *                    feed=<pair like ETH/USD, or Pyth feed ID> (oracle track)
  *                    goal=<price, e.g. 3000> (oracle track; sent as 18 decimals)
  *                    when=min|max (default min: success if >= goal)
  *                    measure=<duration> (default 7d)
@@ -37,7 +38,7 @@ const KEYS = {
 
 /** Usage text for a model's extra settings, or "" for models that need none. */
 export function modelOptionsUsage(model) {
-  if (model === "sowellian") return "[track=human|oracle] [feed=<Pyth feed ID>] [goal=<price>] [when=min|max] [measure=7d]";
+  if (model === "sowellian") return "[track=human|oracle] [feed=ETH/USD] [goal=<price>] [when=min|max] [measure=7d]";
   if (model === "decisionMarkets") return "seed=<DAO tokens> quote=<native amount>";
   return "";
 }
@@ -48,7 +49,7 @@ export function modelOptionsHelp(model) {
     return [
       "*Sowellian settings* (name=value, anywhere after the action ID):",
       "• `track` — human (people resolve it) or oracle (an on-chain metric does) (default human)",
-      "• `feed` — oracle track: the Pyth price feed ID (0x + 64 hex, from Pyth's price feed list), e.g. ETH/USD",
+      "• `feed` — oracle track: the price pair, e.g. ETH/USD or BTC/USD (looked up in Pyth's feed list), or a Pyth feed ID (0x + 64 hex)",
       "• `goal` — oracle track: the price it's compared against, e.g. 3000 or 0.95",
       "• `oracle` — optional: `pyth` (default, this network's Pyth adapter) or an adapter address",
       "• `when` — min: success if the result is at least goal; max: at most (default min)",
@@ -134,8 +135,8 @@ export function sowellianCriteria(options) {
     return { resolutionMethod: 1, oracle: zeroAddress, oracleSelector: zeroHash, targetValue: options.goal ?? "0", targetIsMinimum: when === "min", measurementPeriod };
   }
 
-  if (!options.feed) throw new ProposalOptionError("The oracle track needs feed=<Pyth price feed ID> (0x + 64 hex, from Pyth's price feed list, e.g. ETH/USD).");
-  if (!/^0x[0-9a-fA-F]{64}$/.test(options.feed)) throw new ProposalOptionError("feed= must be a Pyth price feed ID: 0x followed by 64 hex characters.");
+  if (!options.feed) throw new ProposalOptionError("The oracle track needs feed=<pair>, e.g. feed=ETH/USD (or a Pyth feed ID, 0x + 64 hex).");
+  if (!isFeedWord(options.feed)) throw new ProposalOptionError("feed= must be a price pair like ETH/USD, or a Pyth feed ID (0x + 64 hex).");
   if (options.goal === undefined) throw new ProposalOptionError("The oracle track needs goal=<price> - what the feed's price is compared against, e.g. goal=3000.");
   return {
     resolutionMethod: 0,
@@ -164,6 +165,8 @@ export async function proposeForModel({ model, client, governanceAddress, action
   const adapter = getAdapter(model);
   if (model === "sowellian") {
     const c = sowellianCriteria(options);
+    // A pair name ("ETH/USD") becomes its feed ID from Pyth's own feed list.
+    if (c.resolutionMethod === 0) c.oracleSelector = await adapter.resolvePythFeed(c.oracleSelector);
     return adapter.proposeWithCriteria(client, governanceAddress, actions, description, c.resolutionMethod, c.oracle, c.oracleSelector, c.targetValue, c.targetIsMinimum, c.measurementPeriod);
   }
   if (model === "decisionMarkets") {

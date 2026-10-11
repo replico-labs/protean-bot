@@ -7,10 +7,10 @@ Contracts live in the companion repo, [`Spaces`](https://github.com/replico-labs
 ## Status
 
 - **Contracts:** 539/539 Foundry tests pass (see Spaces).
-- **Live on Monad testnet:** the full create → propose → vote → queue → execute loop has run through Telegram for token-weighted and Board DAOs, with real receipts.
+- **Live on Monad testnet:** all ten models' full lifecycles pass `scripts/test-evm-models.mjs` (174 steps, every proposal paying out of its treasury): votes, challenges, conviction with a spending budget, delegate elections and recalls, a sortition draw with Pyth Entropy, a Sowellian adjudication and a decision-market finalization. Earlier, the create → propose → vote → queue → execute loop also ran through Telegram for token-weighted and Board DAOs.
 - **Tested end to end on local chains** (anvil, with the real contracts deployed from source): every model's full lifecycle through the Discord and Slack handlers — the same command code Telegram uses for the shared paths — about 230 checks, including a GuardWrapper handover with a treasury payout confirmed by signers. The network layer has its own two-chain test: one bot process serving a "Monad" chain and a "Base" chain at once.
 - **Deployed on Base Sepolia and HyperEVM testnet:** all ten factories plus the Pyth Entropy and price-feed adapters, built with Spaces' `size-limited` profile (addresses in Spaces' README).
-- **Not yet run live:** the other eight models on Monad testnet, any DAO lifecycle on Base Sepolia or HyperEVM testnet, the mainnets (nothing deployed), real Discord and Slack workspaces, a real WhatsApp number, the FHE relayer round-trip, and Pyth Entropy / Hermes on a live chain. See [What's not verified yet](#whats-not-verified-yet).
+- **Not yet run live:** any DAO lifecycle on Base Sepolia or HyperEVM testnet, the mainnets (nothing deployed), real Discord and Slack workspaces, a real WhatsApp number, the FHE relayer round-trip, and Hermes price updates on a live chain. See [What's not verified yet](#whats-not-verified-yet).
 
 ## How wallets work
 
@@ -158,10 +158,10 @@ Bonds and seeds (Optimistic challenges, Sowellian bonds and positions, Decision 
 ### Sowellian and Decision Markets through `/proposeaction`
 ```
 /proposeaction treasury-transfer-eth 0xRecipient 1 measure=7d Fund the grant                      (Sowellian, human track)
-/proposeaction treasury-transfer-eth 0xRecipient 1 track=oracle feed=0x<ETH/USD feed ID> goal=3000 when=min measure=30d Grow TVL
+/proposeaction treasury-transfer-eth 0xRecipient 1 track=oracle feed=ETH/USD goal=3000 when=min measure=30d Grow TVL
 /proposeaction treasury-transfer-eth 0xRecipient 1 seed=1000 quote=5 Fund the campaign            (Decision Markets)
 ```
-- **Sowellian:** `track=human|oracle` (default human); on the oracle track `feed=<Pyth price feed ID>` and `goal=<price>` (e.g. 3000, sent as 18 decimals) are required and `oracle=` defaults to `pyth`, this network's `PYTH_PRICE_ADAPTER`; `when=min|max` (default min), `measure=<duration>` (default 7d). `/actioninfo` lists them in a Sowellian chat.
+- **Sowellian:** `track=human|oracle` (default human); on the oracle track `feed=<pair>` (e.g. `ETH/USD`, looked up in Pyth's feed list on Hermes; a raw feed ID works too) and `goal=<price>` (e.g. 3000, sent as 18 decimals) are required and `oracle=` defaults to `pyth`, this network's `PYTH_PRICE_ADAPTER`; `when=min|max` (default min), `measure=<duration>` (default 7d). `/actioninfo` lists them in a Sowellian chat.
 - **Decision Markets:** `seed=<DAO tokens>` and `quote=<native>`, both required.
 - `/proposecriteria` and `/proposemarket` remain for raw calls the library doesn't cover.
 
@@ -314,7 +314,7 @@ Sowellian oracle proposals need no keeper: `/resolveviaoracle` posts Pyth's pric
 
 ### Testing every model at once
 
-`node scripts/test-evm-models.mjs --network monad-testnet` runs all ten models' lifecycles side by side through the bot's own adapters: a fresh DAO per model, proposals voted (or confirmed, supported, challenged, traded) through to execution with a real treasury payment, plus delegate elections and recalls, a sortition draw, a challenged optimistic vote, a Sowellian adjudication and a decision-market finalization. It uses the bot's `.env` (operator key, factory addresses, `SORTITION_RANDOMNESS_SOURCE`), creates its DAOs with fast timings whatever the bot's own setting, and writes a report of every failed step and its revert to `data/evm-tests/`. About 20 minutes; `--models board,conviction` runs a subset. Throwaway member wallets get their leftover gas swept back to the operator.
+`node scripts/test-evm-models.mjs --network monad-testnet` runs all ten models' lifecycles side by side through the bot's own adapters: a fresh DAO per model, proposals voted (or confirmed, supported, challenged, traded) through to execution with a real treasury payment, plus delegate elections and recalls, a sortition draw, a challenged optimistic vote, a Sowellian adjudication, a Sowellian proposal resolved by a live Pyth price (`sowellianOracle`: the ETH/USD feed looked up on Hermes, a signed update posted, read through `PYTH_PRICE_ADAPTER`) and a decision-market finalization. It uses the bot's `.env` (operator key, factory addresses, `SORTITION_RANDOMNESS_SOURCE`, `PYTH_PRICE_ADAPTER`, and `PYTH_API_KEY` if your Hermes needs one), creates its DAOs with fast timings whatever the bot's own setting, and writes a report of every failed step and its revert to `data/evm-tests/`. About 20 minutes; `--models board,conviction` runs a subset. Throwaway member wallets get their leftover gas swept back to the operator.
 
 To try it on a local chain first: start `anvil --chain-id 10143 --block-time 1`, build Spaces (`FOUNDRY_PROFILE=size-limited forge build`, plus `forge build test/PythAdapters.t.sol` for the stand-in Entropy), run `node scripts/deploy-local-evm.mjs > local.env`, and run the test with those variables, `BLOCK_TIME_MS=1000` and an anvil account as `OPERATOR_PRIVATE_KEY`.
 
@@ -345,7 +345,7 @@ To try it on a local chain first: start `anvil --chain-id 10143 --block-time 1`,
 
 - Real Discord and Slack workspaces
 - WhatsApp against WhatsApp's real servers (tested end to end with a stand-in socket, real commands and a real DAO on a local chain)
-- Pyth Entropy and Hermes price updates on a live chain (tested locally against the real Spaces contracts with Pyth's mocks and a stand-in Hermes)
+- Hermes price updates on a live chain (Pyth Entropy itself has run on Monad testnet: the sortition draw in the model test)
 
 ## Not built yet
 

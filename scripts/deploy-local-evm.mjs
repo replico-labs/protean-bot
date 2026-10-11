@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /**
- * Deploys all ten governance factories (plus WMON, a stand-in Pyth Entropy
- * and the Entropy randomness adapter) to a local anvil chain, from Spaces'
- * compiled artifacts, and prints the env lines the bot needs - so
- * scripts/test-evm-models.mjs can run against a throwaway chain first.
+ * Deploys all ten governance factories (plus WMON, a stand-in Pyth Entropy,
+ * the Entropy randomness adapter, and MockPyth under the price adapter) to
+ * a local anvil chain, from Spaces' compiled artifacts, and prints the env
+ * lines the bot needs - so scripts/test-evm-models.mjs can run against a
+ * throwaway chain first.
  *
  *   anvil --chain-id 10143 --block-time 1
  *   (cd ../Spaces && FOUNDRY_PROFILE=size-limited forge build && forge build test/PythAdapters.t.sol)
@@ -82,6 +83,13 @@ const wmon = await deploy("WMON");
 const entropy = await deploy("FeeEntropy", [], "PythAdapters.t.sol");
 env.SORTITION_RANDOMNESS_SOURCE = await deploy("PythEntropyRandomnessAdapter", [entropy, 200_000], "PythEntropyRandomnessAdapter.sol");
 env.LOCAL_FEE_ENTROPY = entropy;
+
+// Pyth's MockPyth (prices valid an hour, 1 wei per update) under the real
+// PythPriceFeedAdapter, for Sowellian's oracle track. A stand-in Hermes has
+// to serve its updates (PYTH_HERMES_URL); LOCAL_MOCK_PYTH encodes them.
+const mockPyth = await deploy("MockPyth", [3600, 1]);
+env.PYTH_PRICE_ADAPTER = await deploy("PythPriceFeedAdapter", [mockPyth], "PythPriceFeedAdapter.sol");
+env.LOCAL_MOCK_PYTH = mockPyth;
 
 console.log(`# Local chain ${chainId} at ${rpc}, deployed by ${account.address}`);
 console.log(`RPC_URL=${rpc}`);

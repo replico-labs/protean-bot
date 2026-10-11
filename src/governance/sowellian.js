@@ -334,6 +334,45 @@ export async function fetchPythUpdate(priceId) {
  * `oracleAddress`, paying Pyth's update fee from `client`'s wallet.
  * Returns null when the oracle isn't a PythPriceFeedAdapter (nothing to post).
  */
+const FEED_ID = /^(0x)?[0-9a-fA-F]{64}$/;
+
+/** "ETH/USD", "eth" (taken as ETH/USD), "BTC/USD" or a feed ID -> the feed ID, as 0x + 64 hex. */
+export function isFeedWord(word) {
+  return FEED_ID.test(String(word)) || /^[A-Za-z0-9.]{1,20}(\/[A-Za-z0-9.]{1,20})?$/.test(String(word));
+}
+
+/**
+ * A Pyth price feed ID from a pair name, looked up in Pyth's own feed list
+ * (Hermes GET /v2/price_feeds?query=<base>: [{ id, attributes }]) rather
+ * than a list kept here. A feed matches when one of its attributes is the
+ * pair ("ETH/USD") or ends with it ("Crypto.ETH/USD"); several matches
+ * (the same pair in two asset classes) are refused with what was found.
+ */
+export async function resolvePythFeed(word) {
+  const text = String(word).trim();
+  if (FEED_ID.test(text)) return text.startsWith("0x") ? text : `0x${text}`;
+  const pair = (text.includes("/") ? text : `${text}/USD`).toUpperCase();
+  const base = pair.split("/")[0];
+  const res = await fetch(`${hermesUrl()}/v2/price_feeds?query=${encodeURIComponent(base)}`, { headers: hermesHeaders() });
+  if (!res.ok) throw new Error(`Pyth's Hermes service answered ${res.status} when looking up the ${pair} feed${res.status === 401 ? " - set PYTH_API_KEY" : ""}.`);
+  const feeds = await res.json();
+  const names = (f) => Object.values(f.attributes ?? {}).map((v) => String(v).toUpperCase());
+  const matching = (Array.isArray(feeds) ? feeds : []).filter((f) => names(f).some((v) => v === pair || v.endsWith(`.${pair}`)));
+  const ids = [...new Set(matching.map((f) => (f.id.startsWith("0x") ? f.id : `0x${f.id}`).toLowerCase()))];
+  if (ids.length === 0) {
+    const err = new Error(`Pyth has no ${pair} price feed. Check the pair, or pass the feed ID (0x + 64 hex) from Pyth's price feed list.`);
+    err.userFacing = true;
+    throw err;
+  }
+  if (ids.length > 1) {
+    const listed = matching.map((f) => `${f.attributes?.symbol ?? pair}: 0x${f.id.replace(/^0x/, "")}`).join("; ");
+    const err = new Error(`More than one Pyth feed is called ${pair} - pass the feed ID instead: ${listed}`);
+    err.userFacing = true;
+    throw err;
+  }
+  return ids[0];
+}
+
 export async function postPythPrice(client, oracleAddress, priceId) {
   if (!oracleAddress || getAddress(oracleAddress) === "0x0000000000000000000000000000000000000000") return null;
   const pyth = await publicClient.readContract({ address: getAddress(oracleAddress), abi: PYTH_ADAPTER_ABI, functionName: "pyth" }).catch(() => null);

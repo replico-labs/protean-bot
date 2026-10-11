@@ -8,7 +8,9 @@
  *   node scripts/test-evm-models.mjs --network base-sepolia --models board,conviction
  *
  * Uses the bot's .env: OPERATOR_PRIVATE_KEY, the network's RPC and factory
- * addresses (and SORTITION_RANDOMNESS_SOURCE for sortition). Each model
+ * addresses (and SORTITION_RANDOMNESS_SOURCE for sortition, PYTH_PRICE_ADAPTER
+ * and Hermes - PYTH_API_KEY - for sowellianOracle, a Sowellian proposal
+ * resolved by a live Pyth price; TEST_PYTH_FEED picks another pair). Each model
  * gets a fresh DAO created with fast timings (~2 minute votes, 1 minute
  * timelocks, 10 minute council terms - networks.js creationConfig), and
  * three throwaway member wallets the operator funds with gas and tokens,
@@ -36,7 +38,9 @@ const arg = (name) => {
   const i = process.argv.indexOf(`--${name}`);
   return i > 0 ? process.argv[i + 1] : undefined;
 };
-const ALL_MODELS = ["tokenWeighted", "quadratic", "liquid", "optimistic", "board", "delegate", "sortition", "conviction", "sowellian", "decisionMarkets"];
+const ALL_MODELS = ["tokenWeighted", "quadratic", "liquid", "optimistic", "board", "delegate", "sortition", "conviction", "sowellian", "sowellianOracle", "decisionMarkets"];
+// Flows that test another model's factory: sowellianOracle is a Sowellian DAO resolved by a Pyth price.
+const FACTORY_OF = { sowellianOracle: "sowellian" };
 
 const networkArg = arg("network");
 if (!networkArg) {
@@ -65,7 +69,7 @@ const viem = await import("viem");
 const { getAddress, parseEther, formatEther, encodeFunctionData, parseAbi, zeroAddress, zeroHash } = viem;
 const { generatePrivateKey, privateKeyToAccount } = await import("viem/accounts");
 const { runOnNetwork, getNetwork, currentNetwork } = await import("../src/networks.js");
-const { publicClient, walletClient, operatorAccount, writeWithGasBuffer, FACTORY_ADDRESSES, FACTORY_ENV_NAMES, sortitionRandomnessSource } = await import("../src/config.js");
+const { publicClient, walletClient, operatorAccount, writeWithGasBuffer, FACTORY_ADDRESSES, FACTORY_ENV_NAMES, sortitionRandomnessSource, pythPriceAdapter } = await import("../src/config.js");
 const { createDaoOnChain } = await import("../src/contracts.js");
 const common = await import("../src/governance/common.js");
 const { getAdapter } = await import("../src/governance/index.js");
@@ -560,6 +564,65 @@ async function sowellianFlow(run) {
   });
 }
 
+/**
+ * Sowellian on the oracle track: the outcome is read from a Pyth price -
+ * the feed looked up by name on Hermes, a signed price update fetched from
+ * Hermes and posted to Pyth, then read through this network's price
+ * adapter. "ETH/USD at least $1" so the outcome is known: success.
+ */
+async function sowellianOracleFlow(run) {
+  const adapter = getAdapter("sowellian");
+  const oracle = pythPriceAdapter();
+  if (!oracle) throw Object.assign(new Error(`${networkEnvName(networkId, "PYTH_PRICE_ADAPTER")} isn't set`), { setup: true });
+  const [A, B, C] = ["A", "B", "C"].map(member);
+  const recipient = member("R").address;
+  const ORACLE = 0, SUCCESS = 1, YES = 0, MEASUREMENT_SECONDS = 30;
+  const pair = process.env.TEST_PYTH_FEED || "ETH/USD";
+
+  const feed = await run.step(`look up the ${pair} feed on Hermes`, () => adapter.resolvePythFeed(pair));
+  run.log(`  feed ${feed}`);
+  const dao = (run.dao = await run.step("create DAO", () => adapter.createDAO(daoName("sowellianOracle"), "TST", SUPPLY, SUPPLY * 2)));
+  await fundAndStake(run, dao, [A, B, C]);
+  await fundTreasury(run, dao);
+
+  const { proposalId: id } = await run.step(`A proposes (resolved by ${pair} >= 1)`, () =>
+    adapter.proposeWithCriteria(A.client, dao.governance, payment(dao.treasury, recipient), `test: pay if ${pair} >= 1`, ORACLE, oracle, feed, parseEther("1"), true, MEASUREMENT_SECONDS)
+  );
+  let p = await adapter.getProposal(dao.governance, id);
+  await run.step("approval voting opens", () => waitForBlock(run, "approval voting to open", p.approvalStartBlock - 1n, 5));
+  for (const m of [A, B]) await run.step(`${m.label} approves`, () => adapter.castApprovalVote(m.client, dao.governance, id, 1));
+  await run.step("approval voting closes", () => waitForBlock(run, "approval voting to close", p.approvalEndBlock, 400));
+  await run.step("finalize approval (positions open)", () => adapter.finalizeApproval(A.client, dao.governance, id));
+  await run.step("A backs yes", () => adapter.takePosition(A.client, dao.governance, id, YES, 1000));
+  p = await adapter.getProposal(dao.governance, id);
+  await run.step("positions window closes", () => waitForTime(run, "the positions window to close", p.positionsDeadline + 1n));
+  const before = await nativeBalance(recipient);
+  await run.step("execute", () => adapter.execute(A.client, dao.governance, id));
+  await run.step("treasury paid the recipient", () => assertPaid(recipient, before));
+  p = await adapter.getProposal(dao.governance, id);
+  await run.step("measurement period ends", () => waitForTime(run, "the measurement period to end", p.measurementDeadline));
+  // Pyth's update fee is the caller's to pay (gas sponsorship covers gas only).
+  await run.step("send A Pyth's update fee", async () => {
+    const pyth = await publicClient.readContract({ address: oracle, abi: parseAbi(["function pyth() view returns (address)"]), functionName: "pyth" });
+    const { updates } = await adapter.fetchPythUpdate(feed);
+    const fee = await publicClient.readContract({ address: pyth, abi: parseAbi(["function getUpdateFee(bytes[]) view returns (uint256)"]), functionName: "getUpdateFee", args: [updates] });
+    run.log(`  update fee ${formatEther(fee)} ${network.nativeSymbol}`);
+    if (fee > 0n) await sendNative(A.address, fee * 2n);
+  });
+  await run.step("resolve from the Pyth price", async () => {
+    const { priceUpdate } = await adapter.resolveViaOracle(A.client, dao.governance, id);
+    run.log(`  ${pair} = ${priceUpdate?.price ?? "?"} (published ${priceUpdate?.publishTime ? new Date(priceUpdate.publishTime * 1000).toISOString() : "?"})`);
+    p = await adapter.getProposal(dao.governance, id);
+    if (Number(p.finalOutcome) !== SUCCESS) throw new Error(`Outcome is ${p.finalOutcome}, expected success (${pair} >= 1); phase ${p.phaseLabel}`);
+  });
+  await run.step("A claims the winning position", async () => {
+    const held = () => publicClient.readContract({ address: dao.governanceToken, abi: ERC20_ABI, functionName: "balanceOf", args: [A.address] });
+    const pre = await held();
+    await adapter.claimPosition(A.client, dao.governance, id);
+    if ((await held()) <= pre) throw new Error("A's balance didn't grow");
+  });
+}
+
 /** Decision markets: seed both markets, trade, finalize on TWAP, execute, reclaim. */
 async function decisionMarketsFlow(run) {
   const adapter = getAdapter("decisionMarkets");
@@ -607,6 +670,7 @@ const FLOWS = {
   sortition: sortitionFlow,
   conviction: convictionFlow,
   sowellian: sowellianFlow,
+  sowellianOracle: sowellianOracleFlow,
   decisionMarkets: decisionMarketsFlow,
 };
 
@@ -616,8 +680,9 @@ const FLOWS = {
 
 async function runModel(model) {
   const run = new Run(model);
-  if (!FACTORY_ADDRESSES[model]) {
-    run.skipped = `${networkEnvName(networkId, FACTORY_ENV_NAMES[model])} isn't set`;
+  const factoryModel = FACTORY_OF[model] ?? model;
+  if (!FACTORY_ADDRESSES[factoryModel]) {
+    run.skipped = `${networkEnvName(networkId, FACTORY_ENV_NAMES[factoryModel])} isn't set`;
     run.log(`- skipped: ${run.skipped}`);
     return run;
   }

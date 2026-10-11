@@ -506,7 +506,7 @@ const MODEL_HELP_BLOCKS = {
     "/cancel `<id>` — withdraw your own proposal before execution",
   ],
   sowellian: [
-    "/proposeaction `<actionId> <args...> [track=human|oracle] [feed=<Pyth feed ID>] [goal=<price>] [when=min|max] [measure=7d] <description>` — the easy way: the bot builds and checks the calls from the action library (see /listactions, /actioninfo) and adds your success condition",
+    "/proposeaction `<actionId> <args...> [track=human|oracle] [feed=ETH/USD] [goal=<price>] [when=min|max] [measure=7d] <description>` — the easy way: the bot builds and checks the calls from the action library (see /listactions, /actioninfo) and adds your success condition",
     "/proposecriteria `<target> <value> <data> <oracle|human> <pyth|adapter|-> <feedId|-> <targetValue> <min|max> <measurementPeriod> <description>` — advanced: propose a raw call with a fixed, upfront success condition — checked automatically by an oracle, or resolved by a human afterward",
     "/castapprovalvote `<id> for|against|abstain` — vote on whether this proposal is even worth opening up for betting",
     "/finalizeapproval `<id>` — close the approval vote and open the betting market if it passed",
