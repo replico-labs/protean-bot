@@ -336,37 +336,49 @@ export async function fetchPythUpdate(priceId) {
  */
 const FEED_ID = /^(0x)?[0-9a-fA-F]{64}$/;
 
-/** "ETH/USD", "eth" (taken as ETH/USD), "BTC/USD" or a feed ID -> the feed ID, as 0x + 64 hex. */
+/** "ETH/USD", "eth" (taken as ETH/USD), "FundingRate.Hyperliquid.ETH/USD" or a feed ID. */
 export function isFeedWord(word) {
-  return FEED_ID.test(String(word)) || /^[A-Za-z0-9.]{1,20}(\/[A-Za-z0-9.]{1,20})?$/.test(String(word));
+  return FEED_ID.test(String(word)) || /^[A-Za-z0-9._-]{1,60}(\/[A-Za-z0-9._-]{1,20})?$/.test(String(word));
 }
 
 /**
  * A Pyth price feed ID from a pair name, looked up in Pyth's own feed list
  * (Hermes GET /v2/price_feeds?query=<base>: [{ id, attributes }]) rather
- * than a list kept here. A feed matches when one of its attributes is the
- * pair ("ETH/USD") or ends with it ("Crypto.ETH/USD"); several matches
- * (the same pair in two asset classes) are refused with what was found.
+ * than a list kept here. A plain pair means the plain price feed: Pyth
+ * also names funding-rate feeds "ETH/USD" (FundingRate.Deribit.8h.ETH/USD),
+ * so among the feeds called that, the one whose symbol is a single asset
+ * class and the pair (Crypto.ETH/USD, FX.EUR/USD) wins. A full symbol
+ * ("FundingRate.Hyperliquid.ETH/USD") picks exactly that feed. Anything
+ * still ambiguous is refused with what was found.
  */
 export async function resolvePythFeed(word) {
   const text = String(word).trim();
   if (FEED_ID.test(text)) return text.startsWith("0x") ? text : `0x${text}`;
-  const pair = (text.includes("/") ? text : `${text}/USD`).toUpperCase();
+  const full = (text.includes("/") ? text : `${text}/USD`).toUpperCase();
+  // "FundingRate.Hyperliquid.ETH/USD": the class prefix is part of the name asked for.
+  const qualified = full.split("/")[0].includes(".");
+  const pair = qualified ? full.slice(full.lastIndexOf(".", full.indexOf("/")) + 1) : full;
   const base = pair.split("/")[0];
   const res = await fetch(`${hermesUrl()}/v2/price_feeds?query=${encodeURIComponent(base)}`, { headers: hermesHeaders() });
   if (!res.ok) throw new Error(`Pyth's Hermes service answered ${res.status} when looking up the ${pair} feed${res.status === 401 ? " - set PYTH_API_KEY" : ""}.`);
   const feeds = await res.json();
   const names = (f) => Object.values(f.attributes ?? {}).map((v) => String(v).toUpperCase());
-  const matching = (Array.isArray(feeds) ? feeds : []).filter((f) => names(f).some((v) => v === pair || v.endsWith(`.${pair}`)));
+  let matching = (Array.isArray(feeds) ? feeds : []).filter((f) => names(f).some((v) => v === pair || v.endsWith(`.${pair}`)));
+  if (qualified) matching = matching.filter((f) => names(f).includes(full));
+  else {
+    // One class word before the pair: "CRYPTO.ETH/USD", not "FUNDINGRATE.DERIBIT.8H.ETH/USD".
+    const plain = matching.filter((f) => names(f).some((v) => v.endsWith(`.${pair}`) && !v.slice(0, -pair.length - 1).includes(".")));
+    if (plain.length) matching = plain;
+  }
   const ids = [...new Set(matching.map((f) => (f.id.startsWith("0x") ? f.id : `0x${f.id}`).toLowerCase()))];
   if (ids.length === 0) {
-    const err = new Error(`Pyth has no ${pair} price feed. Check the pair, or pass the feed ID (0x + 64 hex) from Pyth's price feed list.`);
+    const err = new Error(`Pyth has no ${qualified ? full : pair} price feed. Check the name, or pass the feed ID (0x + 64 hex) from Pyth's price feed list.`);
     err.userFacing = true;
     throw err;
   }
   if (ids.length > 1) {
     const listed = matching.map((f) => `${f.attributes?.symbol ?? pair}: 0x${f.id.replace(/^0x/, "")}`).join("; ");
-    const err = new Error(`More than one Pyth feed is called ${pair} - pass the feed ID instead: ${listed}`);
+    const err = new Error(`More than one Pyth feed is called ${pair} - name one in full (e.g. feed=${matching[0].attributes?.symbol ?? pair}) or pass its ID: ${listed}`);
     err.userFacing = true;
     throw err;
   }

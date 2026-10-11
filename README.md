@@ -161,7 +161,7 @@ Bonds and seeds (Optimistic challenges, Sowellian bonds and positions, Decision 
 /proposeaction treasury-transfer-eth 0xRecipient 1 track=oracle feed=ETH/USD goal=3000 when=min measure=30d Grow TVL
 /proposeaction treasury-transfer-eth 0xRecipient 1 seed=1000 quote=5 Fund the campaign            (Decision Markets)
 ```
-- **Sowellian:** `track=human|oracle` (default human); on the oracle track `feed=<pair>` (e.g. `ETH/USD`, looked up in Pyth's feed list on Hermes; a raw feed ID works too) and `goal=<price>` (e.g. 3000, sent as 18 decimals) are required and `oracle=` defaults to `pyth`, this network's `PYTH_PRICE_ADAPTER`; `when=min|max` (default min), `measure=<duration>` (default 7d). `/actioninfo` lists them in a Sowellian chat.
+- **Sowellian:** `track=human|oracle` (default human); on the oracle track `feed=<pair>` (e.g. `ETH/USD`, looked up in Pyth's feed list on Hermes - a plain pair means the plain price feed, `Crypto.ETH/USD`; name another in full, e.g. `FundingRate.Hyperliquid.ETH/USD`, or pass a raw feed ID) and `goal=<price>` (e.g. 3000, sent as 18 decimals) are required and `oracle=` defaults to `pyth`, this network's `PYTH_PRICE_ADAPTER`; `when=min|max` (default min), `measure=<duration>` (default 7d). `/actioninfo` lists them in a Sowellian chat.
 - **Decision Markets:** `seed=<DAO tokens>` and `quote=<native>`, both required.
 - `/proposecriteria` and `/proposemarket` remain for raw calls the library doesn't cover.
 
