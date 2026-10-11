@@ -3,7 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { getAddress, parseEther } from "viem";
 import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer } from "../config.js";
-import { currentNetwork, networkEnvName } from "../networks.js";
+import { currentNetwork, networkEnvName, creationConfig } from "../networks.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -229,7 +229,7 @@ export async function createDAO(name, initialSigners) {
   }
 
   const requiredApprovals = Math.ceil((initialSigners.length + 1) / 2);
-  const config = { ...DEFAULT_CONFIG_WITHOUT_REQUIRED_APPROVALS, requiredApprovals };
+  const config = { ...creationConfig("board", DEFAULT_CONFIG_WITHOUT_REQUIRED_APPROVALS), requiredApprovals };
 
   const factory = { address: getAddress(factoryAddress), abi: factoryAbi };
 

@@ -152,6 +152,8 @@ export function getNetwork(id) {
     nativeSymbol: chain.nativeCurrency.symbol,
     explorerUrl: chain.blockExplorers?.default?.url ?? null,
     blockTimeMs,
+    // Short governance periods for new DAOs (see creationConfig). Testnets only.
+    fastTimings: networkEnv(canonical, "FAST_TIMINGS") === "true" && Boolean(chain.testnet),
     chargesFullGasLimit: Boolean(def.chargesFullGasLimit),
     maxContractSize: def.maxContractSize ?? null,
     smallBlockGasLimit: def.smallBlockGasLimit ?? null,
@@ -245,6 +247,69 @@ export function scaleBlockFields(model, config, network = currentNetwork()) {
     scaled[f] = typeof config[f] === "bigint" ? BigInt(blocks) : blocks;
   }
   return scaled;
+}
+
+/*//////////////////////////////////////////////////////////////
+                    FAST TIMINGS (TESTNETS ONLY)
+//////////////////////////////////////////////////////////////*/
+
+/**
+ * Periods for new DAOs when a testnet's FAST_TIMINGS is on (FAST_TIMINGS
+ * on Monad testnet, BASE_SEPOLIA_FAST_TIMINGS, HYPEREVM_TESTNET_FAST_TIMINGS):
+ * ~2 minute votes and challenge windows, 1 minute timelocks, 10 minute
+ * council terms - so a whole lifecycle, elections included, takes minutes
+ * instead of days. Block counts are for Monad's 400ms blocks, like the
+ * defaults, and get the same scaling. Ignored on mainnets. DAOs created
+ * while it's on keep these periods for good; turning it off only changes
+ * DAOs created after.
+ */
+const FAST_VOTE_BLOCKS = 300; // ~2 min at 400ms
+const FAST = {
+  tokenWeighted: { votingPeriod: FAST_VOTE_BLOCKS, timelockDelay: 60 },
+  quadratic: { votingPeriod: FAST_VOTE_BLOCKS, timelockDelay: 60 },
+  liquid: { votingPeriod: FAST_VOTE_BLOCKS, timelockDelay: 60 },
+  optimistic: { challengePeriod: FAST_VOTE_BLOCKS, votingPeriod: FAST_VOTE_BLOCKS, timelockDelay: 60 },
+  board: { timelockDelay: 60 },
+  sortition: { termLength: 600, votingPeriod: FAST_VOTE_BLOCKS, timelockDelay: 60 },
+  delegate: {
+    termLength: 600,
+    candidacyPeriod: FAST_VOTE_BLOCKS,
+    electionVotingPeriod: FAST_VOTE_BLOCKS,
+    votingPeriod: FAST_VOTE_BLOCKS,
+    recallVotingPeriod: FAST_VOTE_BLOCKS,
+    timelockDelay: 60,
+  },
+  // Conviction grows by a fixed amount per block: fast enough here that
+  // full support reaches the minimum bar in ~2 minutes on any chain.
+  conviction: {
+    timelockDelay: 60,
+    convictionGrowthRate: (c, network) => (BigInt(c.minThresholdConviction) * BigInt(network.blockTimeMs)) / BigInt(FAST_VOTE_BLOCKS * REFERENCE_BLOCK_TIME_MS),
+  },
+  sowellian: {
+    approvalVotingPeriod: FAST_VOTE_BLOCKS,
+    positionsWindow: 180,
+    executionTimelockDelay: 60,
+    challengePeriod: 120,
+    adjudicationVotingPeriod: FAST_VOTE_BLOCKS,
+  },
+  decisionMarkets: { tradingPeriod: 300, timelockDelay: 60 },
+};
+
+/**
+ * The config a new `model` DAO is created with: the model's defaults,
+ * with fast timings when the network has them on, scaled to the
+ * network's block time. Every createDAO goes through this.
+ */
+export function creationConfig(model, config, network = currentNetwork()) {
+  const fast = network.fastTimings ? FAST[model] : null;
+  if (!fast) return scaleBlockFields(model, config, network);
+  const merged = { ...config };
+  for (const [field, value] of Object.entries(fast)) {
+    if (!(field in config)) continue;
+    const v = typeof value === "function" ? value(config, network) : value;
+    merged[field] = typeof config[field] === "bigint" ? BigInt(v) : Number(v);
+  }
+  return scaleBlockFields(model, merged, network);
 }
 
 /** Human-readable length of `blocks` on the current network, e.g. "~5.6h". */

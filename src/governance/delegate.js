@@ -3,7 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { getAddress, parseEther } from "viem";
 import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer } from "../config.js";
-import { scaleBlockFields, currentNetwork, networkEnvName, blocksToDuration } from "../networks.js";
+import { creationConfig, currentNetwork, networkEnvName, blocksToDuration } from "../networks.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -410,23 +410,16 @@ export async function getCouncil(governanceAddress) {
 // from initialCouncil's length below, same reasoning as the Solidity
 // script: a separately-entered number could drift out of sync with the
 // actual list, so there's nothing to keep in sync by construction.
-// TEMPORARY FAST-TEST VALUES - revert each line to the value in its comment
-// before any real Delegate DAO is created. Only affects DAOs created after
-// this change (/createdao ... delegate); existing DAOs keep their config.
-// Block counts are for Monad (~0.4s); scaleBlockFields keeps ~5 min elsewhere.
+// For short test periods, turn on the network's FAST_TIMINGS instead of
+// editing these (networks.js creationConfig).
 const DEFAULT_CONFIG_WITHOUT_COUNCIL_SIZE = {
-  // termLength: 15n * 60n, // TEMP: 15 minutes. Was 60n * 60n (1 hour).
   termLength: 60n * 60n * 24n * 2n,
   candidacyThreshold: 0n,
-  // candidacyPeriod: 750, // TEMP: ~5 min. Was 50_400 (~5.6h).
   candidacyPeriod: 50_400,
-  // electionVotingPeriod: 750, // TEMP: ~5 min. Was 50_400 (~5.6h).
   electionVotingPeriod: 50_400,
   councilApprovalThresholdBps: 6_000,
   votingDelay: 1,
-  // votingPeriod: 750, // TEMP: ~5 min council votes. Was 50_400 (~5.6h).
   votingPeriod: 50_400,
-  // timelockDelay: 60n, // TEMP: 1 minute queue. Was 60n * 60n * 24n (24 hours).
   timelockDelay: 60n * 60n,
   executionPeriod: 60n * 60n * 24n * 7n,
   recallQuorumBps: 1_000,
@@ -455,7 +448,7 @@ export async function createDAO(name, symbol, initialSupplyWhole, maxSupplyWhole
 
   const councilSize = initialCouncil.length;
   const config = {
-    ...scaleBlockFields("delegate", DEFAULT_CONFIG_WITHOUT_COUNCIL_SIZE),
+    ...creationConfig("delegate", DEFAULT_CONFIG_WITHOUT_COUNCIL_SIZE),
     councilSize,
     councilQuorum: Math.ceil((councilSize + 1) / 2),
   };

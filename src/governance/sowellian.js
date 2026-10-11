@@ -3,7 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { formatUnits, getAddress, parseEther, zeroHash } from "viem";
 import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer } from "../config.js";
-import { scaleBlockFields, currentNetwork, networkEnvName, networkEnv } from "../networks.js";
+import { creationConfig, currentNetwork, networkEnvName, networkEnv } from "../networks.js";
 import { ensureAllowance } from "./common.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -459,7 +459,7 @@ export async function createDAO(name, symbol, initialSupplyWhole, maxSupplyWhole
   const hash = await writeWithGasBuffer(walletClient, {
     ...factory,
     functionName: "createDAO",
-    args: [name, symbol, parseEther(String(initialSupplyWhole)), parseEther(String(maxSupplyWhole)), scaleBlockFields("sowellian", DEFAULT_CONFIG)],
+    args: [name, symbol, parseEther(String(initialSupplyWhole)), parseEther(String(maxSupplyWhole)), creationConfig("sowellian", DEFAULT_CONFIG)],
   });
   await publicClient.waitForTransactionReceipt({ hash });
 

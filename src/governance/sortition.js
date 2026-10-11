@@ -3,7 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { getAddress, parseEther } from "viem";
 import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer } from "../config.js";
-import { scaleBlockFields, currentNetwork, networkEnvName } from "../networks.js";
+import { creationConfig, currentNetwork, networkEnvName } from "../networks.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -332,7 +332,7 @@ export async function createDAO(name, symbol, initialSupplyWhole, maxSupplyWhole
 
   const councilSize = initialCouncil.length;
   const config = {
-    ...scaleBlockFields("sortition", DEFAULT_CONFIG_WITHOUT_COUNCIL_SIZE),
+    ...creationConfig("sortition", DEFAULT_CONFIG_WITHOUT_COUNCIL_SIZE),
     councilSize,
     councilQuorum: Math.ceil((councilSize + 1) / 2),
   };

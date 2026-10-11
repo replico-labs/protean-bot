@@ -310,6 +310,14 @@ Pyth Entropy calls back by itself (usually within seconds), so randomness needs 
 
 Sowellian oracle proposals need no keeper: `/resolveviaoracle` posts Pyth's price and resolves in one go.
 
+### Testing every model at once
+
+`node scripts/test-evm-models.mjs --network monad-testnet` runs all ten models' lifecycles side by side through the bot's own adapters: a fresh DAO per model, proposals voted (or confirmed, supported, challenged, traded) through to execution with a real treasury payment, plus delegate elections and recalls, a sortition draw, a challenged optimistic vote, a Sowellian adjudication and a decision-market finalization. It uses the bot's `.env` (operator key, factory addresses, `SORTITION_RANDOMNESS_SOURCE`), creates its DAOs with fast timings whatever the bot's own setting, and writes a report of every failed step and its revert to `data/evm-tests/`. About 20 minutes; `--models board,conviction` runs a subset. Throwaway member wallets get their leftover gas swept back to the operator.
+
+To try it on a local chain first: start `anvil --chain-id 10143 --block-time 1`, build Spaces (`FOUNDRY_PROFILE=size-limited forge build`, plus `forge build test/PythAdapters.t.sol` for the stand-in Entropy), run `node scripts/deploy-local-evm.mjs > local.env`, and run the test with those variables, `BLOCK_TIME_MS=1000` and an anvil account as `OPERATOR_PRIVATE_KEY`.
+
+`<PREFIX>_FAST_TIMINGS=true` (`FAST_TIMINGS` on Monad testnet) gives the bot's own new DAOs the same short periods, for trying flows by hand. Testnets only.
+
 ## Security — read before deploying anywhere real
 
 - **Never paste private keys into chats, commands, or shell history.** Use `export PRIVATE_KEY=...` and reference `$PRIVATE_KEY`. Any key that has appeared in plaintext should be treated as burned.
