@@ -168,9 +168,11 @@ Bonds and seeds (Optimistic challenges, Sowellian bonds and positions, Decision 
 ### Proposal pages
 Every proposal gets a page on the website, `PROPOSAL_SITE_URL/p/<network>/<dao>/<id>`, with details its proposer writes there next to live on-chain data (state, votes or conviction, budget, timelock, actions).
 - **After proposing**, the group sees the page link and the proposer gets a private link to add the details: a Telegram DM (or, if the bot can't message them first, a `t.me/<bot>?start=…` link that opens one), a message only they can see on Discord and Slack, or a WhatsApp DM.
-- **Submitted once, never changed.** The proposer submits the details a single time, before anyone votes or backs the proposal and within 72 hours, so what people back is what they read. The page shows the details' fingerprint (sha256).
+- **Submitted once, never changed**, so what people back is what they read; the page shows the details' fingerprint (sha256). The proposer has a grace period after proposing (`PROPOSAL_DETAILS_GRACE_HOURS`, default 6) to submit them even if voting has started; after that, only while nobody has voted or backed the proposal, up to 72 hours.
 - **`/proposal <id>`** ends with the page link. Run by the proposer before they've submitted, it also re-sends their link privately.
 - **How it's served:** the website is static; it reads `GET /api/proposals/<network>/<dao>/<id>` from the bot and the form `POST`s back. The routes share the Slack install page's HTTP server when "Add to Slack" is set up, otherwise the Telegram process listens on `PORT`. Only DAOs registered with the bot are served; CORS allows only `PROPOSAL_SITE_URL`. Edit links are HMAC-signed with `PROPOSAL_LINK_SECRET` and expire with the edit window.
+- **Solana DAOs** get the same pages at `/p/solana-devnet/<governance account>/<id>`: the governance account, not the DAO, so pages stay right after a model switch (the new governance numbers its proposals from 1 again). Live data comes straight from the Vortexes programs; instructions are described in words, addresses link to Solana's explorer.
+- **Board DAOs:** proposing counts as the proposer's own confirmation, so details stay open until a second signer confirms.
 - **Setup:** run the `proposal_details` part of `supabase/schema.sql`, then set `PROPOSAL_SITE_URL` and `PROPOSAL_LINK_SECRET` (a long random string). Without them the bot behaves as before.
 
 ### Conviction spending budgets

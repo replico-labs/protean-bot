@@ -5,6 +5,7 @@ import { getAllRegisteredDaos } from "./db.js";
 import { getAdapter } from "./governance/index.js";
 import { PROPOSAL_STATE_LABELS } from "./governance/common.js";
 import { getNetwork, resolveNetworkId, runOnNetwork, NETWORK_IDS } from "./networks.js";
+import { SOLANA_NETWORK_IDS, resolveSolanaNetwork } from "./solana/config.js";
 
 /**
  * Proposal pages: every proposal gets a page on the website
@@ -17,14 +18,30 @@ import { getNetwork, resolveNetworkId, runOnNetwork, NETWORK_IDS } from "./netwo
  * and POSTs the form back. Only the proposer can write: right after
  * proposing, the bot sends them privately an edit link carrying a token
  * signed with PROPOSAL_LINK_SECRET. The details are submitted ONCE and never
- * change afterwards, and only before anyone has voted or backed the
- * proposal, within EDIT_WINDOW_HOURS - so what people back is what they
- * read. Until then, /proposal re-sends the proposer their link.
+ * change afterwards - so what people back is what they read. The proposer
+ * has a grace period after proposing (PROPOSAL_DETAILS_GRACE_HOURS,
+ * default 6) to submit them even if people have already voted; after
+ * that, only while nobody has voted or backed it, up to EDIT_WINDOW_HOURS.
+ * Until then, /proposal re-sends the proposer their link.
  *
  * Details live in Supabase (proposal_details, see supabase/schema.sql).
+ *
+ * Solana DAOs get the same pages, addressed by their governance account
+ * (src/solana/pages.js reads them). Solana addresses are case-sensitive,
+ * so they're stored as given; EVM ones are stored lowercase.
  */
 
 const EDIT_WINDOW_HOURS = 72;
+
+/** Hours after proposing in which details can be added whether or not anyone has voted yet. */
+function graceHours() {
+  const h = Number(process.env.PROPOSAL_DETAILS_GRACE_HOURS ?? 6);
+  return Number.isFinite(h) && h >= 0 ? Math.min(h, EDIT_WINDOW_HOURS) : 6;
+}
+
+/** The details rule in words, for messages. */
+const windowText = () =>
+  `Do it within ${graceHours()} hours, or later as long as nobody has voted on or backed it yet (up to ${EDIT_WINDOW_HOURS} hours).`;
 const LIMITS = { title: 140, summary: 600, body: 20_000, links: 10, link: 500 };
 
 export function proposalPagesConfigured() {
@@ -35,10 +52,23 @@ function siteUrl() {
   return (process.env.PROPOSAL_SITE_URL || "").replace(/\/+$/, "");
 }
 
+export const isSolanaNetwork = (network) => SOLANA_NETWORK_IDS.includes(network);
+
+/** A network word from a URL: an EVM network or (when Solana is on) a Solana one. */
+const resolveAnyNetwork = (raw) => resolveNetworkId(raw) ?? resolveSolanaNetwork(raw);
+
+/** The DAO address as stored and signed: lowercase on EVM, as-is (base58) on Solana. */
+const daoKey = (network, dao) => (isSolanaNetwork(network) ? String(dao) : dao.toLowerCase());
+
+/** The DAO address as shown in links: checksummed on EVM, as-is on Solana. */
+const daoForUrl = (network, dao) => (isSolanaNetwork(network) ? String(dao) : getAddress(dao));
+
+const sameAccount = (network, a, b) => (isSolanaNetwork(network) ? String(a) === String(b) : getAddress(a) === getAddress(b));
+
 /** The public page for a proposal, or null when pages aren't set up. */
 export function proposalPageUrl(network, dao, proposalId) {
   if (!proposalPagesConfigured()) return null;
-  return `${siteUrl()}/p/${network}/${getAddress(dao)}/${proposalId}`;
+  return `${siteUrl()}/p/${network}/${daoForUrl(network, dao)}/${proposalId}`;
 }
 
 /*//////////////////////////////////////////////////////////////
@@ -54,7 +84,7 @@ function sign(payload) {
 /** A token letting its holder edit one proposal's details until it expires. */
 export function editToken({ network, dao, proposalId, platform, userId }) {
   const payload = b64url(
-    JSON.stringify({ n: network, d: getAddress(dao).toLowerCase(), i: String(proposalId), p: platform, u: String(userId), e: Date.now() + EDIT_WINDOW_HOURS * 3_600_000 })
+    JSON.stringify({ n: network, d: daoKey(network, isSolanaNetwork(network) ? dao : getAddress(dao)), i: String(proposalId), p: platform, u: String(userId), e: Date.now() + EDIT_WINDOW_HOURS * 3_600_000 })
   );
   return `${payload}.${sign(payload)}`;
 }
@@ -72,7 +102,7 @@ export function verifyEditToken(token, { network, dao, proposalId }) {
   } catch {
     return null;
   }
-  if (claims.n !== network || claims.d !== dao.toLowerCase() || claims.i !== String(proposalId)) return null;
+  if (claims.n !== network || claims.d !== daoKey(network, dao) || claims.i !== String(proposalId)) return null;
   if (!(claims.e > Date.now())) return null;
   return claims;
 }
@@ -90,7 +120,7 @@ export function proposalEditUrl(args) {
 let supabase = null;
 const db = () => (supabase ??= createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY));
 
-const key = (network, dao, proposalId) => ({ network, dao: dao.toLowerCase(), proposal_id: String(proposalId) });
+const key = (network, dao, proposalId) => ({ network, dao: daoKey(network, dao), proposal_id: String(proposalId) });
 
 /** Records a new proposal so its page exists (details still empty). */
 export async function recordProposal({ network, dao, proposalId, model, platform }) {
@@ -145,7 +175,7 @@ export function cleanDetails(input) {
 
 const editMessage = (proposalId, edit, page, cmd) =>
   `📝 Add the details for proposal #${proposalId} - a title, summary and links - here (only you have this link):\n${edit}\n\n` +
-  `You submit them once; they can't be changed afterwards. Do it before anyone votes or backs it, and within ${EDIT_WINDOW_HOURS} hours. ` +
+  `You submit them once; they can't be changed afterwards. ${windowText()} ` +
   `Everyone sees them at ${page} and through ${cmd("proposal")} ${proposalId}. Lost this link? ${cmd("proposal")} ${proposalId} sends it again.`;
 
 /**
@@ -176,7 +206,7 @@ export async function proposalCreated({ network, dao, model, proposalId, platfor
 export async function pendingSubmitLink({ network, dao, model, proposalId, platform, userId, walletAddress, cmd }) {
   if (!proposalPagesConfigured() || !walletAddress) return null;
   const live = await liveProposal(network, dao, model, proposalId);
-  if (!live.proposer || getAddress(live.proposer) !== getAddress(walletAddress)) return null;
+  if (!live?.proposer || !sameAccount(network, live.proposer, walletAddress)) return null;
   await recordProposal({ network, dao, proposalId, model, platform });
   const row = await readDetails(network, dao, proposalId);
   if (!submittable(row, live)) return null;
@@ -184,33 +214,51 @@ export async function pendingSubmitLink({ network, dao, model, proposalId, platf
   return editMessage(proposalId, proposalEditUrl({ network, dao, proposalId, platform, userId }), page, cmd);
 }
 
-/** Telegram /start payload naming one proposal (deep links allow 64 chars of [A-Za-z0-9_-]). */
+/**
+ * Telegram /start payload naming one proposal (deep links allow 64 chars
+ * of [A-Za-z0-9_-]): pp_ for EVM, ps_ for Solana (base58 fits as is).
+ */
 export function proposalStartPayload(network, dao, proposalId) {
+  if (isSolanaNetwork(network)) return `ps_${SOLANA_NETWORK_IDS.indexOf(network)}_${dao}_${proposalId}`;
   return `pp_${NETWORK_IDS.indexOf(network)}_${getAddress(dao).slice(2).toLowerCase()}_${proposalId}`;
 }
 
 export function parseProposalStartPayload(payload) {
-  const m = /^pp_(\d+)_([0-9a-f]{40})_(\d+)$/.exec(String(payload ?? ""));
+  const text = String(payload ?? "");
+  const sol = /^ps_(\d+)_([1-9A-HJ-NP-Za-km-z]{32,44})_(\d+)$/.exec(text);
+  if (sol) return SOLANA_NETWORK_IDS[Number(sol[1])] ? { network: SOLANA_NETWORK_IDS[Number(sol[1])], dao: sol[2], proposalId: sol[3] } : null;
+  const m = /^pp_(\d+)_([0-9a-f]{40})_(\d+)$/.exec(text);
   if (!m || !NETWORK_IDS[Number(m[1])]) return null;
   return { network: NETWORK_IDS[Number(m[1])], dao: getAddress(`0x${m[2]}`), proposalId: m[3] };
 }
 
 /** The DAO's model, if this bot knows the DAO. */
-export function knownDaoModel(network, dao) {
-  return findDao(network, dao)?.model ?? null;
+export async function knownDaoModel(network, dao) {
+  return (await findDao(network, dao))?.model ?? null;
 }
 
 /*//////////////////////////////////////////////////////////////
                             LIVE DATA
 //////////////////////////////////////////////////////////////*/
 
-/** The registered DAO at this address on this network, if the bot knows it. */
-function findDao(network, dao) {
+/** The registered DAO at this address on this network, if the bot knows it: { governanceAddress, model }. */
+async function findDao(network, dao) {
+  if (isSolanaNetwork(network)) {
+    const { findSolanaGovernance } = await import("./solana/pages.js");
+    const found = await findSolanaGovernance(network, dao);
+    return found ? { governanceAddress: found.governance.toBase58(), model: found.model } : null;
+  }
   return getAllRegisteredDaos().find((d) => d.network === network && d.governanceAddress.toLowerCase() === dao.toLowerCase()) ?? null;
 }
 
-/** Everything /proposal shows, as data the page can render. */
+const validDao = (network, dao) => (isSolanaNetwork(network) ? /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(dao)) : isAddress(dao));
+
+/** Everything /proposal shows, as data the page can render (null if there's no such proposal). */
 async function liveProposal(network, dao, model, proposalId) {
+  if (isSolanaNetwork(network)) {
+    const { solanaLiveProposal } = await import("./solana/pages.js");
+    return solanaLiveProposal(network, dao, proposalId);
+  }
   const p = await runOnNetwork(network, () => getAdapter(model).getProposal(dao, BigInt(proposalId)));
   const fmt = (v) => formatEther(v);
   const facts = [];
@@ -227,7 +275,8 @@ async function liveProposal(network, dao, model, proposalId) {
     started = p.currentConviction > 0n || p.conviction > 0n;
   } else if ("confirmations" in p) {
     facts.push({ label: "Confirmations", value: String(p.confirmations) });
-    started = BigInt(p.confirmations) > 0n;
+    // Proposing counts as the proposer's own confirmation.
+    started = BigInt(p.confirmations) > 1n;
   } else if ("passTWAP" in p) {
     facts.push({ label: "Pass TWAP", value: String(p.passTWAP) }, { label: "Fail TWAP", value: String(p.failTWAP) });
   } else if ("approvalForVotes" in p) {
@@ -261,18 +310,26 @@ async function liveProposal(network, dao, model, proposalId) {
   };
 }
 
-/** Details can be submitted once: not yet submitted, nobody has voted or backed it, inside the window. */
+/**
+ * Details can be submitted once: not yet submitted, and either still in
+ * the grace period after proposing, or nobody has voted or backed it yet
+ * (up to EDIT_WINDOW_HOURS).
+ */
 function submittable(row, live) {
   if (!row || row.title) return false;
-  if (live.started) return false;
-  return Date.now() - new Date(row.created_at).getTime() < EDIT_WINDOW_HOURS * 3_600_000;
+  const age = Date.now() - new Date(row.created_at).getTime();
+  if (age >= EDIT_WINDOW_HOURS * 3_600_000) return false;
+  return age < graceHours() * 3_600_000 || !live.started;
 }
+
+/** The window the website explains on the form. */
+const detailsWindow = () => ({ graceHours: graceHours(), windowHours: EDIT_WINDOW_HOURS });
 
 /** GET: details + live data for one proposal. */
 export async function getProposalPage(networkRaw, daoRaw, idRaw) {
-  const network = resolveNetworkId(networkRaw);
-  if (!network || !isAddress(daoRaw) || !/^\d+$/.test(String(idRaw))) return { status: 400, body: { error: "Bad proposal address." } };
-  const reg = findDao(network, daoRaw);
+  const network = resolveAnyNetwork(networkRaw);
+  if (!network || !validDao(network, daoRaw) || !/^\d+$/.test(String(idRaw))) return { status: 400, body: { error: "Bad proposal address." } };
+  const reg = await findDao(network, daoRaw);
   if (!reg) return { status: 404, body: { error: "This bot doesn't know that DAO." } };
   let live;
   try {
@@ -280,27 +337,29 @@ export async function getProposalPage(networkRaw, daoRaw, idRaw) {
   } catch (err) {
     return { status: 404, body: { error: `Couldn't read proposal #${idRaw}: ${err.shortMessage || err.message}` } };
   }
+  if (!live) return { status: 404, body: { error: `There's no proposal #${idRaw}.` } };
   const row = await readDetails(network, reg.governanceAddress, idRaw);
   const details = row?.title
     ? { title: row.title, summary: row.summary, body: row.body, links: row.links ?? [], updatedAt: row.updated_at, contentHash: row.content_hash }
     : null;
-  return { status: 200, body: { live, details, submittable: submittable(row, live) } };
+  return { status: 200, body: { live, details, submittable: submittable(row, live), detailsWindow: detailsWindow() } };
 }
 
 /** POST: the proposer saves the form. */
 export async function saveProposalPage(networkRaw, daoRaw, idRaw, input) {
-  const network = resolveNetworkId(networkRaw);
-  if (!network || !isAddress(daoRaw) || !/^\d+$/.test(String(idRaw))) return { status: 400, body: { error: "Bad proposal address." } };
-  const reg = findDao(network, daoRaw);
+  const network = resolveAnyNetwork(networkRaw);
+  if (!network || !validDao(network, daoRaw) || !/^\d+$/.test(String(idRaw))) return { status: 400, body: { error: "Bad proposal address." } };
+  const reg = await findDao(network, daoRaw);
   if (!reg) return { status: 404, body: { error: "This bot doesn't know that DAO." } };
   if (!verifyEditToken(input?.token, { network, dao: reg.governanceAddress, proposalId: idRaw })) {
     return { status: 403, body: { error: "This edit link isn't valid or has expired." } };
   }
   const row = await readDetails(network, reg.governanceAddress, idRaw);
   const live = await liveProposal(network, reg.governanceAddress, reg.model, idRaw);
+  if (!live) return { status: 404, body: { error: `There's no proposal #${idRaw}.` } };
   if (row?.title) return { status: 409, body: { error: "The details were already submitted - they can't be changed." } };
   if (!submittable(row, live)) {
-    return { status: 409, body: { error: "It's too late to add details: people have started voting or backing this proposal, or the 72-hour window has closed." } };
+    return { status: 409, body: { error: `It's too late to add details: the first ${graceHours()} hours are over and people have started voting on or backing this proposal, or the ${EDIT_WINDOW_HOURS}-hour window has closed.` } };
   }
   let details;
   try {

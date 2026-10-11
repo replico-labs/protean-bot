@@ -83,7 +83,8 @@ import { integrationListLines, actionInfoText } from "./integrations/describe.js
 import { actionAppliesTo, actionArgSpec, buildActionProposal, buildIntegrationProposal, computeHandoverProposals } from "./proposalBuilder.js";
 import { startEventListener } from "./eventListener.js";
 import { whatsappLinkConfigured, whatsappLinkRoutes } from "./platforms/whatsappLink.js";
-import { proposalPagesConfigured, startProposalApi, proposalPageUrl, proposalCreated, pendingSubmitLink, proposalStartPayload, parseProposalStartPayload, knownDaoModel } from "./proposalPages.js";
+import { proposalPagesConfigured, startProposalApi, proposalPageUrl, proposalCreated, pendingSubmitLink, proposalStartPayload, parseProposalStartPayload, knownDaoModel, isSolanaNetwork } from "./proposalPages.js";
+import { getSolanaAddress } from "./solana/wallets.js";
 import { back as opportunityBack } from "./opportunityMarket/encryptedBet.js";
 import { formatMarketAnalytics } from "./opportunityMarket/analyticsText.js";
 import { getBalance as opportunityGetBalance, getBet as opportunityGetBet, getAllBets as opportunityGetAllBets, getMarketAnalytics as opportunityGetAnalytics } from "./opportunityMarket/decrypt.js";
@@ -186,6 +187,14 @@ bot.on("message:text", async (ctx, next) => {
   } catch {
     // Text from members (a proposal's description) can break Markdown - send it plain.
     await ctx.reply(result.text, { link_preview_options: { is_disabled: true } });
+  }
+  // A proposer's link for adding the proposal's details: privately, or a
+  // t.me link that opens a private chat when the bot can't message them first.
+  if (result.privateFollowUp) {
+    const delivered = await ctx.api.sendMessage(ctx.from.id, result.privateFollowUp, { link_preview_options: { is_disabled: true } }).then(() => true, () => false);
+    if (!delivered && ctx.chat.type !== "private" && result.startPayload) {
+      await ctx.reply(`Proposer: open https://t.me/${ctx.me.username}?start=${result.startPayload} to get your private link for adding the details.`, { link_preview_options: { is_disabled: true } }).catch(() => {});
+    }
   }
 });
 
@@ -352,14 +361,15 @@ async function walletAddressOf(userId) {
  * be submitted.
  */
 async function sendEditLink(ctx, network, dao, proposalId) {
-  const model = knownDaoModel(network, dao);
-  if (!model) {
-    await ctx.reply("I don't know that DAO any more.");
-    return;
-  }
   try {
-    const text = await pendingSubmitLink({ network, dao, model, proposalId, platform: "telegram", userId: ctx.from.id, walletAddress: await walletAddressOf(ctx.from.id), cmd: TG_CMD });
-    await ctx.reply(text ?? `Nothing to send: only the proposer can add details to #${proposalId}, once, before anyone votes or backs it.`, { link_preview_options: { is_disabled: true } });
+    const model = await knownDaoModel(network, dao);
+    if (!model) {
+      await ctx.reply("I don't know that DAO any more.");
+      return;
+    }
+    const walletAddress = isSolanaNetwork(network) ? await getSolanaAddress(ctx.from.id, "telegram").catch(() => null) : await walletAddressOf(ctx.from.id);
+    const text = await pendingSubmitLink({ network, dao, model, proposalId, platform: "telegram", userId: ctx.from.id, walletAddress, cmd: TG_CMD });
+    await ctx.reply(text ?? `Nothing to send: only the proposer can add details to #${proposalId}, once, and the window for that has closed or they're already in.`, { link_preview_options: { is_disabled: true } });
   } catch (err) {
     await ctx.reply(err.shortMessage || err.message);
   }

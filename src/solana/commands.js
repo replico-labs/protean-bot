@@ -5,6 +5,7 @@ import { SOLANA_ENABLED, SOLANA_MODELS, getSolanaNetwork, resolveSolanaNetwork, 
 import { getOrCreateSolanaKeypair, getSolanaAddress, ensureSolFunded } from "./wallets.js";
 import { ACTIONS, MODEL_WORDS, actionApplies, listActionsText, actionInfoText } from "./actions.js";
 import * as v from "./vortex.js";
+import { proposalCreated, proposalPageUrl, pendingSubmitLink, proposalStartPayload } from "../proposalPages.js";
 
 /**
  * Commands for chats linked to a Solana (Vortexes) DAO, shared by every
@@ -92,7 +93,7 @@ function parseChoice(text, usage) {
 const TOKEN_PROGRAMS = [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID];
 
 /** What one stored instruction does, in words; null for plumbing (token-account creation, conviction's budget steps). */
-function describeInstruction(network, ix) {
+export function describeInstruction(network, ix) {
   const data = Buffer.from(ix.data);
   if (ix.programId.equals(SystemProgram.programId) && data.length >= 12 && data.readUInt32LE(0) === 2) {
     return `pay ${sol(data.readBigUInt64LE(4))} to \`${ix.accounts[1].pubkey.toBase58()}\``;
@@ -258,6 +259,19 @@ async function nextStep(ctx, c, id) {
     default:
       return `Vote with \`${ctx.cmd("vote")} ${id} for|against|abstain\` (votes last ${duration(g.config.votingPeriod)}).`;
   }
+}
+
+/**
+ * The reply after a proposal is made: the public message with its page
+ * link, and the proposer's private link for adding the details (when
+ * proposal pages are set up). `startPayload` lets Telegram hand the link
+ * over in a private chat when it can't message the proposer first.
+ */
+async function proposalMade(ctx, c, id, text) {
+  const args = { network: c.link.network, dao: c.d.governance.toBase58(), model: c.model, proposalId: id };
+  const page = await proposalCreated({ ...args, platform: ctx.platform, userId: ctx.userId, cmd: ctx.cmd });
+  if (!page) return reply(text);
+  return { text: `${text}\n\n📄 ${page.page} - the proposer is adding the details there.`, privateFollowUp: page.editText, startPayload: proposalStartPayload(args.network, args.dao, id) };
 }
 
 /** The DAO's rules in words. */
@@ -503,7 +517,7 @@ const COMMANDS = {
       if (model === "delegate") requireCouncil(governance, kp);
       if (model === "board") requireSigner(governance, kp);
       const { id } = await v.propose(network, kp, d, model, instructions, description, { budget });
-      return reply(`✅ Proposal *#${id}*: pay ${label} to \`${short(recipient)}\`\n_${description}_\n\n${await nextStep(ctx, c, id)}`);
+      return proposalMade(ctx, c, id, `✅ Proposal *#${id}*: pay ${label} to \`${short(recipient)}\`\n_${description}_\n\n${await nextStep(ctx, c, id)}`);
     },
   },
 
@@ -530,7 +544,7 @@ const COMMANDS = {
     description: "One proposal's details and state",
     async run(ctx) {
       const id = parseId(ctx.args[0], `${ctx.cmd("proposal")} <id>`);
-      const { network, d, model, governance: g, tok } = await loadDao(ctx);
+      const { link, network, d, model, governance: g, tok } = await loadDao(ctx);
       const p = await v.readProposal(network, model, d.proposal(id));
       if (!p) fail(`There's no proposal #${id}.`);
       const now = await v.clusterNow(network);
@@ -589,7 +603,13 @@ const COMMANDS = {
         const at = num(p.queuedAt) + g.config.timelock;
         lines.push(at > now ? `Can run in ${duration(at - now)}: \`${ctx.cmd("execute")} ${id}\`` : `Ready to run: \`${ctx.cmd("execute")} ${id}\``);
       }
-      return reply(lines.join("\n"));
+      const page = proposalPageUrl(link.network, d.governance.toBase58(), id);
+      if (!page) return reply(lines.join("\n"));
+      lines.push("", `📄 Details and live status: ${page}`);
+      // The proposer, before submitting details: their link again, privately.
+      const args = { network: link.network, dao: d.governance.toBase58(), model, proposalId: id };
+      const submit = await pendingSubmitLink({ ...args, platform: ctx.platform, userId: ctx.userId, walletAddress: await getSolanaAddress(ctx.userId, ctx.platform).catch(() => null), cmd: ctx.cmd }).catch(() => null);
+      return submit ? { text: lines.join("\n"), privateFollowUp: submit, startPayload: proposalStartPayload(args.network, args.dao, id) } : reply(lines.join("\n"));
     },
   },
 
@@ -984,7 +1004,7 @@ const COMMANDS = {
       if (c.model === "delegate") requireCouncil(c.governance, kp);
       if (c.model === "board") requireSigner(c.governance, kp);
       const { id } = await v.propose(c.network, kp, c.d, c.model, built.instructions, description, { budget: built.budget ?? [] });
-      return reply(`✅ Proposal *#${id}*: ${built.summary}\n_${description}_\n\n${await nextStep(ctx, c, id)}`);
+      return proposalMade(ctx, c, id, `✅ Proposal *#${id}*: ${built.summary}\n_${description}_\n\n${await nextStep(ctx, c, id)}`);
     },
   },
 
