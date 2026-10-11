@@ -17,6 +17,15 @@ import { fitGasLimit } from "./gasLimit.js";
  * worst-case cost, read fresh from the chain right before it is signed,
  * and the fees used for that check are the ones the transaction is sent
  * with.
+ *
+ * Monad also executes 3 blocks behind consensus. Before including a
+ * transaction it checks the wallet can cover the most every one of its
+ * transactions from the last 3 blocks could cost (value + gas limit x max
+ * fee), not just the new one - so an approve followed at once by the call
+ * it approves is refused ("Signer had insufficient balance") unless the
+ * balance covers both. And a top-up isn't counted until it's 3 blocks old.
+ * So on Monad the bot remembers what each wallet just sent (recordSent)
+ * and counts it in, and lets a top-up settle before going on.
  */
 
 const VISIBLE_POLL_MS = 500;
@@ -29,12 +38,54 @@ export function freshBalance(address) {
   return publicClient.getBalance({ address, blockTag: "latest" });
 }
 
+/*
+ * In-flight costs per wallet, on chains that check them (Monad): what each
+ * transaction sent in the last few blocks could cost at most.
+ */
+const inflight = new Map();
+const inflightKey = (address) => `${currentNetwork().id}:${address.toLowerCase()}`;
+
+/** The window a sent transaction stays counted: mined in a block or two, then inflightBlocks deep, plus slack. */
+const inflightMs = () => {
+  const { inflightBlocks, blockTimeMs } = currentNetwork();
+  return (inflightBlocks + 3) * blockTimeMs + 2_000;
+};
+
+/** Records that `address` just sent a transaction that can cost up to `maxCost` (gas limit x max fee + value). */
+export function recordSent(address, maxCost) {
+  if (!currentNetwork().inflightBlocks || isOperator(address)) return;
+  const key = inflightKey(address);
+  const now = Date.now();
+  const live = (inflight.get(key) ?? []).filter((t) => t.until > now);
+  live.push({ cost: maxCost, until: now + inflightMs() });
+  inflight.set(key, live);
+}
+
+/** What `address`'s recent transactions can still cost, as far as the chain's balance check is concerned. */
+function inflightCost(address) {
+  const now = Date.now();
+  const live = (inflight.get(inflightKey(address)) ?? []).filter((t) => t.until > now);
+  inflight.set(inflightKey(address), live);
+  return live.reduce((sum, t) => sum + t.cost, 0n);
+}
+
+/** Waits until block `block` is `depth` blocks deep. */
+async function waitDepth(block, depth) {
+  const deadline = Date.now() + VISIBLE_TIMEOUT_MS;
+  while (Date.now() < deadline && (await publicClient.getBlockNumber({ cacheTime: 0 })) < block + BigInt(depth)) {
+    await new Promise((r) => setTimeout(r, VISIBLE_POLL_MS));
+  }
+}
+
 /** Sends `amount` of the native token from the operator and waits until the new balance is visible to reads. */
 async function sendFromOperator(address, amount) {
   const before = await freshBalance(address);
   const hash = await walletClient.sendTransaction({ to: address, value: amount });
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
   if (receipt.status !== "success") throw new Error("The gas top-up transaction failed.");
+  // Monad counts a deposit towards the wallet's balance check only once it's inflightBlocks deep.
+  const { inflightBlocks } = currentNetwork();
+  if (inflightBlocks) await waitDepth(receipt.blockNumber, inflightBlocks);
   // A mined receipt isn't always visible to the next read on a fast chain; wait until it is.
   const deadline = Date.now() + VISIBLE_TIMEOUT_MS;
   while (Date.now() < deadline) {
@@ -86,20 +137,22 @@ export async function ensureCanAfford(address, gasCost, value = 0n) {
   if (value > balance) {
     throw new Error(`Your wallet has ${formatEther(balance)} ${symbol}, but this sends ${formatEther(value)} ${symbol}.`);
   }
-  if (balance >= gasCost + value) return;
+  // On Monad, what this wallet sent in the last few blocks counts too.
+  const pending = inflightCost(address);
+  if (balance >= gasCost + value + pending) return;
   if (!walletClient || !operatorAccount) {
     throw new Error(`Your wallet needs up to ${formatEther(gasCost)} ${symbol} for gas and has ${formatEther(balance - value)} ${symbol} to spare - add some and try again.`);
   }
 
   const { gas } = currentNetwork();
-  const shortfall = gasCost + value - balance;
+  const shortfall = gasCost + value + pending - balance;
   const history = await countTopup(address);
   const allowance = history === null || history <= 1 ? gas.first : gas.repeat;
   const amount = shortfall * 2n > allowance ? shortfall * 2n : allowance;
   await sendFromOperator(address, amount);
 
   const after = await freshBalance(address);
-  if (after < gasCost + value) {
+  if (after < gasCost + value + pending) {
     throw new Error(`The gas top-up hasn't reached your wallet yet (${formatEther(after)} ${symbol}). Try again in a few seconds.`);
   }
 }
@@ -154,5 +207,7 @@ export async function sendNativeSponsored(client, to, value) {
   const gasLimit = await fitGasLimit(publicClient, tx, estimate);
   const { fees, gasCost } = await feesFor(gasLimit);
   await ensureCanAfford(client.account.address, gasCost, value);
-  return client.sendTransaction({ to, value, gas: gasLimit, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas });
+  const hash = await client.sendTransaction({ to, value, gas: gasLimit, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas });
+  recordSent(client.account.address, gasCost + value);
+  return hash;
 }

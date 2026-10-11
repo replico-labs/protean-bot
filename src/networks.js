@@ -30,6 +30,9 @@ const DEFINITIONS = {
     gas: { min: "0.005", first: "0.1", repeat: "0.05" },
     // Monad charges the full gas limit, not gas used - see writeWithGasBuffer.
     chargesFullGasLimit: true,
+    // Monad executes 3 blocks behind consensus: a wallet's balance must cover
+    // every transaction it sent in the last 3 blocks (gasSponsor.js).
+    inflightBlocks: 3,
   },
   "monad-mainnet": {
     chain: monad,
@@ -37,6 +40,7 @@ const DEFINITIONS = {
     blockTimeMs: 400,
     gas: { min: "0.005", first: "0.1", repeat: "0.05" },
     chargesFullGasLimit: true,
+    inflightBlocks: 3,
   },
   base: {
     chain: base,
@@ -161,6 +165,7 @@ export function getNetwork(id) {
     // Short governance periods for new DAOs (see creationConfig). Testnets only.
     fastTimings: networkEnv(canonical, "FAST_TIMINGS") === "true" && Boolean(chain.testnet),
     chargesFullGasLimit: Boolean(def.chargesFullGasLimit),
+    inflightBlocks: def.inflightBlocks ?? 0,
     maxContractSize: def.maxContractSize ?? null,
     smallBlockGasLimit: def.smallBlockGasLimit ?? null,
     gas: {

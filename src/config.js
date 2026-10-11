@@ -2,7 +2,7 @@ import "dotenv/config";
 import { privateKeyToAccount } from "viem/accounts";
 import { currentNetwork, networkEnv, attachOperator, operatorClientFor } from "./networks.js";
 import { encodeDeployData, nonceManager } from "viem";
-import { ensureCanAfford, feesFor, estimateWithFunding, estimateTxWithFunding } from "./gasSponsor.js";
+import { ensureCanAfford, feesFor, estimateWithFunding, estimateTxWithFunding, recordSent } from "./gasSponsor.js";
 import { fitGasLimit, contractTx } from "./gasLimit.js";
 
 /**
@@ -172,7 +172,9 @@ export async function writeWithGasBuffer(client, contractParams) {
   // that (read fresh, never cached) and send with the same fees.
   const { fees, gasCost } = await feesFor(gas);
   await ensureCanAfford(client.account.address, gasCost, contractParams.value ?? 0n);
-  return client.writeContract({ ...contractParams, gas, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas });
+  const hash = await client.writeContract({ ...contractParams, gas, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas });
+  recordSent(client.account.address, gasCost + (contractParams.value ?? 0n));
+  return hash;
 }
 // Deployments can need a few million gas; enough for the estimate to run
 // when the deploying wallet starts empty.
@@ -189,5 +191,7 @@ export async function deployWithGasLimit(client, { abi, bytecode, args = [] }) {
   const gas = await fitGasLimit(publicClient, { account: client.account, data }, estimate);
   const { fees, gasCost } = await feesFor(gas);
   await ensureCanAfford(client.account.address, gasCost);
-  return client.deployContract({ abi, bytecode, args, gas, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas });
+  const hash = await client.deployContract({ abi, bytecode, args, gas, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas });
+  recordSent(client.account.address, gasCost);
+  return hash;
 }

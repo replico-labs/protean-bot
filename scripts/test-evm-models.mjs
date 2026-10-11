@@ -453,6 +453,11 @@ async function sortitionFlow(run) {
   await councilProposal(run, adapter, dao, [A, B], recipient);
 
   await waitForTermEnd(run, dao);
+  // The Entropy fee is the caller's to pay (gas sponsorship covers gas only), as for a real member.
+  await run.step("send C the Entropy fee", async () => {
+    const { shortfall } = await adapter.sortitionFee(dao.governance);
+    if (shortfall > 0n) await sendNative(C.address, shortfall + shortfall / 10n);
+  });
   await run.step("C starts the draw (pays the Entropy fee)", () => adapter.startSortition(C.client, dao.governance));
   const localEntropy = process.env.LOCAL_FEE_ENTROPY;
   if (localEntropy) {
