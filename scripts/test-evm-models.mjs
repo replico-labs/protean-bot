@@ -97,7 +97,9 @@ function describeError(err) {
   const revert = typeof err.walk === "function" ? err.walk((e) => e?.name === "ContractFunctionRevertedError") : null;
   const errorName = revert?.data?.errorName ?? revert?.reason ?? null;
   const errorArgs = revert?.data?.args?.map((a) => String(a)).join(", ");
-  const message = (err.shortMessage || err.message || String(err)).split("\n")[0];
+  let message = (err.shortMessage || err.message || String(err)).split("\n")[0];
+  // The RPC turning requests away for load isn't a contract failure - say so.
+  if (/too many requests|limited to \d+|rate limit/i.test(`${message} ${err.details ?? ""}`)) message = `RPC rate limit, not a contract failure (${message})`;
   return { revert: errorName ? `${errorName}(${errorArgs ?? ""})` : null, message, details: err.details ?? null };
 }
 
@@ -690,7 +692,8 @@ await runOnNetwork(networkId, async () => {
   console.log(`Testing ${models.join(", ")} on ${network.chain.name} (chain ${network.chain.id}) with fast timings.`);
   console.log(`Operator ${operatorAccount.address} holds ${formatEther(startBalance)} ${network.nativeSymbol}.\n`);
 
-  const runs = await Promise.all(models.map((m) => runModel(m)));
+  // Started a few seconds apart, so ten DAO creations don't hit the RPC at once.
+  const runs = await Promise.all(models.map((m, i) => sleep(i * 4_000).then(() => runModel(m))));
   const swept = await sweep();
   const spent = startBalance - (await nativeBalance(operatorAccount.address));
 

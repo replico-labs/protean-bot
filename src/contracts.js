@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { createWalletClient, http, formatEther, parseEther, formatUnits, parseUnits, getAddress, isAddress } from "viem";
+import { createWalletClient, formatEther, parseEther, formatUnits, parseUnits, getAddress, isAddress } from "viem";
 import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer, deployWithGasLimit } from "./config.js";
 import { currentNetwork, creationConfig } from "./networks.js";
 import { ensureCanAfford } from "./gasSponsor.js";
@@ -220,7 +220,7 @@ export async function createDaoOnChain(name, symbol, initialSupplyWhole, maxSupp
 //////////////////////////////////////////////////////////////*/
 
 function walletClientFor(account) {
-  return createWalletClient({ account, chain: currentNetwork().chain, transport: http() });
+  return createWalletClient({ account, chain: currentNetwork().chain, transport: currentNetwork().transport() });
 }
 
 /**

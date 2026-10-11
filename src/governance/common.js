@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { createWalletClient, http, getAddress, parseEther, parseAbi, encodeFunctionData } from "viem";
+import { createWalletClient, getAddress, parseEther, parseAbi, encodeFunctionData } from "viem";
 import { publicClient, writeWithGasBuffer } from "../config.js";
 import { currentNetwork } from "../networks.js";
 
@@ -20,7 +20,7 @@ function loadAbi(name) {
  * pass it to whichever adapter function they need.
  */
 export function walletClientFor(account) {
-  return createWalletClient({ account, chain: currentNetwork().chain, transport: http() });
+  return createWalletClient({ account, chain: currentNetwork().chain, transport: currentNetwork().transport() });
 }
 
 const abis = {

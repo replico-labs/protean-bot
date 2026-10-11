@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createPublicClient, createWalletClient, http, defineChain, parseEther } from "viem";
 import { monad, monadTestnet, base, baseSepolia, hyperEvm, hyperliquidEvmTestnet } from "viem/chains";
 import { failOnRevert } from "./receipts.js";
+import { pacedFetch } from "./rpcPacing.js";
 
 /**
  * Every chain the governance side of the bot can run on. Opportunity
@@ -144,6 +145,11 @@ export function getNetwork(id) {
   const chain = defineChain({ ...def.chain, rpcUrls: { default: { http: [rpcUrl] } } });
   const blockTimeMs = Number(networkEnv(canonical, "BLOCK_TIME_MS")) || def.blockTimeMs;
   const gasEnv = (name, fallback) => parseEther(networkEnv(canonical, name) || fallback);
+  // Every client on this network shares one pace (rpcPacing.js): at most
+  // <PREFIX>_RPC_MAX_RPS requests a second from this process, default 10.
+  const maxRps = Number(networkEnv(canonical, "RPC_MAX_RPS")) || 10;
+  const fetchFn = pacedFetch(rpcUrl, maxRps);
+  const transport = () => http(rpcUrl, { fetchFn, retryCount: 4, retryDelay: 400 });
 
   const network = {
     id: canonical,
@@ -162,7 +168,9 @@ export function getNetwork(id) {
       first: gasEnv("GAS_TOPUP_FIRST", def.gas.first),
       repeat: gasEnv("GAS_TOPUP_REPEAT", def.gas.repeat),
     },
-    publicClient: failOnRevert(createPublicClient({ chain, transport: http() })),
+    /** A viem transport for this network's RPC, paced - use for every client. */
+    transport,
+    publicClient: failOnRevert(createPublicClient({ chain, transport: transport() })),
     walletClient: null, // set by attachOperator
   };
   built.set(canonical, network);
@@ -179,7 +187,7 @@ export function attachOperator(account) {
 export function operatorClientFor(network) {
   if (!operator) return null;
   if (!network.walletClient) {
-    network.walletClient = createWalletClient({ account: operator, chain: network.chain, transport: http() });
+    network.walletClient = createWalletClient({ account: operator, chain: network.chain, transport: network.transport() });
   }
   return network.walletClient;
 }
