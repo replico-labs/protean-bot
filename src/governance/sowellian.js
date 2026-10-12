@@ -4,6 +4,7 @@ import { fileURLToPath } from "url";
 import { formatUnits, getAddress, parseEther, zeroHash } from "viem";
 import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer } from "../config.js";
 import { creationConfig, currentNetwork, networkEnvName, networkEnv } from "../networks.js";
+import { createdDaoId } from "../receipts.js";
 import { ensureAllowance } from "./common.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -557,13 +558,12 @@ export async function createDAO(name, symbol, initialSupplyWhole, maxSupplyWhole
     functionName: "createDAO",
     args: [name, symbol, parseEther(String(initialSupplyWhole)), parseEther(String(maxSupplyWhole)), creationConfig("sowellian", DEFAULT_CONFIG)],
   });
-  await publicClient.waitForTransactionReceipt({ hash });
-
-  const daoCount = await publicClient.readContract({ ...factory, functionName: "daoCount" });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  const daoId = createdDaoId(receipt, factory);
   const [, , governanceToken, underlyingToken, governance, treasury] = await publicClient.readContract({
     ...factory,
     functionName: "daos",
-    args: [daoCount],
+    args: [daoId],
   });
 
   return { hash, governance, governanceToken, underlyingToken, treasury };

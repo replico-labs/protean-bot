@@ -365,6 +365,19 @@
   },
   {
     "type": "function",
+    "name": "openMarkets",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "proposalCount",
     "inputs": [],
     "outputs": [
@@ -745,6 +758,62 @@
   },
   {
     "type": "event",
+    "name": "ProposalSeeded",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "proposer",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "baseSeed",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "quoteSeed",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "SeedRefunded",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "baseRefunded",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "quoteRefunded",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "Traded",
     "inputs": [
       {
@@ -869,6 +938,16 @@
   {
     "type": "error",
     "name": "InvalidValue",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "MarketsAlreadyOpen",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "MarketsNotOpen",
     "inputs": []
   },
   {

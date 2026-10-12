@@ -4,6 +4,7 @@ import { fileURLToPath } from "url";
 import { getAddress, parseEther } from "viem";
 import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer } from "../config.js";
 import { creationConfig, currentNetwork, networkEnvName } from "../networks.js";
+import { createdDaoId } from "../receipts.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -176,8 +177,8 @@ const DEFAULT_CONFIG = {
 /**
  * Creates a Quadratic-governed DAO via the factory, using the bot's
  * operator wallet - same convention as contracts.js's createDaoOnChain
- * for the original model. Reads the new DAO's address back via the
- * factory's own daoCount()/daos() registry afterward, same pattern
+ * for the original model. Reads the new DAO's addresses back from the
+ * factory's daos() registry, by the id in its own DAOCreated event, same pattern
  * every factory in this system shares (confirmed - all ten use the
  * identical DAOInfo struct).
  */
@@ -197,13 +198,12 @@ export async function createDAO(name, symbol, initialSupplyWhole, maxSupplyWhole
     functionName: "createDAO",
     args: [name, symbol, parseEther(String(initialSupplyWhole)), parseEther(String(maxSupplyWhole)), creationConfig("quadratic", DEFAULT_CONFIG)],
   });
-  await publicClient.waitForTransactionReceipt({ hash });
-
-  const daoCount = await publicClient.readContract({ ...factory, functionName: "daoCount" });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  const daoId = createdDaoId(receipt, factory);
   const [, , governanceToken, underlyingToken, governance, treasury] = await publicClient.readContract({
     ...factory,
     functionName: "daos",
-    args: [daoCount],
+    args: [daoId],
   });
 
   return { hash, governance, governanceToken, underlyingToken, treasury };

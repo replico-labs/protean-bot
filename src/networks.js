@@ -71,6 +71,8 @@ const DEFINITIONS = {
     gas: { min: "0.001", first: "0.01", repeat: "0.005" },
     maxContractSize: 24_576,
     smallBlockGasLimit: 2_000_000n,
+    // Its mempool takes only an address's next 8 nonces (operatorNonces.js).
+    maxPendingTxs: 8,
   },
   "hyperevm-testnet": {
     // A pool of nodes behind one URL: pin reads so they never go back in time (receipts.js).
@@ -81,6 +83,8 @@ const DEFINITIONS = {
     gas: { min: "0.001", first: "0.01", repeat: "0.005" },
     maxContractSize: 24_576,
     smallBlockGasLimit: 2_000_000n,
+    // Its mempool takes only an address's next 8 nonces (operatorNonces.js).
+    maxPendingTxs: 8,
   },
 };
 
@@ -99,6 +103,11 @@ const ALIASES = {
 };
 
 export const NETWORK_IDS = Object.keys(DEFINITIONS);
+
+/** How many transactions one address may have waiting on the chain with this id (null: no limit). */
+export function maxPendingTxsForChain(chainId) {
+  return Object.values(DEFINITIONS).find((d) => d.chain.id === chainId)?.maxPendingTxs ?? null;
+}
 
 /** "base", "Base", "hyperliquid" -> canonical id, or null if unknown. */
 export function resolveNetworkId(word) {

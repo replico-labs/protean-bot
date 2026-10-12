@@ -1,8 +1,15 @@
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+import { decodeErrorResult, parseEventLogs, isAddressEqual } from "viem";
+
 /**
  * A public client whose waitForTransactionReceipt throws when the
  * transaction was mined but reverted. A reverted transaction still has a
  * receipt, so without this every caller that only waits for one would
- * report success for a call that did nothing.
+ * report success for a call that did nothing. The error says why it
+ * reverted where it can: the transaction is replayed as a call at its own
+ * block and the contract's error decoded (VotingClosed, AlreadyVoted...).
  */
 export function failOnRevert(client) {
   const wait = client.waitForTransactionReceipt;
@@ -10,7 +17,8 @@ export function failOnRevert(client) {
     async waitForTransactionReceipt(args) {
       const receipt = await wait(args);
       if (receipt.status === "reverted") {
-        const err = new Error(`The transaction was mined but reverted (tx ${receipt.transactionHash}, gas used ${receipt.gasUsed}).`);
+        const reason = await revertReason(client, receipt).catch(() => null);
+        const err = new Error(`The transaction was mined but reverted${reason ? `: ${reason}` : ""} (tx ${receipt.transactionHash}, gas used ${receipt.gasUsed}).`);
         err.shortMessage = err.message;
         err.receipt = receipt;
         throw err;
@@ -18,6 +26,42 @@ export function failOnRevert(client) {
       return receipt;
     },
   }));
+}
+
+// Every custom error in the contracts the bot talks to, for decoding replays.
+let knownErrors;
+function errorAbi() {
+  if (knownErrors) return knownErrors;
+  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), "abis");
+  const seen = new Map();
+  for (const file of fs.readdirSync(dir).filter((f) => f.endsWith(".json"))) {
+    try {
+      const json = JSON.parse(fs.readFileSync(path.join(dir, file), "utf8"));
+      for (const item of Array.isArray(json) ? json : json.abi ?? []) {
+        if (item.type === "error") seen.set(`${item.name}(${item.inputs.map((i) => i.type).join(",")})`, item);
+      }
+    } catch {}
+  }
+  return (knownErrors = [...seen.values()]);
+}
+
+/** Why a mined transaction reverted, from replaying it at its block - or null if that can't be told. */
+async function revertReason(client, receipt) {
+  const tx = await client.getTransaction({ hash: receipt.transactionHash });
+  try {
+    await client.call({ account: tx.from, to: tx.to, data: tx.input, value: tx.value, gas: tx.gas, blockNumber: receipt.blockNumber });
+  } catch (err) {
+    const data = err.walk?.((e) => typeof e.data === "string" && e.data.startsWith("0x"))?.data;
+    if (!data || data === "0x") return /out of gas/i.test(err.message) ? "out of gas" : null;
+    try {
+      const { errorName, args } = decodeErrorResult({ abi: errorAbi(), data });
+      const shown = (args ?? []).map((a) => (typeof a === "bigint" ? a.toString() : String(a)));
+      return `${errorName}(${shown.join(", ")})`;
+    } catch {
+      return `error data ${data.slice(0, 10)}`;
+    }
+  }
+  return null;
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -81,4 +125,15 @@ export function monotonicReads(client) {
       return receipt;
     },
   }));
+}
+
+/**
+ * The id a factory gave the DAO created in this receipt, from its own
+ * DAOCreated event - not the factory's newest DAO, which is someone else's
+ * when two DAOs are created in the same block.
+ */
+export function createdDaoId(receipt, factory) {
+  const [created] = parseEventLogs({ abi: factory.abi, eventName: "DAOCreated", logs: receipt.logs }).filter((log) => isAddressEqual(log.address, factory.address));
+  if (!created) throw new Error(`No DAOCreated event from ${factory.address} in tx ${receipt.transactionHash}`);
+  return created.args.daoId;
 }

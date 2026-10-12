@@ -1,7 +1,8 @@
 import "dotenv/config";
 import { privateKeyToAccount } from "viem/accounts";
 import { currentNetwork, networkEnv, attachOperator, operatorClientFor } from "./networks.js";
-import { encodeDeployData, nonceManager } from "viem";
+import { encodeDeployData } from "viem";
+import { operatorNonceManager } from "./operatorNonces.js";
 import { ensureCanAfford, feesFor, estimateWithFunding, estimateTxWithFunding, recordSent } from "./gasSponsor.js";
 import { fitGasLimit, contractTx } from "./gasLimit.js";
 
@@ -46,7 +47,7 @@ if (OPERATOR_PRIVATE_KEY) {
     // The operator sends for many people at once (gas top-ups, DAO
     // creation); the nonce manager hands each concurrent transaction its own
     // nonce instead of all of them reading the same pending count.
-    operatorAccount = privateKeyToAccount(OPERATOR_PRIVATE_KEY, { nonceManager });
+    operatorAccount = privateKeyToAccount(OPERATOR_PRIVATE_KEY, { nonceManager: operatorNonceManager() });
     attachOperator(operatorAccount);
   } catch (err) {
     console.error(

@@ -4,6 +4,7 @@ import { fileURLToPath } from "url";
 import { createWalletClient, formatEther, parseEther, formatUnits, parseUnits, getAddress, isAddress } from "viem";
 import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer, deployWithGasLimit } from "./config.js";
 import { currentNetwork, creationConfig } from "./networks.js";
+import { createdDaoId } from "./receipts.js";
 import { ensureCanAfford } from "./gasSponsor.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -197,19 +198,14 @@ export async function createDaoOnChain(name, symbol, initialSupplyWhole, maxSupp
     ],
   });
 
-  await publicClient.waitForTransactionReceipt({ hash });
-
-  const daoCount = await publicClient.readContract({
-    address: getAddress(FACTORY_ADDRESS),
-    abi: abis.DAOFactory,
-    functionName: "daoCount",
-  });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  const daoId = createdDaoId(receipt, { address: getAddress(FACTORY_ADDRESS), abi: abis.DAOFactory });
 
   const [, , governanceToken, underlyingToken, governance, treasury] = await publicClient.readContract({
     address: getAddress(FACTORY_ADDRESS),
     abi: abis.DAOFactory,
     functionName: "daos",
-    args: [daoCount],
+    args: [daoId],
   });
 
   return { hash, governance, governanceToken, underlyingToken, treasury };

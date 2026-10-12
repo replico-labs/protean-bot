@@ -1,9 +1,10 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { getAddress, parseEther } from "viem";
+import { getAddress, parseEther, parseEventLogs, isAddressEqual, zeroAddress } from "viem";
 import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer } from "../config.js";
 import { currentNetwork, networkEnvName, creationConfig } from "../networks.js";
+import { createdDaoId } from "../receipts.js";
 import { ensureAllowance } from "./common.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -140,6 +141,7 @@ export async function getProposal(governanceAddress, proposalId) {
   let statusLabel;
   if (proposal.cancelled) statusLabel = "Cancelled";
   else if (proposal.executed) statusLabel = "Executed";
+  else if (proposal.passPool === zeroAddress) statusLabel = "Seeded"; // markets not opened yet (two-step contracts)
   else if (!proposal.finalized) statusLabel = "Open"; // trading or awaiting finalization - see doc comment
   else if (!proposal.passed) statusLabel = "Failed";
   else statusLabel = "Queued"; // finalized, passed, not yet executed
@@ -155,7 +157,12 @@ export async function getProposal(governanceAddress, proposalId) {
 //////////////////////////////////////////////////////////////*/
 
 /**
- * The real propose() - deploys and seeds both markets in this one call.
+ * The real propose(), then openMarkets() where the contract needs it.
+ * Contracts built before the split do everything in propose(); newer ones
+ * (deployed where one transaction can't hold it all - HyperEVM's 2M-gas
+ * small blocks) take the seed in propose() and deploy the markets in
+ * openMarkets(). A proposal whose pools are still empty after propose()
+ * gets the second call, so one path serves both.
  * `baseSeedAmountWhole` is the DAO governance token seed (pulled via
  * transferFrom, so the caller must have approved this contract first);
  * `quoteSeedAmountWhole` is the native MON seed, sent as msg.value and
@@ -180,10 +187,35 @@ export async function proposeWithSeed(
     args: [actions, metadataURI, parseEther(String(baseSeedAmountWhole))],
     value: parseEther(String(quoteSeedAmountWhole)),
   });
-  await publicClient.waitForTransactionReceipt({ hash });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
 
-  const proposalId = await publicClient.readContract({ ...gov, functionName: "proposalCount" });
+  // This proposal's id from its own event - another proposal made in the
+  // same block would make proposalCount someone else's.
+  const [event] = parseEventLogs({ abi, eventName: ["ProposalSeeded", "ProposalCreated"], logs: receipt.logs }).filter((log) =>
+    isAddressEqual(log.address, gov.address)
+  );
+  const proposalId = event ? event.args.proposalId : await publicClient.readContract({ ...gov, functionName: "proposalCount" });
+
+  const proposal = await publicClient.readContract({ ...gov, functionName: "getProposal", args: [proposalId] });
+  if (proposal.passPool === zeroAddress) {
+    try {
+      await openMarkets(client, governanceAddress, proposalId);
+    } catch (err) {
+      throw new Error(
+        `Proposal #${proposalId} is created and its seed taken, but opening its markets failed (${err.shortMessage || err.message}). ` +
+          `The first trade on it opens them, or try again.`
+      );
+    }
+  }
   return { hash, proposalId };
+}
+
+/** Opens a seeded proposal's two markets (newer contracts only - see proposeWithSeed). Anyone may call it, once. */
+export async function openMarkets(client, governanceAddress, proposalId) {
+  const gov = contractFor(governanceAddress);
+  const hash = await writeWithGasBuffer(client, { ...gov, functionName: "openMarkets", args: [BigInt(proposalId)] });
+  await publicClient.waitForTransactionReceipt({ hash });
+  return { hash };
 }
 
 /**
@@ -201,7 +233,12 @@ export async function trade(client, governanceAddress, proposalId, market, sideI
   const gov = contractFor(governanceAddress);
   // trade() pulls the conditional token being sold (the pool's token0 for
   // base, token1 for quote) via transferFrom - approve it first.
-  const proposal = await publicClient.readContract({ ...gov, functionName: "getProposal", args: [BigInt(proposalId)] });
+  let proposal = await publicClient.readContract({ ...gov, functionName: "getProposal", args: [BigInt(proposalId)] });
+  if (proposal.passPool === zeroAddress && !proposal.cancelled) {
+    // Seeded but its markets never opened (the second step failed) - open them first.
+    await openMarkets(client, governanceAddress, proposalId);
+    proposal = await publicClient.readContract({ ...gov, functionName: "getProposal", args: [BigInt(proposalId)] });
+  }
   const pool = getAddress(market === 0 ? proposal.passPool : proposal.failPool);
   const tokenIn = await publicClient.readContract({ address: pool, abi: POOL_TOKEN_ABI, functionName: sideIn === 0 ? "token0" : "token1" });
   await ensureAllowance(client, tokenIn, governanceAddress, parseEther(String(amountInWhole)));
@@ -271,13 +308,12 @@ export async function createDAO(name, symbol, initialSupplyWhole, maxSupplyWhole
     functionName: "createDAO",
     args: [name, symbol, parseEther(String(initialSupplyWhole)), parseEther(String(maxSupplyWhole)), creationConfig("decisionMarkets", DEFAULT_CONFIG)],
   });
-  await publicClient.waitForTransactionReceipt({ hash });
-
-  const daoCount = await publicClient.readContract({ ...factory, functionName: "daoCount" });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  const daoId = createdDaoId(receipt, factory);
   const [, , governanceToken, underlyingToken, governance, treasury] = await publicClient.readContract({
     ...factory,
     functionName: "daos",
-    args: [daoCount],
+    args: [daoId],
   });
 
   return { hash, governance, governanceToken, underlyingToken, treasury };
