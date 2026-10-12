@@ -11,8 +11,8 @@ Contracts live in the companion repo, [`Spaces`](https://github.com/replico-labs
 - **Tested end to end on local chains** (anvil, with the real contracts deployed from source): every model's full lifecycle through the Discord and Slack handlers — the same command code Telegram uses for the shared paths — about 230 checks, including a GuardWrapper handover with a treasury payout confirmed by signers. The network layer has its own two-chain test: one bot process serving a "Monad" chain and a "Base" chain at once.
 - **Live on Base Sepolia:** the same eleven flows (all ten models plus Sowellian's Pyth-price route) pass `scripts/test-evm-models.mjs`, for about 0.0024 ETH of operator gas.
 - **Deployed on HyperEVM testnet** (and Base Sepolia): all ten factories plus the Pyth Entropy and price-feed adapters, built with Spaces' `size-limited` profile (addresses in Spaces' README).
-- **HyperEVM testnet, locally:** all eleven flows pass against a local chain-998 stand-in that enforces HyperEVM's 8-nonce mempool rule and 2M-gas small blocks (Decision Markets with the two-step contract).
-- **Not yet run live:** any DAO lifecycle on HyperEVM testnet, the mainnets (nothing deployed), and real Discord and Slack workspaces. (WhatsApp runs live as its own Railway service; Pyth Entropy and Hermes prices have both run on Monad testnet; an Opportunity Market has run end to end through Telegram on Sepolia, FHE relayer included.) See [What's not verified yet](#whats-not-verified-yet).
+- **Live on HyperEVM testnet:** the same eleven flows pass `scripts/test-evm-models.mjs` (189 steps, ~0.0074 HYPE of operator gas), on small blocks, with the two-step Decision Markets factory. Fast timings there are 3x as long (`HYPEREVM_TESTNET_FAST_SCALE`), since each step takes ~3x as long as on Monad or Base.
+- **Not yet run live:** the mainnets (nothing deployed), and real Discord and Slack workspaces. (WhatsApp runs live as its own Railway service; Pyth Entropy and Hermes prices have both run on Monad testnet; an Opportunity Market has run end to end through Telegram on Sepolia, FHE relayer included.) See [What's not verified yet](#whats-not-verified-yet).
 
 ## How wallets work
 
@@ -38,7 +38,7 @@ The operator wallet pays users' gas, never the amounts they send.
 | Base | `base` | 8453 | ETH | not yet deployed; contracts must be built with Spaces' `size-limited` profile |
 | Base Sepolia | `base-sepolia` | 84532 | ETH | all ten factories and both Pyth adapters deployed (`size-limited`); every model's lifecycle verified live |
 | HyperEVM | `hyperevm` | 999 | HYPE | not yet deployed; `size-limited`, plus big blocks for factory deploys |
-| HyperEVM testnet | `hyperevm-testnet` | 998 | HYPE | all ten factories and both Pyth adapters deployed (`size-limited`, big blocks); set a provider `HYPEREVM_TESTNET_RPC_URL`, the public RPC rate-limits hard |
+| HyperEVM testnet | `hyperevm-testnet` | 998 | HYPE | all ten factories and both Pyth adapters deployed (`size-limited`, big blocks); every model's lifecycle verified live; set a provider `HYPEREVM_TESTNET_RPC_URL`, the public RPC rate-limits hard |
 
 **Each chat's DAO lives on one network**, chosen when it's created or linked:
 
@@ -339,7 +339,7 @@ To try it on a local chain first: start `anvil --chain-id 10143 --block-time 1`,
 
 ## What's not verified yet
 
-- A DAO lifecycle on HyperEVM testnet (factories deployed, not run yet); anything on the mainnets (nothing deployed)
+- Anything on the mainnets (nothing deployed)
 - **External protocol actions against the live protocols.** Each was tested on local chains through a real Board DAO:
   - Uniswap, Aerodrome, Lido-via-Aerodrome and Seaport ran against those protocols' real compiled contracts. HyperSwap and kHYPE-via-HyperSwap ran against Uniswap's real v3 contracts (HyperSwap v3 is a Uniswap v3 fork).
   - Aave, HyperLend, shMON, Nad.fun, Perpl, Flaunch and HyperCore ran against stand-ins with the protocols' exact function signatures.
