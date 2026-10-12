@@ -332,9 +332,9 @@ async function optimisticFlow(run) {
     });
   }
 
-  await run.step("challenge window closes", () => waitForState(run, dao.governance, quiet, ["Succeeded"], blocksMs(400)));
+  await run.step("challenge window closes", () => waitForState(run, dao.governance, quiet, ["Succeeded"], blocksMs(400 * network.fastScale)));
   await run.step("queue the unchallenged one (finalizeUnchallenged)", () => adapter.queue(A.client, dao.governance, quiet));
-  await run.step("challenge vote passes", () => waitForState(run, dao.governance, contested, ["Succeeded"], blocksMs(400)));
+  await run.step("challenge vote passes", () => waitForState(run, dao.governance, contested, ["Succeeded"], blocksMs(400 * network.fastScale)));
   await run.step("queue the challenged one (finalizeChallenge)", () => adapter.queue(A.client, dao.governance, contested));
   await run.step("timelocks pass", async () => {
     await waitUntilExecutable(run, dao.governance, quiet);
@@ -381,7 +381,7 @@ async function councilProposal(run, adapter, dao, council, recipient) {
   const { proposalId: id } = await run.step("A proposes a council action", () => adapter.propose(council[0].client, dao.governance, payment(dao.treasury, recipient), "test: pay the recipient"));
   await run.step("council voting opens", () => waitForState(run, dao.governance, id, ["Active"], blocksMs(5)));
   for (const m of council) await run.step(`${m.label} votes for`, () => adapter.vote(m.client, dao.governance, id, 1));
-  await run.step("council vote passes", () => waitForState(run, dao.governance, id, ["Succeeded"], blocksMs(400)));
+  await run.step("council vote passes", () => waitForState(run, dao.governance, id, ["Succeeded"], blocksMs(400 * network.fastScale)));
   await run.step("queue", () => adapter.queue(council[0].client, dao.governance, id));
   await run.step("timelock passes", () => waitUntilExecutable(run, dao.governance, id));
   const before = await nativeBalance(recipient);
@@ -435,7 +435,7 @@ async function delegateFlow(run) {
     await adapter.voteRecall(C.client, dao.governance, recallId, 1);
   });
   const recall = await adapter.getRecall(dao.governance, recallId);
-  await run.step("recall vote closes", () => waitForBlock(run, "the recall vote to close", recall.endBlock, 400));
+  await run.step("recall vote closes", () => waitForBlock(run, "the recall vote to close", recall.endBlock, 400 * network.fastScale));
   await run.step("finalize the recall", () => adapter.finalizeRecall(B.client, dao.governance, recallId));
   await run.step("the recalled member is off the council", async () => {
     const seated = (await adapter.getCouncil(dao.governance)).map((a) => getAddress(a));
@@ -535,7 +535,7 @@ async function sowellianFlow(run) {
       if (!weight) throw new Error("The vote counted with zero weight");
     });
   }
-  await run.step("approval voting closes", () => waitForBlock(run, "approval voting to close", p.approvalEndBlock, 400));
+  await run.step("approval voting closes", () => waitForBlock(run, "approval voting to close", p.approvalEndBlock, 400 * network.fastScale));
   await run.step("finalize approval (positions open)", async () => {
     await adapter.finalizeApproval(A.client, dao.governance, id);
     p = await adapter.getProposal(dao.governance, id);
@@ -555,7 +555,7 @@ async function sowellianFlow(run) {
   await run.step("B challenges the outcome", () => adapter.challengeResolution(B.client, dao.governance, id));
   for (const m of [A, C]) await run.step(`${m.label} votes success in adjudication`, () => adapter.castAdjudicationVote(m.client, dao.governance, id, SUCCESS));
   p = await adapter.getProposal(dao.governance, id);
-  await run.step("adjudication closes", () => waitForBlock(run, "adjudication to close", p.adjudicationEndBlock, 400));
+  await run.step("adjudication closes", () => waitForBlock(run, "adjudication to close", p.adjudicationEndBlock, 400 * network.fastScale));
   await run.step("finalize adjudication", () => adapter.finalizeAdjudication(A.client, dao.governance, id));
   await run.step("A claims the winning position", async () => {
     const held = () => publicClient.readContract({ address: dao.governanceToken, abi: ERC20_ABI, functionName: "balanceOf", args: [A.address] });
@@ -592,7 +592,7 @@ async function sowellianOracleFlow(run) {
   let p = await adapter.getProposal(dao.governance, id);
   await run.step("approval voting opens", () => waitForBlock(run, "approval voting to open", p.approvalStartBlock - 1n, 5));
   for (const m of [A, B]) await run.step(`${m.label} approves`, () => adapter.castApprovalVote(m.client, dao.governance, id, 1));
-  await run.step("approval voting closes", () => waitForBlock(run, "approval voting to close", p.approvalEndBlock, 400));
+  await run.step("approval voting closes", () => waitForBlock(run, "approval voting to close", p.approvalEndBlock, 400 * network.fastScale));
   await run.step("finalize approval (positions open)", () => adapter.finalizeApproval(A.client, dao.governance, id));
   await run.step("A backs yes", () => adapter.takePosition(A.client, dao.governance, id, YES, 1000));
   p = await adapter.getProposal(dao.governance, id);

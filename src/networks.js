@@ -85,6 +85,9 @@ const DEFINITIONS = {
     smallBlockGasLimit: 2_000_000n,
     // Its mempool takes only an address's next 8 nonces (operatorNonces.js).
     maxPendingTxs: 8,
+    // Each step of a test lifecycle takes ~3x as long here as on Monad or
+    // Base, so fast-timing windows are 3x as long (FAST_SCALE overrides).
+    fastScale: 3,
   },
 };
 
@@ -181,6 +184,8 @@ export function getNetwork(id) {
     blockTimeMs,
     // Short governance periods for new DAOs (see creationConfig). Testnets only.
     fastTimings: networkEnv(canonical, "FAST_TIMINGS") === "true" && Boolean(chain.testnet),
+    // How many times longer than the fast defaults those periods are.
+    fastScale: Number(networkEnv(canonical, "FAST_SCALE")) || def.fastScale || 1,
     chargesFullGasLimit: Boolean(def.chargesFullGasLimit),
     inflightBlocks: def.inflightBlocks ?? 0,
     maxContractSize: def.maxContractSize ?? null,
@@ -291,7 +296,8 @@ export function scaleBlockFields(model, config, network = currentNetwork()) {
  * instead of days. Block counts are for Monad's 400ms blocks, like the
  * defaults, and get the same scaling. Ignored on mainnets. DAOs created
  * while it's on keep these periods for good; turning it off only changes
- * DAOs created after.
+ * DAOs created after. A network's fastScale (<PREFIX>_FAST_SCALE, 3 on
+ * HyperEVM testnet) stretches every one of them.
  */
 const FAST_VOTE_BLOCKS = 300; // ~2 min at 400ms
 const FAST = {
@@ -313,7 +319,8 @@ const FAST = {
   // full support reaches the minimum bar in ~2 minutes on any chain.
   conviction: {
     timelockDelay: 60,
-    convictionGrowthRate: (c, network) => (BigInt(c.minThresholdConviction) * BigInt(network.blockTimeMs)) / BigInt(FAST_VOTE_BLOCKS * REFERENCE_BLOCK_TIME_MS),
+    convictionGrowthRate: (c, network) =>
+      (BigInt(c.minThresholdConviction) * BigInt(network.blockTimeMs)) / BigInt(FAST_VOTE_BLOCKS * REFERENCE_BLOCK_TIME_MS * network.fastScale),
   },
   sowellian: {
     approvalVotingPeriod: FAST_VOTE_BLOCKS,
@@ -336,7 +343,7 @@ export function creationConfig(model, config, network = currentNetwork()) {
   const merged = { ...config };
   for (const [field, value] of Object.entries(fast)) {
     if (!(field in config)) continue;
-    const v = typeof value === "function" ? value(config, network) : value;
+    const v = typeof value === "function" ? value(config, network) : Math.round(value * network.fastScale);
     merged[field] = typeof config[field] === "bigint" ? BigInt(v) : Number(v);
   }
   return scaleBlockFields(model, merged, network);
