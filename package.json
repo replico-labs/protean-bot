@@ -1,30 +1,33 @@
 {
-  "name": "spaces",
-  "version": "1.0.0",
-  "description": "A governance-agnostic DAO framework — an original, from-scratch on-chain governance protocol where a DAO's treasury and its governance rules are kept as two separate, swappable pieces, rather than locked together.",
-  "main": "index.js",
-  "directories": {
-    "lib": "lib",
-    "test": "test"
-  },
+  "name": "protean-dao-bot",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "discord": "node src/platforms/discord.js",
+    "slack": "node src/platforms/slack.js",
+    "whatsapp": "node src/platforms/whatsapp.js",
+    "keeper:sortition": "node src/keepers/sortitionKeeper.js",
+    "verify:integrations": "node scripts/verify-integrations.js"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/MarvinSunday/Spaces.git"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
-  "bugs": {
-    "url": "https://github.com/MarvinSunday/Spaces/issues"
-  },
-  "homepage": "https://github.com/MarvinSunday/Spaces#readme",
   "dependencies": {
-    "@fhevm/solidity": "^0.13.3",
-    "@pythnetwork/entropy-sdk-solidity": "^2.2.1",
-    "@pythnetwork/pyth-sdk-solidity": "^4.3.1"
+    "@aws-sdk/client-kms": "^3.1131.0",
+    "@coral-xyz/anchor": "0.32.1",
+    "@flaunch/sdk": "0.17.1",
+    "@grammyjs/runner": "^2.0.3",
+    "@slack/bolt": "^5.1.0",
+    "@solana/spl-token": "0.4.14",
+    "@solana/web3.js": "1.98.4",
+    "@supabase/supabase-js": "^2.116.0",
+    "@zama-fhe/relayer-sdk": "^0.4.4",
+    "baileys": "7.0.0-rc14",
+    "discord.js": "^14.27.0",
+    "dotenv": "^16.4.5",
+    "grammy": "^1.45.1",
+    "pino": "^9.14.0",
+    "qrcode": "^1.5.4",
+    "viem": "^2.21.0"
   }
 }

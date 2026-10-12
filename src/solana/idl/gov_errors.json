@@ -1,0 +1,314 @@
+{
+ "6000": {
+  "name": "InvalidQuorum",
+  "msg": "Quorum must be between 1 and 10000 basis points"
+ },
+ "6001": {
+  "name": "InvalidApprovalThreshold",
+  "msg": "Approval threshold must be between 1 and 10000 basis points"
+ },
+ "6002": {
+  "name": "InvalidVotingPeriod",
+  "msg": "Voting period must be longer than zero"
+ },
+ "6003": {
+  "name": "InvalidName",
+  "msg": "Name is empty or too long"
+ },
+ "6004": {
+  "name": "InvalidMetadataUri",
+  "msg": "Description is empty or too long"
+ },
+ "6005": {
+  "name": "EmptyProposalActions",
+  "msg": "A proposal needs at least one instruction"
+ },
+ "6006": {
+  "name": "TooManyInstructions",
+  "msg": "Too many instructions in one proposal"
+ },
+ "6007": {
+  "name": "InvalidProposalSigner",
+  "msg": "Only the DAO treasury can sign a proposal's instructions"
+ },
+ "6008": {
+  "name": "MissingProposalAccount",
+  "msg": "An account the proposal needs wasn't passed in"
+ },
+ "6009": {
+  "name": "ProposalThresholdNotMet",
+  "msg": "Not enough voting power to propose"
+ },
+ "6010": {
+  "name": "ProposalNotActive",
+  "msg": "Voting isn't open for this proposal"
+ },
+ "6011": {
+  "name": "VotingNotEnded",
+  "msg": "Voting hasn't ended yet"
+ },
+ "6012": {
+  "name": "NoVotingPower",
+  "msg": "No voting power: deposit tokens first"
+ },
+ "6013": {
+  "name": "QuorumNotReached",
+  "msg": "Quorum not reached"
+ },
+ "6014": {
+  "name": "ApprovalThresholdNotMet",
+  "msg": "Approval threshold not met"
+ },
+ "6015": {
+  "name": "ProposalAlreadyQueued",
+  "msg": "Proposal already queued"
+ },
+ "6016": {
+  "name": "ProposalNotExecutable",
+  "msg": "Proposal isn't queued, or its timelock hasn't passed"
+ },
+ "6017": {
+  "name": "ProposalExpired",
+  "msg": "Proposal's execution window has passed"
+ },
+ "6018": {
+  "name": "ProposalAlreadyExecuted",
+  "msg": "Proposal already executed"
+ },
+ "6019": {
+  "name": "ProposalAlreadyCancelled",
+  "msg": "Proposal already cancelled"
+ },
+ "6020": {
+  "name": "Unauthorized",
+  "msg": "Only the proposer or the DAO itself can do this"
+ },
+ "6021": {
+  "name": "TokensLocked",
+  "msg": "Tokens are locked until the proposals you voted on finish"
+ },
+ "6022": {
+  "name": "InvalidAmount",
+  "msg": "Amount must be greater than zero"
+ },
+ "6023": {
+  "name": "InsufficientDeposit",
+  "msg": "Not enough deposited"
+ },
+ "6024": {
+  "name": "WrongDao",
+  "msg": "Wrong account for this DAO"
+ },
+ "6025": {
+  "name": "Overflow",
+  "msg": "Arithmetic overflow"
+ },
+ "6026": {
+  "name": "InvalidProposalAccount",
+  "msg": "Not a proposal account this hub can read"
+ },
+ "6027": {
+  "name": "StaleProposal",
+  "msg": "This proposal was made under an earlier governance setup and can no longer run"
+ },
+ "6028": {
+  "name": "NotActiveGovernance",
+  "msg": "This governance program isn't the one running the DAO"
+ },
+ "6029": {
+  "name": "ModelNotApproved",
+  "msg": "That governance program isn't approved"
+ },
+ "6030": {
+  "name": "NotConfirmed",
+  "msg": "The governance program didn't confirm this proposal"
+ },
+ "6031": {
+  "name": "SwitchPending",
+  "msg": "A switch is already pending"
+ },
+ "6032": {
+  "name": "NoSwitchPending",
+  "msg": "No switch is pending"
+ },
+ "6033": {
+  "name": "SwitchNotReady",
+  "msg": "The switch delay hasn't passed yet"
+ },
+ "6034": {
+  "name": "GovernanceNotInitialized",
+  "msg": "The new governance program hasn't been set up for this DAO"
+ },
+ "6035": {
+  "name": "AlreadyActive",
+  "msg": "Already the DAO's governance program"
+ },
+ "6036": {
+  "name": "NotSigner",
+  "msg": "Only the board's signers can do this"
+ },
+ "6037": {
+  "name": "AlreadySigner",
+  "msg": "Already a signer"
+ },
+ "6038": {
+  "name": "TooManySigners",
+  "msg": "Too many signers"
+ },
+ "6039": {
+  "name": "InvalidApprovals",
+  "msg": "Required approvals must be between 1 and the number of signers"
+ },
+ "6040": {
+  "name": "AlreadyConfirmed",
+  "msg": "Already confirmed"
+ },
+ "6041": {
+  "name": "NotConfirmedBySigner",
+  "msg": "You haven't confirmed this proposal"
+ },
+ "6042": {
+  "name": "ThresholdNotMet",
+  "msg": "Not enough current signers have confirmed"
+ },
+ "6043": {
+  "name": "ChallengeWindowClosed",
+  "msg": "The challenge window has closed"
+ },
+ "6044": {
+  "name": "ChallengeWindowOpen",
+  "msg": "The challenge window is still open"
+ },
+ "6045": {
+  "name": "AlreadyChallenged",
+  "msg": "Already challenged"
+ },
+ "6046": {
+  "name": "NotChallenged",
+  "msg": "This proposal wasn't challenged"
+ },
+ "6047": {
+  "name": "BondAlreadyResolved",
+  "msg": "The bond has already been settled"
+ },
+ "6048": {
+  "name": "InvalidChallengePeriod",
+  "msg": "Challenge period must be longer than zero"
+ },
+ "6049": {
+  "name": "InvalidConfig",
+  "msg": "Invalid governance rules"
+ },
+ "6050": {
+  "name": "NotSupporting",
+  "msg": "You aren't supporting that proposal"
+ },
+ "6051": {
+  "name": "AlreadySupporting",
+  "msg": "Already supporting this proposal"
+ },
+ "6052": {
+  "name": "ConvictionNotReached",
+  "msg": "Not enough conviction yet"
+ },
+ "6053": {
+  "name": "NotCouncilMember",
+  "msg": "Only council members can do this"
+ },
+ "6054": {
+  "name": "TermNotOver",
+  "msg": "The council's term hasn't ended"
+ },
+ "6055": {
+  "name": "ElectionInProgress",
+  "msg": "An election is already running"
+ },
+ "6056": {
+  "name": "CandidacyClosed",
+  "msg": "The candidacy window has closed"
+ },
+ "6057": {
+  "name": "AlreadyCandidate",
+  "msg": "Already a candidate"
+ },
+ "6058": {
+  "name": "TooManyCandidates",
+  "msg": "This election has the most candidates it can take"
+ },
+ "6059": {
+  "name": "NotCandidate",
+  "msg": "Not a candidate in this election"
+ },
+ "6060": {
+  "name": "DuplicateCandidate",
+  "msg": "The same candidate twice"
+ },
+ "6061": {
+  "name": "ElectionVotingNotOpen",
+  "msg": "Election voting isn't open"
+ },
+ "6062": {
+  "name": "AlreadyFinalized",
+  "msg": "Already finalized"
+ },
+ "6063": {
+  "name": "InvalidBallot",
+  "msg": "Vote for between one candidate and the council size"
+ },
+ "6064": {
+  "name": "AlreadyVoted",
+  "msg": "Already voted"
+ },
+ "6065": {
+  "name": "CouncilChanged",
+  "msg": "A new council has been elected since this proposal was made"
+ },
+ "6066": {
+  "name": "AssetNotListed",
+  "msg": "That asset isn't on the DAO's list"
+ },
+ "6067": {
+  "name": "AssetAlreadyListed",
+  "msg": "That asset is already on the list"
+ },
+ "6068": {
+  "name": "TooManyAssets",
+  "msg": "The asset list is full"
+ },
+ "6069": {
+  "name": "DuplicateBudgetAsset",
+  "msg": "The same asset twice in a budget"
+ },
+ "6070": {
+  "name": "BudgetExceeded",
+  "msg": "The proposal spent more than its budget"
+ },
+ "6071": {
+  "name": "WatchedAccountChanged",
+  "msg": "The proposal changed a watched treasury account's owner, delegate or close authority, or closed it"
+ },
+ "6072": {
+  "name": "AssetListChanged",
+  "msg": "Assets were added to the list since this proposal was made"
+ },
+ "6073": {
+  "name": "NoPendingAssetChange",
+  "msg": "No change is pending for that asset"
+ },
+ "6074": {
+  "name": "AssetChangeNotDue",
+  "msg": "The asset change isn't due yet"
+ },
+ "6075": {
+  "name": "ReservedInstruction",
+  "msg": "Proposals can't include that instruction"
+ },
+ "6076": {
+  "name": "BudgetStepOutOfOrder",
+  "msg": "Budget steps ran out of order"
+ },
+ "6077": {
+  "name": "CantRemoveSol",
+  "msg": "SOL can't be removed from the asset list"
+ }
+}

@@ -1,7 +1,0 @@
-@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/
-@pythnetwork/pyth-sdk-solidity/=node_modules/@pythnetwork/pyth-sdk-solidity/
-@pythnetwork/entropy-sdk-solidity/=node_modules/@pythnetwork/entropy-sdk-solidity/
-@fhevm/solidity/=node_modules/@fhevm/solidity/
-encrypted-types/=node_modules/encrypted-types/
-forge-fhevm/=lib/forge-fhevm/src/
-@openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts/

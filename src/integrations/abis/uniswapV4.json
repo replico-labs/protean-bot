@@ -1,0 +1,328 @@
+{
+  "_source": "Extracted from official Uniswap build artifacts: @uniswap/v4-periphery@1.0.3 (foundry-out) and @uniswap/universal-router@2.0.0 (artifacts). Do not hand-edit.",
+  "universalRouter": [
+    {
+      "inputs": [
+        {
+          "name": "commands",
+          "type": "bytes"
+        },
+        {
+          "name": "inputs",
+          "type": "bytes[]"
+        },
+        {
+          "name": "deadline",
+          "type": "uint256"
+        }
+      ],
+      "name": "execute",
+      "outputs": [],
+      "stateMutability": "payable",
+      "type": "function"
+    }
+  ],
+  "permit2": [
+    {
+      "type": "function",
+      "name": "approve",
+      "inputs": [
+        {
+          "name": "token",
+          "type": "address"
+        },
+        {
+          "name": "spender",
+          "type": "address"
+        },
+        {
+          "name": "amount",
+          "type": "uint160"
+        },
+        {
+          "name": "expiration",
+          "type": "uint48"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "allowance",
+      "inputs": [
+        {
+          "name": "user",
+          "type": "address"
+        },
+        {
+          "name": "token",
+          "type": "address"
+        },
+        {
+          "name": "spender",
+          "type": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "amount",
+          "type": "uint160"
+        },
+        {
+          "name": "expiration",
+          "type": "uint48"
+        },
+        {
+          "name": "nonce",
+          "type": "uint48"
+        }
+      ],
+      "stateMutability": "view"
+    }
+  ],
+  "positionManager": [
+    {
+      "type": "function",
+      "name": "modifyLiquidities",
+      "inputs": [
+        {
+          "name": "unlockData",
+          "type": "bytes"
+        },
+        {
+          "name": "deadline",
+          "type": "uint256"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "payable"
+    },
+    {
+      "type": "function",
+      "name": "initializePool",
+      "inputs": [
+        {
+          "name": "key",
+          "type": "tuple",
+          "components": [
+            {
+              "name": "currency0",
+              "type": "address"
+            },
+            {
+              "name": "currency1",
+              "type": "address"
+            },
+            {
+              "name": "fee",
+              "type": "uint24"
+            },
+            {
+              "name": "tickSpacing",
+              "type": "int24"
+            },
+            {
+              "name": "hooks",
+              "type": "address"
+            }
+          ]
+        },
+        {
+          "name": "sqrtPriceX96",
+          "type": "uint160"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "int24"
+        }
+      ],
+      "stateMutability": "payable"
+    },
+    {
+      "type": "function",
+      "name": "getPoolAndPositionInfo",
+      "inputs": [
+        {
+          "name": "tokenId",
+          "type": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "poolKey",
+          "type": "tuple",
+          "components": [
+            {
+              "name": "currency0",
+              "type": "address"
+            },
+            {
+              "name": "currency1",
+              "type": "address"
+            },
+            {
+              "name": "fee",
+              "type": "uint24"
+            },
+            {
+              "name": "tickSpacing",
+              "type": "int24"
+            },
+            {
+              "name": "hooks",
+              "type": "address"
+            }
+          ]
+        },
+        {
+          "name": "info",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "getPositionLiquidity",
+      "inputs": [
+        {
+          "name": "tokenId",
+          "type": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "liquidity",
+          "type": "uint128"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "nextTokenId",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "ownerOf",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "owner",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view"
+    }
+  ],
+  "stateView": [
+    {
+      "type": "function",
+      "name": "getSlot0",
+      "inputs": [
+        {
+          "name": "poolId",
+          "type": "bytes32"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "sqrtPriceX96",
+          "type": "uint160"
+        },
+        {
+          "name": "tick",
+          "type": "int24"
+        },
+        {
+          "name": "protocolFee",
+          "type": "uint24"
+        },
+        {
+          "name": "lpFee",
+          "type": "uint24"
+        }
+      ],
+      "stateMutability": "view"
+    }
+  ],
+  "v4Quoter": [
+    {
+      "type": "function",
+      "name": "quoteExactInputSingle",
+      "inputs": [
+        {
+          "name": "params",
+          "type": "tuple",
+          "components": [
+            {
+              "name": "poolKey",
+              "type": "tuple",
+              "components": [
+                {
+                  "name": "currency0",
+                  "type": "address"
+                },
+                {
+                  "name": "currency1",
+                  "type": "address"
+                },
+                {
+                  "name": "fee",
+                  "type": "uint24"
+                },
+                {
+                  "name": "tickSpacing",
+                  "type": "int24"
+                },
+                {
+                  "name": "hooks",
+                  "type": "address"
+                }
+              ]
+            },
+            {
+              "name": "zeroForOne",
+              "type": "bool"
+            },
+            {
+              "name": "exactAmount",
+              "type": "uint128"
+            },
+            {
+              "name": "hookData",
+              "type": "bytes"
+            }
+          ]
+        }
+      ],
+      "outputs": [
+        {
+          "name": "amountOut",
+          "type": "uint256"
+        },
+        {
+          "name": "gasEstimate",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    }
+  ]
+}

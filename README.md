@@ -1,375 +1,405 @@
-# DAO Spaces
+# Protean — DAO Governance Bot for Telegram, Discord, Slack and WhatsApp
 
-A governance-agnostic DAO framework — an original, from-scratch on-chain governance protocol where a DAO's treasury and its governance rules are kept as two separate, swappable pieces, rather than locked together.
+Turns a group chat into a fully functioning DAO. Deploy a governance system under any of ten models, get a wallet, stake, propose, vote, trade decision markets, and place confidential bets — all without leaving the chat. Runs on Telegram, Discord, Slack and WhatsApp. Deployed on Monad testnet, Base Sepolia and HyperEVM testnet; the mainnets are supported but not yet deployed.
 
-Every module — proposal lifecycle, voting, quorum/approval math, timelocks, and every one of the ten governance models below — is implemented from scratch, purpose-built for this framework. The companion bot — Telegram, Discord and Slack — lives in [`protean-bot`](https://github.com/replico-labs/protean-bot).
+Contracts live in the companion repo, [`Spaces`](https://github.com/replico-labs/Spaces). See its README for deployed addresses per network.
 
-## Why this exists
+## Status
 
-Most EVM chains handle DAO governance one of two ways today:
+- **Contracts:** 539/539 Foundry tests pass (see Spaces).
+- **Live on Monad testnet:** all ten models' full lifecycles pass `scripts/test-evm-models.mjs` (174 steps, every proposal paying out of its treasury): votes, challenges, conviction with a spending budget, delegate elections and recalls, a sortition draw with Pyth Entropy, a Sowellian adjudication and a decision-market finalization. Earlier, the create → propose → vote → queue → execute loop also ran through Telegram for token-weighted and Board DAOs.
+- **Tested end to end on local chains** (anvil, with the real contracts deployed from source): every model's full lifecycle through the Discord and Slack handlers — the same command code Telegram uses for the shared paths — about 230 checks, including a GuardWrapper handover with a treasury payout confirmed by signers. The network layer has its own two-chain test: one bot process serving a "Monad" chain and a "Base" chain at once.
+- **Live on Base Sepolia:** the same eleven flows (all ten models plus Sowellian's Pyth-price route) pass `scripts/test-evm-models.mjs`, for about 0.0024 ETH of operator gas.
+- **Deployed on HyperEVM testnet** (and Base Sepolia): all ten factories plus the Pyth Entropy and price-feed adapters, built with Spaces' `size-limited` profile (addresses in Spaces' README).
+- **HyperEVM testnet, locally:** all eleven flows pass against a local chain-998 stand-in that enforces HyperEVM's 8-nonce mempool rule and 2M-gas small blocks (Decision Markets with the two-step contract).
+- **Not yet run live:** any DAO lifecycle on HyperEVM testnet, the mainnets (nothing deployed), and real Discord and Slack workspaces. (WhatsApp runs live as its own Railway service; Pyth Entropy and Hermes prices have both run on Monad testnet; an Opportunity Market has run end to end through Telegram on Sepolia, FHE relayer included.) See [What's not verified yet](#whats-not-verified-yet).
 
-- **Snapshot** — off-chain voting. Votes are signed messages, not transactions; nothing is enforced by the chain, and someone still has to execute the result by hand.
-- **A custom-built governance system** — hard to get right, and once deployed, usually locked in. Changing the rules means migrating the entire treasury, and a DAO is stuck with whichever decision-making model it launched with.
+## How wallets work
 
-DAO Spaces executes every governance action fully on-chain, and a DAO isn't locked into one way of deciding. It can start with a small trusted board, grow into token-weighted voting, switch to quadratic voting to reduce whale influence, adopt continuous conviction voting, let a randomly drawn council govern, or let markets decide — all without the treasury moving.
+Every user gets their own independently generated wallet, created automatically the first time they need one — no external wallet app, no connect step. One wallet per user per chat platform; the same address works on every EVM network.
+
+Each private key is **envelope-encrypted with AWS KMS** (AES-256-GCM, with a per-user data key wrapped by one symmetric KMS key) and stored in Supabase. The plaintext key only exists in memory for the instant a transaction is signed. A leaked database alone reveals nothing usable; decryption requires KMS access too.
+
+This is still a **custodial** model — the bot's backend can decrypt any user's key. It trades some decentralization for zero-friction onboarding.
+
+The operator wallet pays users' gas, never the amounts they send.
+- **On creation:** a new wallet gets its starting gas as soon as it's created, on the chat's network. That's 0.1 MON on Monad, 0.0002 ETH on Base and 0.01 HYPE on HyperEVM by default.
+- **Before each transaction:** the bot reads the wallet's balance fresh from the chain. If the balance can't cover that transaction's up-front cost, the operator tops up the shortfall (at least the network's repeat amount) before signing. Monad charges gas limit × max fee up front, so this is checked against the fees the transaction is actually sent with.
+- **Other networks:** a wallet is funded on first use there.
+
+**Legacy wallets.** Earlier versions derived every Telegram wallet from a single `MASTER_WALLET_SEED`. If a user still has funds under that old address, the bot refuses to silently create a second wallet and asks them to run `/migratewallet` first, which sweeps the native balance across (ERC20 tokens must be moved manually — the command says so).
+
+## Networks
+
+| Network | id | Chain | Gas token | Notes |
+|---|---|---|---|---|
+| Monad testnet | `monad-testnet` | 10143 | MON | the default; all ten factories and both Pyth adapters deployed |
+| Monad mainnet | `monad-mainnet` | 143 | MON | not yet deployed |
+| Base | `base` | 8453 | ETH | not yet deployed; contracts must be built with Spaces' `size-limited` profile |
+| Base Sepolia | `base-sepolia` | 84532 | ETH | all ten factories and both Pyth adapters deployed (`size-limited`); every model's lifecycle verified live |
+| HyperEVM | `hyperevm` | 999 | HYPE | not yet deployed; `size-limited`, plus big blocks for factory deploys |
+| HyperEVM testnet | `hyperevm-testnet` | 998 | HYPE | all ten factories and both Pyth adapters deployed (`size-limited`, big blocks); set a provider `HYPEREVM_TESTNET_RPC_URL`, the public RPC rate-limits hard |
+
+**Each chat's DAO lives on one network**, chosen when it's created or linked:
+
+```
+/createdao ArkDAO ARK 1000000 10000000 quadratic base
+/createboarddao ArkBoard 0xA... 0xB... hyperevm
+/register 0xGovernance... tokenWeighted base
+```
+
+Creating a DAO **requires** a network word (anywhere after the supplies, or after the name for `/createboarddao`); without one the bot refuses and lists the network codes it accepts (the enabled networks, plus `solana` when Solana is on). `/register` still falls back to the bot's default network. From then on every command in that chat reads and writes that chain. `/network` shows which one. Chats registered before networks existed are Monad testnet.
+
+**Enabling a network** takes, per network: an entry in `NETWORKS`, factory addresses under that network's prefix (`BASE_FACTORY_ADDRESS`, `BASE_QUADRATIC_FACTORY_ADDRESS`, ...), and native gas in the operator wallet. An RPC is optional (`BASE_RPC_URL`; viem's public RPC otherwise). See `.env.example`.
+
+What changes between networks, handled automatically:
+
+- **Block-counted voting periods are rescaled.** Several governance periods are counted in blocks, and the defaults were written for Monad's 400 ms blocks: 50,400 blocks is ~5.6 h on Monad but ~28 h on Base. New DAOs get their block-counted fields scaled to the same wall-clock length (10,080 on Base, 20,160 on HyperEVM). Periods counted in seconds (timelocks, execution windows, Sowellian's challenge period) are unchanged.
+- **Gas.** Monad charges the full gas limit, not gas used, and its `eth_estimateGas` can come back far too high (a Board execute that used ~150k was estimated at ~9.94M). So no limit is a guess (`src/gasLimit.js`): each write is simulated once with `eth_createAccessList` to get the gas it really uses (or, where a node lacks that, the smallest limit `eth_call` succeeds within, found by halving), then sent at that +15%, or +20% if a simulation capped at +15% fails, plus 25,000 gas because the simulation runs against the latest block while the transaction lands in the next one (code that settles "up to this block", like Conviction's support, can write storage the simulation skipped). A transaction that is mined but reverts is reported as an error, never as success. Contract writes, deployments, native sends, Board execute (no longer pinned at 400k) and the Sepolia market writes all use it. On HyperEVM the limit is capped at the 2M small-block limit; a transaction that genuinely needs more fails with an explanation, since its sender would have to switch to big blocks. Every model's DAO creation fits under 2M (the heaviest, Conviction, is ~1.38M). A Decision Markets proposal is sent as two transactions where the DAO's contract has the two-step `propose` + `openMarkets` (see Spaces' README): one call was ~2.3M gas; older Decision Markets DAOs do it in one, and the bot handles both. The operator keeps at most 8 transactions waiting on HyperEVM, the most its mempool accepts from one address, and should stay on small blocks.
+- **The native token.** `/send 1 0x... ETH` on Base, `HYPE` on HyperEVM, `MON` on Monad — or `native` anywhere.
+
+Opportunity Markets are separate and always on Ethereum Sepolia; Zama's FHE coprocessor doesn't exist on Monad, Base or HyperEVM.
+
+### Solana (Vortexes)
+
+Solana DAOs run on [Vortexes](https://github.com/replico-labs/Vortexes), the Solana version of Spaces: one hub program holds every DAO's treasury, and the DAO's governance program decides. It's off unless `SOLANA_ENABLED=true` (see `.env.example`); with it off, nothing changes on any platform.
+
+Naming a Solana network creates or links a Solana DAO:
+
+```
+/createdao ArkDAO ARK 1000000 10000000 solana
+/createdao ArkDAO ARK 1000000 10000000 conviction solana
+/createdao ArkDAO ARK 1000000 10000000 delegate solana <council address> <council address>
+/createboarddao ArkBoard <solana address> <solana address> solana
+/register <dao address> solana
+```
+
+All six Vortexes models work: **token-weighted**, **quadratic**, **optimistic**, **conviction**, **delegate** and **board**, on **Solana devnet** (`solana` and `solana-devnet` both mean devnet until mainnet is deployed). In a chat linked to a Solana DAO:
+
+| Command | Does |
+|---|---|
+| `/dao`, `/treasury` | the DAO's treasury (SOL and tokens), rules, council or signers |
+| `/wallet`, `/balance` | your Solana wallet, its SOL, tokens and stake |
+| `/stake`, `/unstake <amount>` | stake the DAO's token (every model but board) |
+| `/tip <amount> <address\|treasury>` | hand out the starting tokens (the DAO's creator) |
+| `/propose <recipient> <amount> <SOL\|token> <description>` | a payment from the treasury, in SOL, the DAO's token or any token by mint |
+| `/listactions`, `/actioninfo`, `/proposeaction` | transfer SOL or tokens, mint tokens, board signers, conviction assets, switch to another model |
+| `/vote <id> for\|against\|abstain`, `/queue <id>` | token-weighted, quadratic, delegate (council), and optimistic once challenged |
+| `/challenge <id>` | optimistic: dispute a proposal with a bond, forcing a vote |
+| `/support <id>`, `/withdrawsupport`, `/mysupport`, `/assets` | conviction |
+| `/council`, `/startelection`, `/declarecandidacy`, `/voteinelection`, `/finalizeelection`, `/initiaterecall`, `/voterecall`, `/finalizerecall` | delegate |
+| `/confirm`, `/revoke <id>` | board signers |
+| `/execute <id>`, `/cancel <id>`, `/proposals`, `/proposal <id>` | as on EVM |
+
+- **Wallets.** Each user gets a Solana wallet next to their EVM one, encrypted with the same KMS key and stored on the same Supabase row (`wallets.solana`). `/wallet` shows both. The bot tops it up with a little SOL when it needs fees or rent.
+- **Tokens.** The DAO's token has 6 decimals; its whole initial supply goes to the bot's Solana wallet, handed out with `/tip`. There's no fixed maximum: the treasury is the mint authority, so new tokens can only be minted by a passed proposal (the `mint` action).
+- **Defaults** match the EVM ones: 10% quorum, 60% approval, ~5.6 h votes, 1-day timelock, 7 days to run; optimistic challenges post a 100-token bond; delegate councils serve 2-day terms and a majority of seats passes a proposal; boards need a majority of signers. Conviction bars scale with the token's supply: the larger of 1% of supply and 20% of all staked tokens, plus a proposal's spending budget (SOL and the DAO's token each weigh a quarter of supply). `SOLANA_DEVNET_FAST_TIMINGS=true` shortens every period to minutes for testing.
+- **Switching models.** The `switch...` actions move a DAO to another model with the same treasury and token. The switch applies 2 days after its proposal runs; the bot applies it then (the next time anyone uses the DAO, or from the notifier) and updates the chat.
+- **Notifications.** Each platform's event listener also watches its Solana chats: new proposals, challenges, queued and executed proposals, cancellations, elections and recalls.
+- **Not on Solana:** the EVM-only extras (wrappers, distributors, integrations, liquid delegation, sortition). Those commands say so in a Solana chat; Opportunity Market commands work as usual. On Discord, `/propose`'s fields read target/value/data for EVM and recipient/amount/asset for Solana.
+
+`scripts/test-solana-local.mjs` runs these commands end to end against a local validator running the Vortexes programs.
+
+## Commands
+
+`/help` is model-aware: it only shows commands that apply to the current chat's governance model and linked wrappers/markets.
+
+### Setup
+- `/createdao <name> <symbol> <initialSupply> <maxSupply> [model] [network] [council...]` — deploy a DAO and link it here. Models: `tokenWeighted` (default), `quadratic`, `liquid`, `optimistic`, `delegate`, `sortition`, `conviction`, `sowellian`, `decisionMarkets`. `delegate` and `sortition` take the starting council as trailing addresses; sortition's randomness source comes from the bot's config.
+- `/createboarddao <name> <signer1> <signer2> ... [network]` — deploy a Board (multisig) DAO; no token at all
+- **Spaces in arguments:** a description (`/propose`, `/proposeaction`, `/vote` reasons, `/listopportunity`) is everything after the last fixed argument, so it can be plain text with spaces. A DAO name with spaces goes in quotes: `/createdao "Ark DAO" ARK 1000000 10000000` (straight or curly quotes; on Telegram and Slack). Discord's name field takes spaces as is.
+- `/register <address> [model] [network]` / `/unregister` — link or unlink an existing DAO. `/register` checks the address really is that model's contract on that network.
+- `/network` — which chain this chat's DAO is on, and which networks the bot supports
+- `/deploywelcomedistributor <amountPerClaim> <cap>` / `/setdistributor <address>` — welcome tokens for new members; `/claim` (also automatic on join)
+- `/deploynftwrapper` — the DAO's NFT wrapper (see [NFTs](#nfts))
+- `/deployguardwrapper <requiredApprovals> <tenureSeconds> <signer...>` / `/registerguardwrapper <address>` / `/handovertowrapper <address>` — a security council (see [Guard wrapper](#guard-wrapper))
+
+### Wallet and tokens
+- `/wallet` · `/migratewallet` · `/balance [address]`
+- `/tip <amount> <recipient> [token]` — hand out the DAO's operator-held supply (creator only)
+- `/send <amount> <recipient> [token|native]` — send tokens or native currency you hold
+- `/tokenbalance [token] [address|treasury]` · `/registertoken <ticker> <address>` · `/treasuryassets`
+- `/stake <amount>` · `/unstake <amount>`
+
+### The DAO
+- `/dao` — name, token, treasury, full model-specific config
+- `/treasury` · `/contribute` (treasury address, sent privately)
+- `/proposals` · `/proposal <id>` — list, or full detail rendered for each model's own vote shape
+
+### Proposing and deciding
+- `/listactions` · `/proposeaction <actionId> <args...> <description>` — the verified action library: every native governance, Treasury, token and wrapper admin function, encoded for you, plus the external protocol actions available on the chat's network (see [External protocol actions](#external-protocol-actions)). After a GuardWrapper handover, Treasury and token actions are routed through the wrapper automatically. Works for every model: Sowellian and Decision Markets DAOs add their settings as `name=value` words anywhere after the action ID (below), so nobody has to hand-type calldata into `/proposecriteria` or `/proposemarket`.
+- `/actioninfo <actionId>` — an action's arguments, options, and the sources its contract addresses were checked against
+- `/propose <target> <value> <data> <description>` — raw calldata, for anything else
+- `/vote <id> for|against|abstain [reason]` · `/queue <id>` · `/execute <id> [nativeValue]` · `/cancel <id>`
+
+### Model-specific
+| Model | Commands |
+|---|---|
+| Board | `/confirm <id>`, `/revoke <id>` |
+| Liquid | `/delegate <address>`, `/undelegate`, `/resolvedelegations <id> [address]` |
+| Optimistic | `/challenge <id>` |
+| Conviction | `/support <id>`, `/withdrawsupport`, `/mysupport`, `/assets [apply <asset>]` |
+| Delegate | `/startelection`, `/declarecandidacy`, `/voteinelection`, `/finalizeelection`, `/initiaterecall`, `/voterecall`, `/finalizerecall`, `/council` |
+| Sortition | `/registereligible`, `/withdraweligibility`, `/startsortition`, `/finalizesortition`, `/council` |
+| Sowellian | `/proposecriteria`, `/castapprovalvote`, `/finalizeapproval`, `/takeposition`, `/resolveviaoracle`, `/proposeresolution`, `/challengeresolution`, `/finalizeunchallenged`, `/castadjudicationvote`, `/finalizeadjudication`, `/claimposition` |
+| Decision Markets | `/proposemarket`, `/split`, `/trade`, `/merge`, `/finalizeproposal`, `/redeem`, `/unwrap`, `/reclaimliquidity` |
+
+**Liquid delegation.** A delegate's vote counts only their own tokens. Each delegator's weight is added by a separate on-chain call, `resolveDelegatedVote`, which anyone can make while voting is open. The bot makes these calls for you:
+- **When a delegate votes through `/vote`,** it resolves everyone behind them, up to 5 delegation hops, and replies with how much weight was added.
+- **The event listener** does the same for every vote seen on-chain (including votes cast outside the bot), and for anyone who delegates while a proposal is open.
+- **`/resolvedelegations <id> [address]`** runs it on demand.
+
+The operator wallet pays for these calls. Someone who votes directly before being resolved keeps their own vote.
+
+Bonds and seeds (Optimistic challenges, Sowellian bonds and positions, Decision Markets seeds and trades) are approved automatically before the contract pulls them.
+
+### Guard wrapper
+- `/guardwrapper` — signers, threshold, tenure
+- `/instruction <id>` · `/confirminstruction <id>` · `/rejectinstruction <id>` · `/revokeconfirmation <id>`
+
+### Sowellian and Decision Markets through `/proposeaction`
+```
+/proposeaction treasury-transfer-eth 0xRecipient 1 measure=7d Fund the grant                      (Sowellian, human track)
+/proposeaction treasury-transfer-eth 0xRecipient 1 track=oracle feed=ETH/USD goal=3000 when=min measure=30d Grow TVL
+/proposeaction treasury-transfer-eth 0xRecipient 1 seed=1000 quote=5 Fund the campaign            (Decision Markets)
+```
+- **Sowellian:** `track=human|oracle` (default human); on the oracle track `feed=<pair>` (e.g. `ETH/USD`, looked up in Pyth's feed list on Hermes - a plain pair means the plain price feed, `Crypto.ETH/USD`; name another in full, e.g. `FundingRate.Hyperliquid.ETH/USD`, or pass a raw feed ID). `/feeds <search>` (e.g. `/feeds eur`) lists Pyth's feeds and what to type for each; the proposal reply names the feed it resolved to and its price at the time and `goal=<price>` (e.g. 3000, sent as 18 decimals) are required and `oracle=` defaults to `pyth`, this network's `PYTH_PRICE_ADAPTER`; `when=min|max` (default min), `measure=<duration>` (default 7d). `/actioninfo` lists them in a Sowellian chat.
+- **Decision Markets:** `seed=<DAO tokens>` and `quote=<native>`, both required.
+- `/proposecriteria` and `/proposemarket` remain for raw calls the library doesn't cover.
+
+### Proposal pages
+Every proposal gets a page on the website, `PROPOSAL_SITE_URL/p/<network>/<dao>/<id>`, with details its proposer writes there next to live on-chain data (state, votes or conviction, budget, timelock, actions).
+- **After proposing**, the group sees the page link and the proposer gets a private link to add the details: a Telegram DM (or, if the bot can't message them first, a `t.me/<bot>?start=…` link that opens one), a message only they can see on Discord and Slack, or a WhatsApp DM.
+- **Submitted once, never changed**, so what people back is what they read; the page shows the details' fingerprint (sha256). The proposer has a grace period after proposing (`PROPOSAL_DETAILS_GRACE_HOURS`, default 6) to submit them even if voting has started; after that, only while nobody has voted or backed the proposal, up to 72 hours.
+- **`/proposal <id>`** ends with the page link. Run by the proposer before they've submitted, it also re-sends their link privately.
+- **How it's served:** the website is static; it reads `GET /api/proposals/<network>/<dao>/<id>` from the bot and the form `POST`s back. The routes share the Slack install page's HTTP server when "Add to Slack" is set up, otherwise the Telegram process listens on `PORT`. Only DAOs registered with the bot are served; CORS allows only `PROPOSAL_SITE_URL`. Edit links are HMAC-signed with `PROPOSAL_LINK_SECRET` and expire with the edit window.
+- **Solana DAOs** get the same pages at `/p/solana-devnet/<governance account>/<id>`: the governance account, not the DAO, so pages stay right after a model switch (the new governance numbers its proposals from 1 again). Live data comes straight from the Vortexes programs; instructions are described in words, addresses link to Solana's explorer.
+- **Board DAOs:** proposing counts as the proposer's own confirmation, so details stay open until a second signer confirms.
+- **Setup:** run the `proposal_details` part of `supabase/schema.sql`, then set `PROPOSAL_SITE_URL` and `PROPOSAL_LINK_SECRET` (a long random string). Without them the bot behaves as before.
+
+### Conviction spending budgets
+Conviction DAOs from the newer factory check what each proposal spends (see Spaces' README, "Conviction spending budgets"). The bot fills in the budget itself: native sent by `transferETH` or with a `Treasury.execute` step, and tokens moved by `transferERC20` or approved/transferred inside `Treasury.execute` - which covers every action in `/listactions`, the protocol integrations and raw `/propose` calls of those shapes. `/proposal` shows "May spend: 10 USDC, 0.5 MON", or a warning when a proposal weakens the rules. `/assets` lists the assets, their weights, the Treasury's holdings and pending cuts (`/assets apply <asset>` once one is due). The list changes by proposal: `conviction-add-asset`, `conviction-set-asset-weight`, `conviction-remove-asset` (native: `MON`/`ETH`/`HYPE` or `native`). Older Conviction DAOs keep proposing the old way.
+
+### Sowellian oracle proposals (raw calls)
+```
+/proposecriteria <target> <value> <data> oracle <pyth|adapter> <feedId> <targetValue> min|max <measurementPeriodSeconds> <description>
+```
+- **Pyth:** type `pyth` (the network's `PYTH_PRICE_ADAPTER`) and the Pyth price feed ID (0x + 64 hex, from Pyth's price feed list). One adapter serves every feed. The target value is a price, e.g. `3000`, sent as 18 decimals.
+- **Resolving:** Pyth is pull-based. `/resolveviaoracle` fetches the feed's latest signed update from Pyth's Hermes service (needs `PYTH_API_KEY` from Pyth Terminal; `PYTH_HERMES_URL` defaults to `https://pyth.dourolabs.app/hermes`), posts it to Pyth paying its small fee from the caller's wallet, then resolves, so the price is fresh for `maxOracleStaleness`.
+- **Human track:** `human - -` in the oracle and feed slots.
+
+### Opportunity Markets (Ethereum Sepolia, FHE-encrypted)
+- `/createmarket <underlyingToken>` · `/registermarket <address>` · `/unregistermarket` (group owners/admins only)
+- `/listopportunity <metadataURI>` · `/deposit <amount>` · `/back <opportunityId> <amount>` (confidential)
+- `/mybalance` · `/mybet <index>` · `/allbets` · `/analytics` (deployer only, sent privately: total staked, average bet, average per bettor and largest bet, overall and per opportunity, plus each opportunity's share of all stake. Built from the bets the contract already lets the deployer decrypt; nothing new is revealed publicly)
+- `/fundrewardpool` · `/resolve <id>` · `/cancelmarket` (deployer only)
+- `/reclaimstake` · `/computereward` · `/revealwinningtotal` · `/withdraw` · `/withdrawreward`
+- `/computereward` tells you the reward amount privately. The contract keeps it encrypted with no getter, so the bot works it out from your own decrypted bets and the public pool, winning opportunity and winning total, repeating the contract's 64-bit math exactly (and warns if that math wrapped). `/withdraw` and `/withdrawreward` report the exact amount paid: the KMS-signed cleartext the contract pays out.
+- `/send <amount|all> <recipient> [ETH]` — in a market group, sends the market's token (your withdrawn stake or reward) or Sepolia ETH from your wallet. In a group with a DAO too, add `market` (or the token's symbol or address) to send the market's token. Sepolia gas isn't sponsored; an empty wallet is told how much it needs and its address.
+
+`/registermarket` only accepts addresses the configured `OpportunityMarketFactory` reports as its own (`isMarket`).
+
+
+## External protocol actions
+
+`/proposeaction` can also propose actions on outside protocols. The DAO's funds sit in its Treasury, so each action is one proposal made of several `Treasury.execute(target, value, data)` steps (approve, then act), with the protocol seeing the Treasury as the caller. NFT actions go through the DAO's NFT wrapper instead. After a GuardWrapper handover, every step is routed through the wrapper like any other Treasury action. An action is offered only on networks where its protocol is deployed.
+
+Arguments are positional, then `name=value` options (`/actioninfo` lists them), then the description. Minimum-out amounts are fixed when proposing, and deadlines default to 30 days, so a price that moves too far before execution makes the proposal revert rather than fill badly.
+
+| Protocol | Networks | Actions |
+|---|---|---|
+| Uniswap v4 | Monad, Monad testnet (Monad-maintained), Base, Base Sepolia | `uniswap-swap`, `uniswap-add-liquidity`, `uniswap-remove-liquidity`, `uniswap-collect-fees` |
+| Aave v3 | Monad, Base, Base Sepolia | `aave-supply`, `aave-withdraw`, `aave-borrow`, `aave-repay`, `aave-collateral` |
+| shMON (FastLane) | Monad | `shmon-stake`, `shmon-unstake-instant`, `shmon-request-unstake`, `shmon-complete-unstake` |
+| Nad.fun | Monad, Monad testnet | `nadfun-buy`, `nadfun-sell` |
+| Perpl | Monad, Monad testnet | `perpl-deposit`, `perpl-withdraw`, `perpl-open`, `perpl-close` |
+| OpenSea (Seaport 1.6) | Monad, Base, HyperEVM | `opensea-list`, `opensea-update-listing`, `opensea-cancel-listing`, `opensea-buy` — needs `OPENSEA_API_KEY` |
+| Aerodrome | Base | `aerodrome-swap`, `aerodrome-add-liquidity`, `aerodrome-remove-liquidity` |
+| Lido wstETH | Base | `lido-buy-wsteth`, `lido-sell-wsteth` — through Aerodrome, with the minimum set from Lido's own wstETH/stETH rate feed |
+| Flaunch | Base, Base Sepolia | `flaunch-buy`, `flaunch-sell` — planned by Flaunch's SDK (pinned), current-generation coins only |
+| HyperLend | HyperEVM ⚠ | `hyperlend-supply`, `hyperlend-withdraw`, `hyperlend-borrow`, `hyperlend-repay`, `hyperlend-collateral` |
+| HyperCore | HyperEVM ⚠, HyperEVM testnet ⚠ | `hypercore-deposit-hype`, `hypercore-deposit-usdc`, `hypercore-order`, `hypercore-cancel`, `hypercore-usd-transfer`, `hypercore-withdraw` |
+| HyperSwap (v3) | HyperEVM | `hyperswap-swap` |
+| Kinetiq kHYPE | HyperEVM ⚠ | `kinetiq-buy-khype`, `kinetiq-sell-khype` — through HyperSwap, with the minimum set from Kinetiq's own kHYPE→HYPE rate |
+
+⚠ marks deployments whose addresses or encodings come from a source other than the protocol's own (each shows the warning in `/actioninfo`):
+- HyperLend's registry address is from DefiLlama.
+- HyperCore's encodings are from hyper-evm-lib, which Obsidian Audits maintains.
+- Kinetiq's kHYPE and rate contract are from DefiLlama and a community CLI.
+
+**Check addresses before enabling a network:** `npm run verify:integrations [network ...]`. It reads every address over the real RPCs and checks four things:
+- every contract has code;
+- the protocols' cross-references hold (for example, that a router's factory is the factory listed here);
+- known token symbols are as expected;
+- protocol-specific facts, such as HyperCore's precompiles agreeing on the USDC and HYPE token indexes.
+
+HyperCore note: Core applies CoreWriter actions just after the EVM transaction. A proposal can execute successfully while Core rejects the order (tick size, no balance, no fill). The bot checks Hyperliquid's tick and lot rules before proposing, and says so in every summary.
+
+## NFTs
+
+The Treasury can't receive NFTs (it has no ERC721/ERC1155 receiver hooks), so **a DAO's NFTs live in its NFT wrapper** (`/deploynftwrapper`):
+
+- Send NFTs to the wrapper's address, never to the Treasury.
+- Governance lists them (`nftwrapper-approve-order-hash`), sends them out (`nftwrapper-transfer-erc721` / `-erc1155`, which refuse the Treasury as a recipient), or calls a marketplace directly (`nftwrapper-execute`).
+- Sale proceeds go back to the Treasury with `nftwrapper-sweep-native` / `-erc20`.
+- Every one of those is a proposal (`/proposeaction`). To buy an NFT, first move funds from the Treasury to the wrapper (`treasury-transfer-eth` / `-erc20`).
+
+## Discord, Slack and WhatsApp
+
+Every Telegram command also runs on Discord, Slack and WhatsApp, except `/start` (use `help`) and `/migratewallet` (legacy seed wallets only ever existed for Telegram IDs). Each platform runs as its own process sharing the same `data/` volume, wallet store and chain config as the Telegram bot. None needs `TELEGRAM_BOT_TOKEN`.
+
+```bash
+npm run discord   # DISCORD_BOT_TOKEN, DISCORD_APPLICATION_ID, optional DISCORD_GUILD_ID
+npm run slack     # SLACK_APP_TOKEN + either SLACK_BOT_TOKEN (one workspace) or the "Add to Slack" settings below
+npm run whatsapp  # WHATSAPP_LINK_SECRET (scan a QR) or WHATSAPP_PHONE_NUMBER (pairing code)
+```
+
+- **Discord** registers 62 native slash commands on startup (Discord allows 100). The specialist ones are subcommands of four group commands, with the same names as elsewhere: `/market …` (Opportunity Market, e.g. `/market back`), `/sowellian …`, `/decision-market …` and `/guard …`; the bot's replies on Discord name them that way. Registration refuses to start with more than 100, so new commands get grouped rather than silently dropped. `createdao`, `createboarddao`, `register`, `unregister`, `createmarket`, `registermarket` and `unregistermarket` are for members with *Manage Server* only. Long replies are split across messages.
+- **Slack** uses one command, `/protean <subcommand>` (e.g. `/protean vote 3 for`). Create the app from [`docs/slack-app-manifest.yml`](docs/slack-app-manifest.yml). Joining a channel with a welcome distributor sends the newcomer their tokens, as on Telegram.
+- **Slack in any workspace:** with `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`, `SLACK_STATE_SECRET` and `SLACK_PUBLIC_URL` set, the Slack process also serves an "Add to Slack" link at `<SLACK_PUBLIC_URL>/slack/install` (on `PORT`, so the service needs a public domain). Each workspace's bot token is stored encrypted under the wallets' KMS key, in Supabase's `slack_installations` table (`supabase/schema.sql`); uninstalling deletes it. Install into your own workspace through the same link, then activate public distribution. Without `SLACK_CLIENT_ID` it runs in one workspace on `SLACK_BOT_TOKEN`. Slack doesn't list Socket Mode apps in its App Directory, so share the link directly.
+- **WhatsApp** runs through [Baileys](https://baileys.wiki/), an unofficial library that links the bot's own WhatsApp number as a linked device (like WhatsApp Web). Commands are ordinary messages starting with `/` (e.g. `/vote 3 for`), in a group or a DM with the bot's number; one group links to one DAO. Add the number to a group like any contact.
+  - **Linking the number, by QR (like WhatsApp Web):** set `WHATSAPP_LINK_SECRET` to a long random string (e.g. `openssl rand -hex 32`) and leave `WHATSAPP_PHONE_NUMBER` unset. Open `https://<bot domain>/whatsapp/link?key=<WHATSAPP_LINK_SECRET>` on a computer or a second screen, then on the bot's phone go to *WhatsApp → Linked devices → Link a device* and scan it. The page follows WhatsApp's QR as it changes every 20 s and switches to "linked" once done. It's served on the bot's public port (the Slack install server, or the Telegram process when Slack's isn't running), and the QR is drawn by the bot itself, never sent to an outside QR service: whoever scans it links *their* WhatsApp to the bot, so keep the link private. Wrong keys are rate limited.
+  - **Or by pairing code:** set `WHATSAPP_PHONE_NUMBER` (digits with country code, e.g. `2348012345678`) instead. The log prints a code; on the bot's phone open *WhatsApp → Linked devices → Link a device → Link with phone number instead* and enter it. A code lasts about 2 minutes and a new one follows. When the number is set, it's used instead of the QR.
+  - The session is saved in `data/whatsapp-auth/` (override with `WHATSAPP_AUTH_DIR`), so it must be on the persistent volume; later restarts reconnect without scanning. If the device is unlinked from the phone, the saved session is cleared and linking starts again.
+  - **Wallets** are keyed to the member's WhatsApp LID (its privacy ID), not their phone number, so a wallet survives a number change and the bot never stores numbers.
+  - **Private replies:** WhatsApp has nothing like ephemeral messages, so results that are actually private (bets, confidential balances, rewards, handover proposals, the treasury address from `contribute`, a proposer's edit link) go to the caller's DM, with a one-line pointer in the group. Everything else is answered in the group, including `help`, `wallet`, `listactions` and `actioninfo` (which Discord shows privately only to keep channels tidy) and errors. If a DM can't be delivered, the bot asks the member to message it first.
+  - Only one process may use the linked session at a time; a second one makes WhatsApp drop the first (the bot logs this and stops). Commands from the same person run one at a time; messages WhatsApp delivers more than 5 minutes late are ignored. Replies in groups with disappearing messages use the group's timer.
+  - **Risk:** Baileys is not an official WhatsApp API. WhatsApp can ban numbers it judges to be automated, so use a dedicated number (not anyone's personal one). The bot only ever replies to commands, which keeps that risk low.
+- **Privacy:** anything Telegram sends by DM (bets, confidential balances, rewards, handover proposals, the treasury address from `contribute`) is shown only to the caller: an ephemeral reply on Discord (which also hides the options typed), an ephemeral response on Slack, a DM on WhatsApp. So `back` takes its opportunity and amount directly — they never appear in the channel.
+- **Link vs creator:** whoever runs `register` becomes the channel's *linker* (can relink/unlink); whoever runs `createdao`/`createboarddao` is the DAO's *creator* (can also `tip`, deploy wrappers and distributors). Registering an existing DAO never grants creator rights.
+- **Owners and admins only:** creating, registering and unregistering a DAO or market (`createdao`, `createboarddao`, `register`, `unregister`, `createmarket`, `registermarket`, `unregistermarket`) is limited to the group's owner and admins on Telegram (anonymous admins count; a DM is allowed), *Manage Server* on Discord, workspace admins/owners on Slack, and group admins on WhatsApp (a DM is allowed).
+- **Errors** name the contract's reason, e.g. `AlreadyConfirmed`.
+
+Command logic lives in `src/platforms/commands/` (grouped as core, setup, tokens, models, sowellian, markets, opportunity); `discord.js`, `slack.js` and `whatsapp.js` only handle transport.
+
+## Notifications
+
+Every platform's process polls its linked DAOs (every 20 s) and posts proposal created / queued / executed / cancelled, plus model-specific events, to the linked chat. Each network is polled separately, and ranges are fetched in ≤90-block chunks (Monad testnet caps `eth_getLogs` at 100 blocks), saving progress after each chunk.
+
+## Setup
+
+```bash
+npm install
+cp .env.example .env
+# If using KMS wallets: run supabase/schema.sql once in your Supabase SQL editor
+npm start
+```
+
+| Variable | Required for | Notes |
+|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | the Telegram bot | from BotFather |
+| `RPC_URL` | optional | Monad testnet; viem's public RPC by default |
+| `NETWORKS`, `DEFAULT_NETWORK` | more than one network | see [Networks](#networks) |
+| `OPERATOR_PRIVATE_KEY` | `/createdao`, `/claim`, gas top-ups, keepers | a funded hot wallet on every enabled network — see Security |
+| `FACTORY_ADDRESS` + `<MODEL>_FACTORY_ADDRESS` | `/createdao` per model | per network with a prefix (`BASE_FACTORY_ADDRESS`); a model with no address can't be created there, but can still be `/register`ed |
+| `SORTITION_RANDOMNESS_SOURCE` | `/createdao ... sortition` | deployed `PythEntropyRandomnessAdapter` (Spaces), per network |
+| `PYTH_PRICE_ADAPTER` | Sowellian oracle track (`oracle=pyth`) | deployed `PythPriceFeedAdapter` (Spaces), per network |
+| `PROPOSAL_SITE_URL`, `PROPOSAL_LINK_SECRET` | proposal pages | the website's URL, e.g. `https://yoursite.com` and a long random secret for signing edit links; plus the `proposal_details` table |
+| `PYTH_API_KEY` | `/resolveviaoracle` price updates | API key from Pyth Terminal; Hermes refuses price requests without one |
+| `PYTH_HERMES_URL` | `/resolveviaoracle` price updates | optional, default `https://pyth.dourolabs.app/hermes` |
+| `KMS_KEY_ID`, `AWS_REGION`, AWS credentials | KMS wallets | symmetric KMS key |
+| `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | KMS wallets | service_role key — RLS allows nothing else |
+| `MASTER_WALLET_SEED` | legacy wallets only | keep set only while old wallets still hold funds |
+| `OPPORTUNITY_MARKET_RPC_URL`, `OPPORTUNITY_MARKET_FACTORY_ADDRESS` | Opportunity Markets | Sepolia |
+| `DISCORD_*`, `SLACK_*` | Discord / Slack | see above |
+| `WHATSAPP_LINK_SECRET`, `WHATSAPP_PHONE_NUMBER`, `WHATSAPP_AUTH_DIR` | WhatsApp | see above |
+
+### Keepers
+
+Pyth Entropy calls back by itself (usually within seconds), so randomness needs no settlement. One optional keeper finishes the job:
+
+- **Sortition** — `npm run keeper:sortition`. Finalizes each Sortition DAO's round once its randomness has arrived, paying gas from the operator wallet (anyone can also run `/finalizesortition`). **One process per network**: set `KEEPER_NETWORK` (default: the default network). Polls every 30 s.
+
+**Paying for randomness.** Each draw costs Pyth Entropy's fee, in the chain's native currency. `/startsortition` uses the DAO's credit at the Entropy adapter first and tops up only the shortfall from the caller's wallet. A DAO can prefund its credit (anyone can call the adapter's `fund(governance)`, e.g. the Treasury through a proposal), after which draws cost callers nothing but gas.
+
+Sowellian oracle proposals need no keeper: `/resolveviaoracle` posts Pyth's price and resolves in one go.
+
+### Testing every model at once
+
+`node scripts/test-evm-models.mjs --network monad-testnet` runs all ten models' lifecycles side by side through the bot's own adapters: a fresh DAO per model, proposals voted (or confirmed, supported, challenged, traded) through to execution with a real treasury payment, plus delegate elections and recalls, a sortition draw, a challenged optimistic vote, a Sowellian adjudication, a Sowellian proposal resolved by a live Pyth price (`sowellianOracle`, passed on Monad testnet: the ETH/USD feed looked up on Hermes, a signed update posted, read through `PYTH_PRICE_ADAPTER`) and a decision-market finalization. It uses the bot's `.env` (operator key, factory addresses, `SORTITION_RANDOMNESS_SOURCE`, `PYTH_PRICE_ADAPTER`, and `PYTH_API_KEY` if your Hermes needs one), creates its DAOs with fast timings whatever the bot's own setting, and writes a report of every failed step and its revert to `data/evm-tests/`. About 20 minutes; `--models board,conviction` runs a subset. Throwaway member wallets get their leftover gas swept back to the operator.
+
+To try it on a local chain first: start `anvil --chain-id 10143 --block-time 1`, build Spaces (`FOUNDRY_PROFILE=size-limited forge build`, plus `forge build test/PythAdapters.t.sol` for the stand-in Entropy), run `node scripts/deploy-local-evm.mjs > local.env`, and run the test with those variables, `BLOCK_TIME_MS=1000` and an anvil account as `OPERATOR_PRIVATE_KEY`.
+
+`<PREFIX>_FAST_TIMINGS=true` (`FAST_TIMINGS` on Monad testnet) gives the bot's own new DAOs the same short periods, for trying flows by hand. Testnets only.
+
+## Security — read before deploying anywhere real
+
+- **Never paste private keys into chats, commands, or shell history.** Use `export PRIVATE_KEY=...` and reference `$PRIVATE_KEY`. Any key that has appeared in plaintext should be treated as burned.
+- **`OPERATOR_PRIVATE_KEY`** pays gas for `/createdao`, `/claim`, keeper transactions, and user top-ups — on every enabled network. Keep it funded, but not over-funded; on mainnets especially, set the top-up amounts deliberately (`<PREFIX>_GAS_TOPUP_FIRST` etc.).
+- **KMS IAM scope.** The bot's AWS credentials should only be able to `Decrypt` and `GenerateDataKey` on the one key — not manage or delete it.
+- **`SUPABASE_SERVICE_ROLE_KEY`** bypasses Row Level Security by design. Treat it like a database root password.
+- **`MASTER_WALLET_SEED`** (legacy) can derive every old wallet's key. Remove it once no old wallet holds funds.
+
+## Known limitations
+
+- **`/createdao` mints the initial supply to the operator wallet**, not the person who ran the command, and records the operator as `creator` on-chain. `/tip` and welcome distributors are how it reaches members.
+- **Pyth fees come from the caller.** `/startsortition` (when the DAO's Entropy credit is short) and `/resolveviaoracle` (the price update) spend native currency from the caller's wallet on Pyth's fees; gas sponsorship covers gas only.
+- **Wrapped native is never auto-unwrapped.** Redeeming or reclaiming on a Decision Markets quote side returns the wrapped token; `/unwrap` converts it back.
+- **`data/chats.json` is a flat file.** Fine for now; swap for a database before scaling.
+
+## What's not verified yet
+
+- A DAO lifecycle on HyperEVM testnet (factories deployed, not run yet); anything on the mainnets (nothing deployed)
+- **External protocol actions against the live protocols.** Each was tested on local chains through a real Board DAO:
+  - Uniswap, Aerodrome, Lido-via-Aerodrome and Seaport ran against those protocols' real compiled contracts. HyperSwap and kHYPE-via-HyperSwap ran against Uniswap's real v3 contracts (HyperSwap v3 is a Uniswap v3 fork).
+  - Aave, HyperLend, shMON, Nad.fun, Perpl, Flaunch and HyperCore ran against stand-ins with the protocols' exact function signatures.
+  - HyperCore's action bytes were also compared with those produced by hyper-evm-lib.
+
+- Real Discord and Slack workspaces
+
+## Not built yet
+
+- Group-wide gas sponsorship with spending limits
 
 ## Architecture
 
 ```
-┌──────────────┐        controls        ┌──────────────┐
-│  Governance   │ ─────────────────────▶ │   Treasury    │
-│ (swappable —  │                        │ (stays put —  │
-│  any of 10    │ ◀───────────────────── │  holds funds) │
-│  models)      │      trusts            └──────────────┘
-└──────────────┘
-       │
-       │ controls (mint rights)
-       ▼
-┌───────────────────┐        wraps        ┌──────────────────────┐
-│  GovernanceToken    │ ◀─────────────────  │ StakedGovernanceToken │
-│  (raw, liquid,      │       stake()        │ (voting power lives   │
-│   transferable)     │ ─────────────────▶  │  here, lockable when  │
-└───────────────────┘                       │  a model requires it) │
-                                             └──────────────────────┘
+src/
+├── index.js              Telegram command handlers, model-aware /help
+├── platforms/            Discord, Slack and WhatsApp front-ends over a shared command core
+├── networks.js           network registry, per-call network context, block scaling, per-network gas
+├── config.js             viem clients and settings that follow the current network, operator wallet
+├── contracts.js          token-weighted reads/writes, wrapper/distributor deploys
+├── gasSponsor.js         gas sponsorship: funding at wallet creation and per transaction
+├── governance/           one adapter per model + shared helpers (common.js, index.js registry)
+├── actionLibrary.js      verified native actions for /proposeaction
+├── proposalBuilder.js    action encoding + GuardWrapper routing, shared by every platform
+├── wrapper.js            GuardWrapper reads/writes
+├── eventListener.js      chat notifications, per platform and per network
+├── db.js                 chat ↔ DAO / model / network / wrapper / market links (flat JSON)
+├── walletResolver.js     KMS-first wallet resolution, legacy migration guard
+├── kmsWallet.js          KMS envelope encryption
+├── walletStore.js        Supabase persistence for encrypted keys
+├── wallet.js             legacy seed-derived wallets
+├── opportunityMarket/    Sepolia config, market actions, FHE encryption, user + public decrypt
+├── keepers/              standalone sortition keeper (finalizes draws once Pyth Entropy delivers)
+└── abis/                 compiled ABIs (and bytecode for on-demand deployment)
+supabase/schema.sql       wallets table, RLS enabled
+docs/slack-app-manifest.yml
 ```
 
-`Treasury`'s entire trust model is one question: *"is the caller my registered `governance` address?"* That single design choice is what makes every model a genuine drop-in replacement for any other.
+`src/abis/*.json` is copied from Spaces' Foundry output. **Whenever a contract changes, re-extract and copy its ABI/artifact here** — the bot has no compiler and silently keeps using the old one otherwise.
 
-### Clone-based deployment (EIP-1167)
+## Deploying persistently
 
-Every factory deploys **minimal proxy clones**, not full contracts. Each contract's implementation is deployed once; each new DAO gets ~45-byte clones pointing at those implementations, initialized via `initialize()` instead of a constructor.
-
-This isn't an optimization — it's what makes deployment possible at all. Factories that `new` their child contracts embed each child's full creation bytecode, which put every factory at 26–99 KB against the EVM's 24,576-byte limit. Deploying implementations from inside a factory's own constructor does **not** help (the bytecode is embedded either way). Implementations are deployed as separate transactions, and each factory receives their addresses as constructor arguments. Factories now sit at 4–8 KB.
-
-The OpenZeppelin-based implementations (every governance model, `GovernanceToken`, `StakedGovernanceToken`, `Treasury`) call `_disableInitializers()` in their constructor, so the implementation itself can never be initialized — only clones can. `ConditionalVault`, `ConditionalToken`, `DecisionMarketPair` and `OpportunityMarket` use a small hand-rolled `_initialized` flag with no constructor lock. That is harmless: clone + initialize happen in one transaction, every clone has its own storage, and none of these contracts use `delegatecall` or `selfdestruct`. Anyone can deploy their own copy of an implementation, so "same ABI" never proves a contract is legitimate — check the factory's registry (e.g. `OpportunityMarketFactory.isMarket`).
-
-## Governance models
-
-| Model | How it decides |
-|---|---|
-| **Token-weighted** (`Governance.sol`) | Classic one-token-one-vote, snapshot-based |
-| **Delegated** | Token holders elect a council; only the council proposes and votes; members can be recalled |
-| **Board (Multisig)** | N-of-M designated signers approve directly — no token at all |
-| **Quadratic** | Voting weight is the square root of staked balance |
-| **Optimistic** | Proposals pass by default after a challenge window, unless disputed and voted down |
-| **Conviction** | Continuous support accumulates over time; committed tokens are locked |
-| **Sortition** | Council seats filled by a verifiably random draw from an opt-in pool |
-| **Liquid** | Direct voting always available, plus revocable, bounded transitive delegation |
-| **Sowellian** | A pari-mutuel market on proposal outcomes, resolved by oracle or by a bonded human resolver with optimistic challenge and adjudication |
-| **Decision Markets** | Two live trading markets (pass vs. fail) compared by TWAP over a fixed window — no oracle, resolver, or vote |
-
-Plus **Opportunity Markets** — confidential, FHE-encrypted backing of listed opportunities (Zama fhEVM), where which opportunity you back and how much stay encrypted on-chain. Deployed on Ethereum Sepolia, not Monad; see [Opportunity Markets](#opportunity-markets).
-
-## Contracts
-
-| Contract | Responsibility |
-|---|---|
-| `governance/Governance.sol` + supporting files | Token-weighted orchestration — proposals, voting, quorum/approval, timelocks, execution |
-| `governance/{delegate,board,quadratic,optimistic,conviction,sortition,liquid,sowellian,futarchy}/` | The other nine models, each self-contained |
-| `governance/futarchy/{ConditionalToken,ConditionalVault,DecisionMarketPair,WMON}.sol` | Decision Markets machinery — split/merge/redeem conditional tokens, constant-product AMM |
-| `governance/opportunity-market/` | `OpportunityMarket` + factory (FHE, Sepolia) |
-| `token/GovernanceToken.sol` | Raw ERC20 with `ERC20Votes`; minting is governance-controlled |
-| `token/StakedGovernanceToken.sol` | Vote-escrow wrapper — stake here to get voting power; optional lock used by Conviction |
-| `treasury/Treasury.sol` | Holds funds; acts only on instructions from its registered `governance` |
-| `factory/` | One clone-based factory per model, plus the shared `DAOFactoryLib` |
-| `distribution/WelcomeDistributor.sol` | Optional capped welcome-token distribution, one claim per address |
-| `wrapper/GuardWrapper.sol` | Optional security council: governance proposes an instruction, a signer threshold confirms it before it is forwarded. Signers can never initiate anything |
-| `marketplace/NFTMarketplaceWrapper.sol` | Optional EIP-1271 signer for NFT marketplaces — and where a DAO's NFTs live (see [NFTs](#nfts)) |
-| `randomness/` | `IRandomnessSource` + `PythEntropyRandomnessAdapter` (used by Sortition) |
-| `oracles/` | `PythPriceFeedAdapter` behind `IMetricOracle` (used by Sowellian) |
-
-## Key design decisions
-
-- **Governance and treasury are decoupled.** A DAO can vote to move to a different model via `transferGovernance()` without funds moving.
-- **Voting power requires staking, not just holding**, in every token-based model.
-- **Snapshot-based, flash-loan-resistant voting** wherever a discrete vote happens. Where a model has no single voting moment (Conviction), committed tokens are locked instead.
-- **Randomness and price data are provider-agnostic.** Sortition and Sowellian depend only on small interfaces; which oracle network sits behind them is a per-deployment choice. Pyth provides both on every supported chain: Entropy for randomness, Pyth price feeds for Sowellian. (The Switchboard and Chainlink adapters were removed when Switchboard shut down.)
-- **One oracle adapter, many feeds.** `IMetricOracle.latestValue(bytes32 selector)` takes a per-proposal selector stored on each Sowellian proposal. `PythPriceFeedAdapter` treats it as the Pyth price feed ID, so one deployment per network serves every feed. It returns prices as 18-decimal fixed point whatever the feed's exponent, so a proposal's `targetValue` is always price × 1e18 ($3,000 → `3000e18`).
-- **Sortition pays for its randomness.** Pyth Entropy charges a small native fee per request. `startSortition` is payable and forwards what it's sent; the adapter (`requestFee()`) takes the fee from that plus any credit the DAO holds there, and keeps the rest as the DAO's credit. Anyone can top up a DAO's credit with `fund(governance)`, which is how Sortition DAOs cloned before `startSortition` was payable still draw. `setRandomnessSource` abandons a round still waiting on the old provider, so a DAO is never stuck behind randomness that will never arrive.
-
-## Security council (GuardWrapper)
-
-A DAO can put a signer council between its governance and its assets. The DAO passes two proposals — `Treasury.transferGovernance(wrapper)` and, on the raw token, `transferOwnership(wrapper)` — after which Treasury and minting calls only work through the wrapper: governance calls `proposeInstruction(target, value, data)`, and the call is forwarded once enough signers `confirmInstruction`. Signers can confirm, revoke or reject, never initiate. Signer replacement is tenure-gated and needs no signer confirmation — the on-chain timestamp check is the proof — so a council can't entrench itself, and governance can't bypass tenure either. The bot's `/handovertowrapper` computes both handover proposals, and `/proposeaction` automatically routes Treasury and token actions through a linked wrapper after the handover.
-
-## NFTs
-
-`Treasury` has no ERC721/ERC1155 receiver hooks, so `safeTransferFrom` into it reverts — and every ERC1155 transfer is a safe one. Rather than widen the Treasury, **a DAO's NFTs live in its `NFTMarketplaceWrapper`**:
-
-- NFTs are sent to the wrapper, never to the Treasury.
-- The wrapper lists them (governance approves the hash the marketplace checks the signature against — for Seaport that is the order's EIP-712 digest, not the raw order hash; the wrapper answers EIP-1271 `isValidSignature`), sends them out (`transferERC721` / `transferERC1155` — which refuse the Treasury as a recipient), or calls a marketplace directly (`execute`).
-- Money comes back to the Treasury: `sweepNative` and `sweepERC20` send sale proceeds there.
-- Every one of those is `onlyGovernance` — a passed proposal.
-
-## Conviction spending budgets
-
-Conviction's bar used to grow only with native currency attached to a proposal's actions. Treasury spending goes through `Treasury.execute` calls instead, so a proposal emptying the Treasury needed the same conviction as one moving nothing. From `BUDGET_VERSION() == 2`:
-
-- **Asset list.** The DAO keeps a list of assets (native = `address(0)`) with a weight each: the extra conviction needed to spend *all* the Treasury holds of it. Native currency and the DAO's own token start listed at 900. The list changes only by proposal: `addAsset`, `setAssetWeight`, `removeAsset`.
-- **Budget.** `proposeWithBudget(actions, uri, budget)` declares how much of each listed asset the Treasury may lose. The bar is `minThresholdConviction + Σ weight × amount / holding` (an amount at or above the holding counts as all of it), fixed when the proposal is created. Plain `propose` means an empty budget.
-- **Enforced at execution.** Every listed asset's Treasury balance is read before and after the actions; a drop beyond the budget (zero for an undeclared asset) reverts the whole execution. A swap counts only what left. Approvals the actions granted on listed tokens (ERC20 `approve`/`increaseAllowance`, Permit2 `approve`) are revoked afterwards.
-- **Weakening the rules is expensive and slow.** A proposal that lowers or removes a weight, changes the config, treasury or staking token, hands over the Treasury (`transferGovernance`) or transfers any ownership needs `min + Σ all weights`. Listing an asset or raising a weight costs the minimum. Cuts and removals take effect `WEIGHT_CUT_DELAY` (7 days) later via `applyAssetChange`, callable by anyone.
-- **Limits.** Unlisted assets aren't checked at all. After a GuardWrapper handover, spending happens when the council confirms, outside the proposal's execution, so it isn't budget-checked (the handover itself needs the highest bar). Existing Conviction DAOs keep the implementation they were cloned from; only DAOs from a factory deployed after this change have budgets.
-
-## Decision Markets
-
-A proposal's two outcomes — pass and fail — each get a live trading market over a fixed window. Real tokens are split into matched pass/fail conditional tokens; people trade the side they believe in; at the end, whichever market's time-weighted average price is meaningfully higher decides the outcome. Winning-side tokens redeem for real value; losing-side tokens are worthless.
-
-Proposing takes two transactions: `propose(actions, uri, baseSeed)` (payable) takes the seed and splits it into pass/fail tokens, then `openMarkets(id)` deploys and seeds the two pools and starts the trading clock. Together they cost ~2.3M gas, more than HyperEVM's 2M small blocks hold in one transaction (~1.3M + ~0.6M apart). `openMarkets` is permissionless and runs once; until it does, the proposal can't be traded, finalized or executed, and cancelling it returns the seed to the proposer. Decision Markets factories deployed before this change (Monad testnet, Base Sepolia) do both in `propose`; the bot handles either.
-
-Native currency is wrapped when a proposal is seeded (WMON on Monad; the factory takes the chain's canonical wrapped-native token as `WMON_ADDRESS`, so WETH on Base, WHYPE on HyperEVM). Redemption and liquidity reclaim return the **wrapped** token — call `withdraw()` on it to unwrap.
-
-The constant-product AMM is a derivative of Uniswap V2 core (`github.com/Uniswap/v2-core`), GPL-3.0-or-later; `DecisionMarketPair.sol` carries that license. Everything else in this repository is MIT.
-
-## Opportunity Markets
-
-Uses Zama's fhEVM. `FHE.setCoprocessor(ZamaConfig.getEthereumCoprocessorConfig())` resolves the coprocessor by `block.chainid` at construction — no addresses to configure — but it only supports Ethereum mainnet, Sepolia, and local Anvil. On any other chain (including Monad, Base, and HyperEVM) construction reverts with `ZamaProtocolUnsupported()`. This is why Opportunity Markets live on Sepolia.
-
-**Amounts and reward math.** Every amount is encrypted as a 64-bit integer (`euint64`), so a deposit or reward pool above 2^64 - 1 raw units is refused (`AmountTooLarge`) rather than silently truncated. That is ~18 trillion tokens for a 6-decimal stablecoin such as USDC, but only ~18.4 tokens at 18 decimals, so use a low-decimal stablecoin. `computeReward` pays `floor(stakeOnWinner × rewardPool / winningTotal)`, multiplying in 128 bits (`euint128` times the plaintext pool, then divided by the plaintext revealed total), so the product can't overflow; the result always fits back in 64 bits because a backer's stake is part of the winning total. `REWARD_MATH_VERSION()` returns 2 on this implementation. Markets cloned from the earlier implementation multiplied in 64 bits, which wrapped once stake × pool passed ~1.8e19 raw units (e.g. 5,000 USDC × 5,000 USDC paid 1,310 USDC); they keep that behaviour, since a clone's implementation never changes. Only markets from a factory deployed after this fix get the new math.
-
-## Setup
-
-Every import in `remappings.txt` comes from one of two places: a Foundry library in `lib/` or an npm package in `node_modules/`. Versions are the ones pinned in `foundry.lock` and `package-lock.json`.
-
-| Import | Comes from | Version |
-|---|---|---|
-| `forge-std` | Foundry library (`lib/forge-std`) | v1.16.2 |
-| `@openzeppelin/contracts` | Foundry library (`lib/openzeppelin-contracts`) | v5.6.1 |
-| `@openzeppelin/contracts-upgradeable` | Foundry library (`lib/openzeppelin-contracts-upgradeable`) | v5.6.1 |
-| `forge-fhevm` | Foundry library (`lib/forge-fhevm`) | commit `3ee696f` |
-| `@fhevm/solidity` | npm | 0.13.3 |
-| `encrypted-types` | npm (also installed as a dependency of `@fhevm/solidity`) | 0.0.4 |
-| `@pythnetwork/pyth-sdk-solidity` | npm | 4.3.1 |
-| `@pythnetwork/entropy-sdk-solidity` | npm | 2.2.1 |
-
-**Cloning this repo:** `lib/forge-std` and `lib/openzeppelin-contracts` are committed, and the other two Foundry libraries are submodules. One command gets them all, and `npm ci` installs the exact npm versions from `package-lock.json`:
+The bots use long polling / sockets, so they need long-lived processes — not serverless. The bots and keepers all use `data/` (the keepers read it to find DAOs), so they must share one persistent volume. Railway attaches a volume to a single service, so there run them together in one service, leaving out any you haven't configured:
 
 ```bash
-git submodule update --init --recursive
-npm ci
-forge build
+sh -c "npm start & npm run discord & npm run slack & npm run whatsapp & KEEPER_NETWORK=monad-testnet npm run keeper:sortition & KEEPER_NETWORK=base-sepolia npm run keeper:sortition & KEEPER_NETWORK=hyperevm-testnet npm run keeper:sortition & wait"
 ```
 
-**Installing each dependency yourself** (a new project, or a missing folder):
+With "Add to Slack" enabled, give that service a public domain; Railway's `PORT` is where the install page listens. The commands:
 
-```bash
-forge install foundry-rs/forge-std@v1.16.2
-forge install OpenZeppelin/openzeppelin-contracts@v5.6.1
-forge install OpenZeppelin/openzeppelin-contracts-upgradeable@v5.6.1
-forge install zama-ai/forge-fhevm@3ee696fba62a32314fde457de28cc29f1191c4cb
-
-npm install @fhevm/solidity@0.13.3
-npm install encrypted-types@0.0.4
-npm install @pythnetwork/pyth-sdk-solidity@4.3.1
-npm install @pythnetwork/entropy-sdk-solidity@2.2.1
-```
-
-Current Foundry doesn't commit on `forge install` by default. Older guides add `--no-commit`, which newer versions reject. `via_ir` and the optimizer are set in `foundry.toml`, so plain `forge build` / `forge test` use them.
-
-`remappings.txt` (committed) maps them:
-
-```
-@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/
-@openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts/
-@pythnetwork/pyth-sdk-solidity/=node_modules/@pythnetwork/pyth-sdk-solidity/
-@pythnetwork/entropy-sdk-solidity/=node_modules/@pythnetwork/entropy-sdk-solidity/
-@fhevm/solidity/=node_modules/@fhevm/solidity/
-encrypted-types/=node_modules/encrypted-types/
-forge-fhevm/=lib/forge-fhevm/src/
-```
-
-`openzeppelin-contracts-upgradeable` v5.6.1 does **not** ship `ReentrancyGuardUpgradeable`; `StakedGovernanceToken` uses a small, explicitly initialized guard of its own instead.
-
-### `--via-ir` and contract size
-
-Foundry compiles the whole project together, so the simplest rule is: **always build, test, and deploy with `--via-ir`** — `SortitionDAOFactory` and `DecisionMarketsDAOFactory` hit "stack too deep" in `createDAO()` without it.
-
-Contract size depends on the chain:
-
-| Chain | Size limit | Build with |
-|---|---|---|
-| Monad (testnet, mainnet) | None in practice — `DelegateGovernance` and `SowellianGovernance` (~29.2 KB unoptimized) are deployed there | the default profile, `--via-ir` |
-| Base, Base Sepolia, HyperEVM | EIP-170: 24,576 bytes | `FOUNDRY_PROFILE=size-limited` (via-IR + optimizer, 200 runs). Every contract is under 15 KB; the largest are `DelegateGovernance` 14.6 KB and `SowellianGovernance` 14.5 KB |
-
-With the optimizer on, via-IR caches `block.number`/`block.timestamp` across `vm.roll`/`vm.warp` inside a test, so tests read `vm.getBlockNumber()`/`vm.getBlockTimestamp()` instead. With those test edits the full suite passes under both profiles, which means the exact bytecode you deploy to a size-limited chain is the bytecode the tests ran against.
-
-## Testing
-
-```bash
-forge test --via-ir                          # default profile (Monad)
-FOUNDRY_PROFILE=size-limited forge test      # optimized, as deployed to Base / HyperEVM
-```
-
-Current result: **564 tests passed, 0 failed, 0 skipped** across 34 suites under both (Foundry 1.5.1, solc 0.8.33) — every governance model, every factory, the token/treasury core, GuardWrapper, the NFT wrapper (including against a real `Treasury`), adapters, the futarchy system and Opportunity Markets.
-
-## Deployment
-
-Each model has a deploy script that deploys its implementations, then its factory:
-
-```bash
-forge script script/Deploy<Model>DAOFactory.s.sol:Deploy<Model>DAOFactory \
-  --rpc-url <RPC_URL> \
-  --private-key $PRIVATE_KEY \
-  --broadcast \
-  --via-ir \
-  --verify
-```
-
-`<Model>` is one of: *(empty, for token-weighted)*, `Quadratic`, `Liquid`, `Optimistic`, `Delegate`, `Board`, `Sortition`, `Conviction`, `Sowellian`, `DecisionMarkets`. `DeployDecisionMarketsDAOFactory` additionally needs `WMON_ADDRESS` (the chain's canonical wrapped-native token). Opportunity Markets: `DeployOpportunityMarketFactory.s.sol` against a **Sepolia** RPC.
-
-On **Base / Base Sepolia / HyperEVM**, prefix every deploy with `FOUNDRY_PROFILE=size-limited` (see [contract size](#--via-ir-and-contract-size)).
-
-On **HyperEVM**, blocks come in two sizes: small (~1 s, 2M gas) and big (~1 min, 30M gas). Deploying an implementation or factory needs more than 2M gas, so the deploying address must be switched to big blocks first (a HyperCore `evmUserModify` action with `usingBigBlocks: true`), and switched back afterwards: `pip install hyperliquid-python-sdk`, then `python3 script/hyperevm_big_blocks.py on --testnet` before deploying and `python3 script/hyperevm_big_blocks.py off --testnet` after (drop `--testnet` for mainnet; it asks for the key with hidden input). DAO creation fits in small blocks: the heaviest, `DelegateDAOFactory.createDAO`, measured 1.29M gas.
-
-`GuardWrapper` and `NFTMarketplaceWrapper` have no deploy scripts: they are per-DAO and the bot deploys them on demand (`/deployguardwrapper`, `/deploynftwrapper`).
-
-Oracle and randomness adapters are standalone, one-time deployments per network. Each takes Pyth's own contract address, copied from Pyth's docs, and its constructor rejects an address that isn't one:
-
-```bash
-# Randomness for Sortition - PYTH_ENTROPY_ADDRESS from docs.pyth.network/entropy/contract-addresses
-PYTH_ENTROPY_ADDRESS=0x... forge script script/DeployPythEntropyAdapter.s.sol:DeployPythEntropyAdapter \
-  --rpc-url <RPC_URL> --account <ACCOUNT> --broadcast
-
-# Price feeds for Sowellian - PYTH_ADDRESS from docs.pyth.network/price-feeds/contract-addresses/evm
-PYTH_ADDRESS=0x... forge script script/DeployPythPriceFeedAdapter.s.sol:DeployPythPriceFeedAdapter \
-  --rpc-url <RPC_URL> --account <ACCOUNT> --broadcast
-```
-
-Pyth prices are pull-based: post a signed update from Pyth's Hermes service to the Pyth contract (`updatePriceFeeds`, plus its small fee) right before `resolveViaOracle`; the bot does this for you. Entropy calls the adapter back by itself, usually within seconds, so Sortition needs no settlement keeper - just `finalizeSortition` once it's fulfilled.
-
-DAOs are created from a deployed factory with the matching `Create<Model>DAO.s.sol` script (see each script's header for its env vars — e.g. `INITIAL_SIGNERS` for Board, `INITIAL_COUNCIL` for Delegate and Sortition, `RANDOMNESS_SOURCE` for Sortition), or through the bot's `/createdao`.
-
-**Never pass a raw private key inline.** `export PRIVATE_KEY=...` once, reference `$PRIVATE_KEY`. Watch for editors converting `--` into an em dash (`—`) — Foundry silently ignores the mangled flag.
-
-## Deployed addresses
-
-Only factory addresses need to be configured anywhere; implementation addresses are baked into each factory's immutable storage at deployment.
-
-### Monad Testnet
-
-| Contract | Address |
+| Service | Command |
 |---|---|
-| DAOFactory (token-weighted) | `0x8bB68e835032e58c410125e5219B8Ae7FcAcc056` |
-| QuadraticDAOFactory | `0x9d109ba81002B85a48252115Ed5487F6b60C78F9` |
-| LiquidDAOFactory | `0x55C89331FA2F6a71E375c6C2aAf9BbE5b9b17fFe` |
-| OptimisticDAOFactory | `0x8F5a20c910aEbF287790e04799Ce0DB677705674` |
-| DelegateDAOFactory | `0x3fFb77D2A380C52e04b8d22E73EDc7d47e8f975c` |
-| BoardDAOFactory | `0x2367d102B71ab6c3c3b69eD7580c3Be3ACb5BE9A` |
-| SortitionDAOFactory | `0x251b2371e2E98b5db9A2ceF3B687dF1A93BD24E6` |
-| ConvictionDAOFactory | `0x14439Fa27258c8fd65F5805eA5617774891f173c` |
-| SowellianDAOFactory | `0x075289669Ab8601dd8b15D95551644D511949056` |
-| DecisionMarketsDAOFactory | `0x99DeC80E792f9C1fA92F46fe08c6763CBCCfE388` |
-| PythEntropyRandomnessAdapter (Sortition) | `0x422cbB19F504D57cB909AC149e97f48Ba8c1b92D` |
-| PythPriceFeedAdapter (Sowellian) | `0x6C582533290855Af7F95d4484A6bb2e8C317949e` |
+| Telegram bot | `npm start` |
+| Discord bot | `npm run discord` |
+| Slack bot | `npm run slack` |
+| WhatsApp bot | `npm run whatsapp` |
+| Sortition keeper (per network) | `KEEPER_NETWORK=<id> npm run keeper:sortition` |
 
-This `SortitionDAOFactory` is the Pyth-era deployment (payable `startSortition`, stuck-round reset); `/createdao` points new Sortition DAOs at the Entropy adapter above. Sortition DAOs created from the earlier factory still point at the shut-down Switchboard adapter: each switches with a `sortition-set-randomness-source` proposal before its next draw, and draws from credit prefunded on the adapter (`fund(governance)`), since that implementation's `startSortition` isn't payable. A DAO whose round was already waiting on Switchboard stays stuck; its council keeps serving, but it can't draw again.
+## Try it live
 
-
-External dependencies on Monad testnet (third-party, verified against official docs):
-
-| Dependency | Address | Source |
-|---|---|---|
-| WMON (canonical) | `0xFb8bf4c1CC7a94c73D209a149eA2AbEa852BC541` | docs.monad.xyz — Canonical Contracts |
-| Pyth Entropy | `0x825c0390f379C631f3Cf11A82a37D20BddF93c07` | Pyth docs |
-| Pyth price feeds | `0xFC6bd9F9f0c6481c6Af3A7Eb46b296A5B85ed379` | Pyth docs |
-
-
-### Ethereum Sepolia (Opportunity Markets)
-
-| Contract | Address |
-|---|---|
-| OpportunityMarketFactory | `0xE9fF23EA5FE342568B5Db083E937f397C75c4625` |
-| OpportunityMarket implementation | `0xD05974d937454B534058D3B67513edA0010A2efB` |
-
-Markets created from this factory use the 128-bit reward math (`REWARD_MATH_VERSION() == 2`, see [Opportunity Markets](#opportunity-markets)). Markets from the earlier factory keep the 64-bit math.
-
-### Base Sepolia (chain 84532)
-
-Built with `FOUNDRY_PROFILE=size-limited` (EIP-170). In the bot this network is `base-sepolia` (add it to `NETWORKS`) and its variables take the `BASE_SEPOLIA_` prefix (`BASE_SEPOLIA_FACTORY_ADDRESS`, `BASE_SEPOLIA_SORTITION_RANDOMNESS_SOURCE`, ...).
-
-| Contract | Address |
-|---|---|
-| DAOFactory (token-weighted) | `0x72648d7954877Dadd9B38D71EE3C70e245D29B3a` |
-| QuadraticDAOFactory | `0xd85923722591C005a23840Cd95B6888ABD11a345` |
-| LiquidDAOFactory | `0x10F551fF56455366AE7E9D3c3BBc96c9f058E821` |
-| OptimisticDAOFactory | `0x2367d102B71ab6c3c3b69eD7580c3Be3ACb5BE9A` |
-| DelegateDAOFactory | `0x5107BEfC0fEbE1E16bb8F408768bc5FF9F872658` |
-| BoardDAOFactory | `0x0be87f0Cf85dbfE6dc572eb4E2FD1FD46e96F475` |
-| SortitionDAOFactory | `0x14439Fa27258c8fd65F5805eA5617774891f173c` |
-| ConvictionDAOFactory | `0x3fFb77D2A380C52e04b8d22E73EDc7d47e8f975c` |
-| SowellianDAOFactory | `0x55C89331FA2F6a71E375c6C2aAf9BbE5b9b17fFe` |
-| DecisionMarketsDAOFactory | `0x801883FD3347e5F400fF8CE24015D60449f26dAf` |
-| PythEntropyRandomnessAdapter (Sortition) | `0xaB7325AFfF2A7851457c52565Cfe4DC53DC9B1Fc` |
-| PythPriceFeedAdapter (Sowellian) | `0x9d109ba81002B85a48252115Ed5487F6b60C78F9` |
-
-External dependencies on Base Sepolia:
-
-| Dependency | Address | Source |
-|---|---|---|
-| WETH (canonical) | `0x4200000000000000000000000000000000000006` | OP Stack predeploy |
-| Pyth Entropy | `0x41c9e39574F40Ad34c79f1C99B66A45eFB830d4c` | Pyth docs |
-| Pyth price feeds | `0x5f52e4DBEA21f5b23523B6e20d50c29ae0a4EB83` | Pyth docs |
-
-### HyperEVM testnet (chain 998)
-
-Built with `FOUNDRY_PROFILE=size-limited` and deployed in big blocks. In the bot this network is `hyperevm-testnet` (add it to `NETWORKS`) and its variables take the `HYPEREVM_TESTNET_` prefix (`HYPEREVM_TESTNET_FACTORY_ADDRESS`, ...). The public RPC rate-limits hard; give the bot a provider endpoint as `HYPEREVM_TESTNET_RPC_URL`.
-
-| Contract | Address |
-|---|---|
-| DAOFactory (token-weighted) | `0x0be87f0Cf85dbfE6dc572eb4E2FD1FD46e96F475` |
-| QuadraticDAOFactory | `0xe61C9d371D3BEA6ceA5359E745593D8ebB39BEC5` |
-| LiquidDAOFactory | `0xd85923722591C005a23840Cd95B6888ABD11a345` |
-| OptimisticDAOFactory | `0x5107BEfC0fEbE1E16bb8F408768bc5FF9F872658` |
-| DelegateDAOFactory | `0x10F551fF56455366AE7E9D3c3BBc96c9f058E821` |
-| BoardDAOFactory | `0xcabF9a1c3e3e54715c52dfB45ae1AB7E1C3D3606` |
-| SortitionDAOFactory | `0x867b9e9edD9dE98979c9C6a82EEc363B077B96De` |
-| ConvictionDAOFactory | `0xBF49Fc7a3788c0CA53420ee6ccDA4aD9C5457362` |
-| SowellianDAOFactory | `0xa9356ccA371D3b91a82f1fee3898E8ef444E512E` |
-| DecisionMarketsDAOFactory | `0xAe322E1265530C58b03a2C36ab085500B9bc6624` — one-step `propose`, which needs big blocks; redeploy from the current source for the two-step version |
-| PythEntropyRandomnessAdapter (Sortition) | `0xeEdE1CBa9f2A86AEB145a71167ee2020396C3BD3` |
-| PythPriceFeedAdapter (Sowellian) | `0x801883FD3347e5F400fF8CE24015D60449f26dAf` |
-
-External dependencies on HyperEVM testnet:
-
-| Dependency | Address | Source |
-|---|---|---|
-| WHYPE (canonical) | `0x5555555555555555555555555555555555555555` | Hyperliquid |
-| Pyth Entropy | `0x23f0e8FAeE7bbb405E7A7C3d60138FCfd43d7509` | Pyth docs |
-| Pyth price feeds | `0x99fA5f405b795cA03F2AE47Cd48FEd22029892a2` | Pyth docs |
-
-### Base mainnet, HyperEVM mainnet and Monad mainnet — not yet deployed
-
-The bot supports these networks (see `protean-bot`'s README, "Networks"); each needs its own factories deployed before DAOs can be created there.
-
-| Network | Chain ID | Public RPC | Build profile |
-|---|---|---|---|
-| Monad mainnet | 143 | `https://rpc.monad.xyz` | default |
-| Base | 8453 | `https://mainnet.base.org` | `size-limited` |
-| HyperEVM | 999 | `https://rpc.hyperliquid.xyz/evm` | `size-limited`, big blocks for deploys |
-
-Chain IDs and RPCs are from viem's chain definitions. For each network, fill in:
-
-| Contract | Address |
-|---|---|
-| DAOFactory (token-weighted) | |
-| QuadraticDAOFactory | |
-| LiquidDAOFactory | |
-| OptimisticDAOFactory | |
-| DelegateDAOFactory | |
-| BoardDAOFactory | |
-| SortitionDAOFactory | |
-| ConvictionDAOFactory | |
-| SowellianDAOFactory | |
-| DecisionMarketsDAOFactory | |
-| Randomness adapter (Sortition) | |
-| Price-feed adapter (Sowellian) | |
-
-Before deploying to any of them, verify against the chain's own docs: the canonical wrapped native token (`WMON_ADDRESS` for Decision Markets — WETH on Base, WHYPE on HyperEVM); Pyth's Entropy and price feed contract addresses on that chain, from Pyth's docs. Opportunity Markets cannot deploy on any of them (see above).
-
-## Known gaps
-
-- **No audit.** Sowellian, Decision Markets, and Opportunity Markets move real capital based on market or oracle resolution — test adversarially before real funds touch them.
-- **Pyth fees.** Each Sortition draw pays an Entropy fee, and each oracle resolution pays a Pyth price-update fee, both in the chain's native currency. Pyth sets and can change them; read `requestFee()` / `getUpdateFee` rather than hard-coding.
-- **Entropy's trust model.** The adapter uses `requestV2()`, where Entropy generates the user's share of the randomness in-contract, so a colluding validator and Entropy provider could bias a draw (Pyth's documented trade-off for that variant).
-- **Proposals are calldata.** The contracts take raw target/value/calldata. The bot's verified action library (`/proposeaction`) covers every native admin function and the external protocol actions (DEXs, lending, staking, marketplaces) on each network.
-- **Resolver incentives.** A correct Sowellian resolver gets their bond back, not an additional reward.
-- **Rounding dust.** Pari-mutuel payouts round down; tiny residual balances are recoverable by an ordinary governance proposal.
+- **Telegram:** [@proteandao_bot](https://t.me/proteandao_bot)
+- **Discord:** [Add to your server](https://discord.com/oauth2/authorize?client_id=1550697784259121203&permissions=3072&integration_type=0&scope=applications.commands+bot)
+- **Slack:** [Add to Slack](https://protean-bot-production.up.railway.app/slack/install)
