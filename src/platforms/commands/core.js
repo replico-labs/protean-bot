@@ -1,3 +1,4 @@
+import { proposalButtons } from "../../buttons.js";
 import { takeModelOptions, checkModelOptions, modelOptionsUsage, proposeForModel, proposalNextStep, oracleFeedLine } from "../../modelProposal.js";
 import { feedsText } from "../../governance/sowellian.js";
 import { solanaWalletLine } from "../../solana/commands.js";
@@ -220,7 +221,8 @@ export const CORE_COMMANDS = {
             cmd: ctx.cmd,
           }).catch(() => null)
         : null;
-      return reply(lines.join("\n"), submitLink ? { privateFollowUp: submitLink } : {});
+      const buttons = proposalButtons({ model: getChatModel(ctx.chatId, ctx.platform), id, state: label, page });
+      return reply(lines.join("\n"), submitLink ? { privateFollowUp: submitLink, buttons } : { buttons });
     },
   },
 

@@ -6,6 +6,7 @@ import { runOnNetwork } from "../networks.js";
 import { startEventListener } from "../eventListener.js";
 import { createInstallationStore, isSlackInstallationStoreConfigured } from "./slackInstallations.js";
 import { splitArgs } from "../args.js";
+import { encodeButton, decodeButton, BUTTON_COMMANDS } from "../buttons.js";
 import { proposalApiRoutes, proposalPagesConfigured } from "../proposalPages.js";
 import { whatsappLinkConfigured, whatsappLinkRoutes } from "./whatsappLink.js";
 
@@ -90,9 +91,46 @@ export async function handleSlashCommand({ command, ack, respond, client }) {
   recordSlackTeam(command.channel_id, command.team_id);
   // Public results post to the channel so the whole group sees votes and
   // proposals, same as Telegram; errors and private details stay ephemeral.
-  await respond({ response_type: result.ephemeral ? "ephemeral" : "in_channel", text: result.text, mrkdwn: true });
+  await respond({ response_type: result.ephemeral ? "ephemeral" : "in_channel", text: result.text, mrkdwn: true, ...(result.ephemeral ? {} : slackBlocks(result.text, result.buttons)) });
   // Something only the caller should see after a public reply (a proposal's edit link).
   if (result.privateFollowUp) await respond({ response_type: "ephemeral", text: result.privateFollowUp, mrkdwn: true });
+}
+
+/**
+ * A message's text plus its buttons as Block Kit blocks, or nothing when
+ * there are no buttons (or the text is too long for a section block, in
+ * which case it goes out plain).
+ */
+export function slackBlocks(text, rows = []) {
+  if (!rows?.length || text.length > 3000) return {};
+  const elements = rows.flat().slice(0, 25).map((b, i) =>
+    b.url
+      ? { type: "button", text: { type: "plain_text", text: b.label, emoji: true }, url: b.url, action_id: `protean_link_${i}` }
+      : { type: "button", text: { type: "plain_text", text: b.label, emoji: true }, value: encodeButton(b.cmd), action_id: `protean_btn_${i}` }
+  );
+  return { blocks: [{ type: "section", text: { type: "mrkdwn", text } }, { type: "actions", elements }] };
+}
+
+/** A button press: runs its command as the presser and posts the result in the channel (errors only to them). */
+export async function handleButton({ ack, body, action, respond }) {
+  await ack();
+  const decoded = decodeButton(action?.value);
+  if (!decoded || !BUTTON_COMMANDS.has(decoded[0]) || !COMMANDS[decoded[0]]) return;
+  const [name, args] = decoded;
+  const channelId = body.channel?.id ?? body.container?.channel_id;
+  const ctx = {
+    platform: "slack",
+    chatId: channelId,
+    userId: body.user.id,
+    args,
+    isDirect: body.channel?.name === "directmessage",
+    cmd: (sub) => `${SLASH_COMMAND} ${sub}`,
+  };
+  const result = await runCommand(name, ctx);
+  if (body.team?.id) recordSlackTeam(channelId, body.team.id);
+  const text = `<@${body.user.id}> → \`${SLASH_COMMAND} ${name} ${args.join(" ")}\`\n\n${result.text}`;
+  await respond({ response_type: result.ephemeral ? "ephemeral" : "in_channel", replace_original: false, text, mrkdwn: true, ...(result.ephemeral ? {} : slackBlocks(text, result.buttons)) });
+  if (result.privateFollowUp) await respond({ response_type: "ephemeral", replace_original: false, text: result.privateFollowUp, mrkdwn: true });
 }
 
 /**
@@ -190,6 +228,8 @@ export async function startSlackBot({ token, appToken, oauth = null, installatio
   }
 
   app.command(SLASH_COMMAND, handleSlashCommand);
+  app.action(/^protean_btn_/, handleButton);
+  app.action(/^protean_link_/, ({ ack }) => ack()); // link buttons open in the browser; Slack still reports the click
   app.event("member_joined_channel", ({ event, client }) => handleMemberJoined(event, client));
 
   if (oauth) {

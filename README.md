@@ -272,6 +272,11 @@ npm run whatsapp  # WHATSAPP_LINK_SECRET (scan a QR) or WHATSAPP_PHONE_NUMBER (p
 
 Command logic lives in `src/platforms/commands/` (grouped as core, setup, tokens, models, sowellian, markets, opportunity); `discord.js`, `slack.js` and `whatsapp.js` only handle transport.
 
+## Buttons and the command menu
+
+- **Buttons under proposals** on Telegram, Discord and Slack. A new proposal gets the buttons its model needs — **For / Against / Abstain** (token-weighted, quadratic, liquid, delegate and sortition councils), **Challenge** (optimistic), **Support** (conviction), **Confirm** (board) — plus **Status** and a **Details** link to its page. `/proposal <id>` shows what fits its state now: the vote buttons while it's open, **Queue** once it passed, **Execute** once it's queued. A button runs the same command as typing it, as the person who pressed it, with their own wallet and the same checks; the chat sees who pressed what. Errors (already voted, no stake) go only to the presser on Discord and Slack. Only these commands can come from a button. WhatsApp has no bot buttons, so it stays typed. Slack needs `interactivity` on in the app manifest (it is in `docs/slack-app-manifest.yml`; Socket Mode needs no URL).
+- **Telegram's command menu** (the **/** button and autocomplete) is set by the bot at startup: the everyday commands in groups, a short list in private chats. Every other command still works typed; `/help` lists them all. Discord's slash commands register themselves the same way; Slack has the one `/protean` command from the manifest.
+
 ## Notifications
 
 Every platform's process polls its linked DAOs (every 20 s) and posts proposal created / queued / executed / cancelled, plus model-specific events, to the linked chat. Each network is polled separately, and ranges are fetched in ≤90-block chunks (Monad testnet caps `eth_getLogs` at 100 blocks), saving progress after each chunk.
@@ -403,4 +408,3 @@ With "Add to Slack" enabled, give that service a public domain; Railway's `PORT`
 - **Telegram:** [@proteandao_bot](https://t.me/proteandao_bot)
 - **Discord:** [Add to your server](https://discord.com/oauth2/authorize?client_id=1550697784259121203&permissions=3072&integration_type=0&scope=applications.commands+bot)
 - **Slack:** [Add to Slack](https://protean-bot-production.up.railway.app/slack/install)
-- **WhatsApp:** [Add to WhatsApp](https://wa.me/message/6JNHAJABFJY6M1)

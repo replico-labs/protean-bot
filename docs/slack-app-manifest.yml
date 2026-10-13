@@ -45,7 +45,7 @@ settings:
       - app_uninstalled         # forget a workspace's token when it removes the app
       - tokens_revoked          # ...or revokes it
   interactivity:
-    is_enabled: false
+    is_enabled: true    # buttons on proposals (arrive over Socket Mode, no URL needed)
   org_deploy_enabled: false
   socket_mode_enabled: true
   token_rotation_enabled: false

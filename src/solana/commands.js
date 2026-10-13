@@ -1,6 +1,7 @@
 import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { getChatSolana, registerSolanaChat, unregisterSolanaChat, updateChatSolana } from "../db.js";
+import { proposalButtons } from "../buttons.js";
 import { SOLANA_ENABLED, SOLANA_MODELS, getSolanaNetwork, resolveSolanaNetwork, explorerUrl, getSolanaOperator } from "./config.js";
 import { getOrCreateSolanaKeypair, getSolanaAddress, ensureSolFunded } from "./wallets.js";
 import { ACTIONS, MODEL_WORDS, actionApplies, listActionsText, actionInfoText } from "./actions.js";
@@ -23,7 +24,7 @@ class SolanaUserError extends Error {}
 const fail = (msg) => {
   throw new SolanaUserError(msg);
 };
-const reply = (text) => ({ text });
+const reply = (text, extra = {}) => ({ text, ...extra });
 
 /** Commands that have nothing to do with the chat's DAO, so they keep working in a Solana chat (the Opportunity Market runs on Sepolia). */
 const PASS_THROUGH = new Set([
@@ -270,8 +271,9 @@ async function nextStep(ctx, c, id) {
 async function proposalMade(ctx, c, id, text) {
   const args = { network: c.link.network, dao: c.d.governance.toBase58(), model: c.model, proposalId: id };
   const page = await proposalCreated({ ...args, platform: ctx.platform, userId: ctx.userId, cmd: ctx.cmd });
-  if (!page) return reply(text);
-  return { text: `${text}\n\n📄 ${page.page} - the proposer is adding the details there.`, privateFollowUp: page.editText, startPayload: proposalStartPayload(args.network, args.dao, id) };
+  const buttons = proposalButtons({ model: c.model, id, page: page?.page });
+  if (!page) return reply(text, { buttons });
+  return { text: `${text}\n\n📄 ${page.page} - the proposer is adding the details there.`, privateFollowUp: page.editText, startPayload: proposalStartPayload(args.network, args.dao, id), buttons };
 }
 
 /** The DAO's rules in words. */
@@ -604,12 +606,13 @@ const COMMANDS = {
         lines.push(at > now ? `Can run in ${duration(at - now)}: \`${ctx.cmd("execute")} ${id}\`` : `Ready to run: \`${ctx.cmd("execute")} ${id}\``);
       }
       const page = proposalPageUrl(link.network, d.governance.toBase58(), id);
-      if (!page) return reply(lines.join("\n"));
+      const buttons = proposalButtons({ model, id, state, page });
+      if (!page) return reply(lines.join("\n"), { buttons });
       lines.push("", `📄 Details and live status: ${page}`);
       // The proposer, before submitting details: their link again, privately.
       const args = { network: link.network, dao: d.governance.toBase58(), model, proposalId: id };
       const submit = await pendingSubmitLink({ ...args, platform: ctx.platform, userId: ctx.userId, walletAddress: await getSolanaAddress(ctx.userId, ctx.platform).catch(() => null), cmd: ctx.cmd }).catch(() => null);
-      return submit ? { text: lines.join("\n"), privateFollowUp: submit, startPayload: proposalStartPayload(args.network, args.dao, id) } : reply(lines.join("\n"));
+      return submit ? { text: lines.join("\n"), privateFollowUp: submit, startPayload: proposalStartPayload(args.network, args.dao, id), buttons } : reply(lines.join("\n"), { buttons });
     },
   },
 

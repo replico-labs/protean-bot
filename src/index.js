@@ -83,6 +83,8 @@ import { getIntegrationAction, integrationUsage } from "./integrations/index.js"
 import { integrationListLines, actionInfoText } from "./integrations/describe.js";
 import { actionAppliesTo, actionArgSpec, buildActionProposal, buildIntegrationProposal, computeHandoverProposals } from "./proposalBuilder.js";
 import { startEventListener } from "./eventListener.js";
+import { registerTelegramMenu } from "./telegramMenu.js";
+import { proposalButtons, telegramKeyboard, decodeButton, BUTTON_COMMANDS } from "./buttons.js";
 import { whatsappLinkConfigured, whatsappLinkRoutes } from "./platforms/whatsappLink.js";
 import { proposalPagesConfigured, startProposalApi, proposalPageUrl, proposalCreated, pendingSubmitLink, proposalStartPayload, parseProposalStartPayload, knownDaoModel, isSolanaNetwork } from "./proposalPages.js";
 import { getSolanaAddress } from "./solana/wallets.js";
@@ -183,11 +185,12 @@ bot.on("message:text", async (ctx, next) => {
   if (isSlowSolanaCommand(name)) await ctx.replyWithChatAction("typing").catch(() => {});
   const result = await runSolanaCommand(name, solanaCtx);
   if (!result) return next();
+  const markup = result.buttons ? { reply_markup: telegramKeyboard(result.buttons) } : {};
   try {
-    await ctx.reply(result.text, { parse_mode: "Markdown", link_preview_options: { is_disabled: true } });
+    await ctx.reply(result.text, { parse_mode: "Markdown", link_preview_options: { is_disabled: true }, ...markup });
   } catch {
     // Text from members (a proposal's description) can break Markdown - send it plain.
-    await ctx.reply(result.text, { link_preview_options: { is_disabled: true } });
+    await ctx.reply(result.text, { link_preview_options: { is_disabled: true }, ...markup });
   }
   // A proposer's link for adding the proposal's details: privately, or a
   // t.me link that opens a private chat when the bot can't message them first.
@@ -408,16 +411,23 @@ async function resendSubmitLink(ctx, address, proposalId) {
 async function tgProposalPage(ctx, address, model, proposalId) {
   const network = currentNetwork().id;
   const page = await proposalCreated({ network, dao: address, model, proposalId, platform: "telegram", userId: ctx.from.id, cmd: TG_CMD });
-  if (!page) return;
+  const keyboard = { reply_markup: telegramKeyboard(proposalButtons({ model, id: proposalId, page: page?.page })) };
+  if (!page) {
+    await ctx.reply(`🗳 Proposal #${proposalId} — tap to act on it:`, keyboard).catch(() => {});
+    return;
+  }
   const isPrivate = ctx.chat.type === "private";
   const delivered = await ctx.api
     .sendMessage(ctx.from.id, page.editText, { link_preview_options: { is_disabled: true } })
     .then(() => true, () => false);
-  if (isPrivate) return;
+  if (isPrivate) {
+    await ctx.reply(`🗳 Proposal #${proposalId} — tap to act on it:`, keyboard).catch(() => {});
+    return;
+  }
   const how = delivered
     ? "The proposer got a private link to add the details."
     : `Proposer: open ${`https://t.me/${ctx.me.username}?start=${proposalStartPayload(network, address, proposalId)}`} to get your private link for adding the details.`;
-  await ctx.reply(`📄 Proposal #${proposalId}: ${page.page}\n${how}`, { link_preview_options: { is_disabled: true } }).catch(() => {});
+  await ctx.reply(`📄 Proposal #${proposalId}: ${page.page}\n${how}`, { link_preview_options: { is_disabled: true }, ...keyboard }).catch(() => {});
 }
 
 /**
@@ -1997,7 +2007,7 @@ bot.command("proposal", async (ctx) => {
     const page = proposalPageUrl(currentNetwork().id, address, id);
     if (page) lines.push("", `📄 Details and live status: ${page}`);
 
-    await ctx.reply(lines.join("\n"), { parse_mode: "Markdown" });
+    await ctx.reply(lines.join("\n"), { parse_mode: "Markdown", reply_markup: telegramKeyboard(proposalButtons({ model, id, state: stateLabel, page })) });
     await resendSubmitLink(ctx, address, id);
   } catch (err) {
     console.error(err);
@@ -4279,6 +4289,40 @@ bot.command("unstake", async (ctx) => {
                             ERROR HANDLING
 //////////////////////////////////////////////////////////////*/
 
+/*//////////////////////////////////////////////////////////////
+                            BUTTONS
+//////////////////////////////////////////////////////////////*/
+
+// A button under a proposal (buttons.js) runs its command as whoever
+// pressed it: the chat sees who pressed what, then the command runs
+// through the same handler as if they had typed it.
+bot.callbackQuery(/^c:/, async (ctx) => {
+  const decoded = decodeButton(ctx.callbackQuery.data);
+  const message = ctx.callbackQuery.message;
+  if (!decoded || !BUTTON_COMMANDS.has(decoded[0]) || !message) {
+    await ctx.answerCallbackQuery({ text: "That button doesn't do anything any more." }).catch(() => {});
+    return;
+  }
+  const [name, args] = decoded;
+  const text = `/${name}${args.length ? " " + args.join(" ") : ""}`;
+  await ctx.answerCallbackQuery({ text: `Running ${text}…` }).catch(() => {});
+  if (name !== "proposal") {
+    const who = [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" ") || ctx.from.username || "Someone";
+    await ctx.api.sendMessage(message.chat.id, `👆 ${who}: ${text}`).catch(() => {});
+  }
+  await bot.handleUpdate({
+    update_id: 0,
+    message: {
+      message_id: message.message_id,
+      date: Math.floor(Date.now() / 1000),
+      chat: message.chat,
+      from: ctx.from,
+      text,
+      entities: [{ type: "bot_command", offset: 0, length: name.length + 1 }],
+    },
+  });
+});
+
 bot.catch((err) => {
   console.error("Unhandled bot error:", err);
   const ctx = err.ctx;
@@ -4288,6 +4332,7 @@ bot.catch((err) => {
 });
 
 run(bot);
+registerTelegramMenu(bot.api);
 startEventListener(bot);
 // Proposal pages' API and the WhatsApp link page: Slack's install page
 // serves them on the public port when "Add to Slack" is set up;

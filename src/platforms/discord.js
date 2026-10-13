@@ -1,9 +1,10 @@
-import { Client, Events, GatewayIntentBits, PermissionFlagsBits, REST, Routes, SlashCommandBuilder, MessageFlags } from "discord.js";
+import { Client, Events, GatewayIntentBits, PermissionFlagsBits, REST, Routes, SlashCommandBuilder, MessageFlags, ActionRowBuilder, ButtonBuilder, ButtonStyle } from "discord.js";
 import { COMMANDS, runCommand, ADMIN_COMMANDS } from "./commands.js";
 import { OPPORTUNITY_COMMANDS } from "./commands/opportunity.js";
 import { SOWELLIAN_COMMANDS } from "./commands/sowellian.js";
 import { MARKET_COMMANDS } from "./commands/markets.js";
 import { startEventListener } from "../eventListener.js";
+import { encodeButton, decodeButton, BUTTON_COMMANDS } from "../buttons.js";
 
 /**
  * Discord front-end for the shared command core (commands.js).
@@ -142,8 +143,50 @@ async function registerCommands(token, applicationId, guildId) {
   console.log(`[discord] Registered ${body.length} slash commands ${guildId ? `to guild ${guildId}` : "globally"}`);
 }
 
-/** Handles one slash-command interaction. Exported for tests. */
+/** A reply's buttons as Discord action rows (at most 5 rows of 5). */
+export function discordComponents(rows = []) {
+  return rows.slice(0, 5).map((row) =>
+    new ActionRowBuilder().addComponents(
+      row.slice(0, 5).map((b) =>
+        b.url ? new ButtonBuilder().setLabel(b.label).setStyle(ButtonStyle.Link).setURL(b.url) : new ButtonBuilder().setLabel(b.label).setStyle(ButtonStyle.Secondary).setCustomId(encodeButton(b.cmd))
+      )
+    )
+  );
+}
+
+/**
+ * A button press: runs its command as the presser, posting who pressed
+ * what and the result in the channel (errors only to them).
+ */
+async function handleButton(interaction) {
+  const decoded = decodeButton(interaction.customId);
+  if (!decoded || !BUTTON_COMMANDS.has(decoded[0]) || !COMMANDS[decoded[0]]) return;
+  const [name, args] = decoded;
+  await interaction.deferReply();
+  const ctx = {
+    platform: "discord",
+    chatId: interaction.channelId,
+    userId: interaction.user.id,
+    args,
+    named: {},
+    isAdmin: interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ?? false,
+    cmd: discordCommand,
+  };
+  const result = await runCommand(name, ctx);
+  const [first, ...more] = splitForDiscord(toDiscordMarkdown(`<@${interaction.user.id}> → \`${discordCommand(name)} ${args.join(" ")}\`\n\n${result.text}`));
+  if (result.ephemeral) {
+    await interaction.deleteReply().catch(() => {});
+    await interaction.followUp({ content: first, flags: MessageFlags.Ephemeral });
+    return;
+  }
+  await interaction.editReply({ content: first, components: discordComponents(result.buttons) });
+  for (const content of more) await interaction.followUp({ content });
+  if (result.privateFollowUp) await interaction.followUp({ content: toDiscordMarkdown(result.privateFollowUp), flags: MessageFlags.Ephemeral });
+}
+
+/** Handles one slash-command or button interaction. Exported for tests. */
 export async function handleInteraction(interaction) {
+  if (interaction.isButton?.()) return handleButton(interaction);
   if (!interaction.isChatInputCommand()) return;
   // A grouped command arrives as /<group> <name>.
   const name = DISCORD_GROUPS[interaction.commandName] ? interaction.options.getSubcommand(false) : interaction.commandName;
@@ -175,7 +218,8 @@ export async function handleInteraction(interaction) {
     await interaction.deleteReply().catch(() => {});
     await interaction.followUp({ content: first, ...privateFlags });
   } else {
-    await interaction.editReply({ content: first });
+    // Buttons go on the reply only when it's the whole answer in one message.
+    await interaction.editReply({ content: first, ...(more.length === 0 && !command.ephemeralByDefault ? { components: discordComponents(result.buttons) } : {}) });
   }
   const private_ = Boolean(result.ephemeral || command.ephemeralByDefault);
   for (const content of more) await interaction.followUp({ content, ...(private_ ? privateFlags : {}) });
