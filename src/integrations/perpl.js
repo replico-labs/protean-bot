@@ -80,7 +80,12 @@ async function exchangeState(ctx, d) {
   const collateral = getAddress(info.collateralToken ?? info[4]);
   if (collateral !== d.collateral) throw new IntegrationError(`Perpl's exchange now takes ${collateral} as collateral, not the ${d.collateral} the bot has pinned - refusing until that's re-verified.`);
   const symbol = await ctx.publicClient.readContract({ address: collateral, abi: erc20Abi, functionName: "symbol" }).catch(() => d.collateralSymbol ?? "collateral");
-  const account = await read(ctx, d, "getAccountByAddr", [ctx.treasury]);
+  // An address with no Perpl account makes getAccountByAddr revert (testnet:
+  // error 0x03a0e277 carrying the address) rather than return id 0.
+  const account = await read(ctx, d, "getAccountByAddr", [ctx.treasury]).catch((err) => {
+    if (/revert/i.test(`${err.shortMessage ?? ""} ${err.message ?? ""}`)) return { accountId: 0n, balanceCNS: 0n };
+    throw err;
+  });
   const whitelisting = await read(ctx, d, "whitelistingEnabled");
   const whitelisted = whitelisting ? await read(ctx, d, "whitelisted", [ctx.treasury]) : true;
   return { decimals, symbol, accountId: account.accountId, balance: account.balanceCNS, whitelisted };

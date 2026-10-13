@@ -5,7 +5,7 @@ import { getAllRegisteredDaos } from "./db.js";
 import { formatEther } from "viem";
 import { publicClient, walletClient } from "./config.js";
 import { resolveDelegationsBehind, activeProposalIds, queueSweep } from "./governance/liquid.js";
-import { runOnNetwork, explorerTxUrl } from "./networks.js";
+import { runOnNetwork, explorerTxUrl, currentNetwork, networkEnv } from "./networks.js";
 import { readJson, writeJsonAtomic } from "./jsonFile.js";
 import { startSolanaListener } from "./solana/listener.js";
 
@@ -118,6 +118,33 @@ function short(address) {
 // same oversized range gets recomputed on the next poll too.
 const MAX_BLOCK_RANGE = 90n; // kept safely under the 100 limit, not flush against it
 
+// Other RPCs allow less: QuickNode's free plan answers "eth_getLogs is
+// limited to a 5 range". The first such error teaches the listener that
+// network's limit (or set <PREFIX>_LOGS_BLOCK_RANGE), and it carries on in
+// chunks that size.
+const learnedRange = new Map();
+function blockRange() {
+  const network = currentNetwork();
+  const configured = Number(networkEnv(network.id, "LOGS_BLOCK_RANGE"));
+  if (configured > 0) return BigInt(Math.floor(configured));
+  return learnedRange.get(network.id) ?? MAX_BLOCK_RANGE;
+}
+function learnRange(err) {
+  const m = `${err?.details ?? ""} ${err?.message ?? ""}`.match(/limited to an? (\d+)[- ]?(?:block)? ?range/i);
+  if (!m) return false;
+  const limit = BigInt(Math.max(1, Number(m[1])));
+  const id = currentNetwork().id;
+  if (learnedRange.get(id) === limit) return false;
+  learnedRange.set(id, limit);
+  console.log(`Event listener: ${id}'s RPC reads at most ${limit} blocks of events per call - using that from now on.`);
+  return true;
+}
+
+// Far behind (the bot was down, or a small-range RPC fell back): skip to
+// the last MAX_CATCHUP_BLOCKS rather than replaying stale notifications
+// one tiny chunk at a time. EVENT_LISTENER_MAX_CATCHUP_BLOCKS overrides.
+const MAX_CATCHUP_BLOCKS = BigInt(Number(process.env.EVENT_LISTENER_MAX_CATCHUP_BLOCKS) || 600);
+
 async function checkDao(notify, dao, currentBlock, state) {
   const abiName = modelToAbiName(dao.model);
   if (!abiName) return;
@@ -144,9 +171,14 @@ async function checkDao(notify, dao, currentBlock, state) {
   // against it. Deliberately sized to MAX_BLOCK_RANGE itself, not some
   // larger number, since anything larger just becomes the first chunk
   // to process below anyway.
-  const fromBlock = lastProcessed !== undefined ? BigInt(lastProcessed) + 1n : currentBlock - MAX_BLOCK_RANGE > 0n ? currentBlock - MAX_BLOCK_RANGE : 0n;
+  let fromBlock = lastProcessed !== undefined ? BigInt(lastProcessed) + 1n : currentBlock - MAX_BLOCK_RANGE > 0n ? currentBlock - MAX_BLOCK_RANGE : 0n;
 
   if (fromBlock > currentBlock) return;
+  if (currentBlock - fromBlock > MAX_CATCHUP_BLOCKS) {
+    console.log(`Event listener: DAO ${dao.governanceAddress} is ${currentBlock - fromBlock} blocks behind - skipping to the last ${MAX_CATCHUP_BLOCKS}.`);
+    fromBlock = currentBlock - MAX_CATCHUP_BLOCKS;
+    state[stateKey] = { lastProcessedBlock: (fromBlock - 1n).toString() };
+  }
 
   // Walk the full range in <=MAX_BLOCK_RANGE chunks, saving progress
   // after each one succeeds - if a later chunk fails (a transient RPC
@@ -154,7 +186,8 @@ async function checkDao(notify, dao, currentBlock, state) {
   // poll resumes from there rather than redoing the whole backlog.
   let chunkStart = fromBlock;
   while (chunkStart <= currentBlock) {
-    const chunkEnd = chunkStart + MAX_BLOCK_RANGE - 1n > currentBlock ? currentBlock : chunkStart + MAX_BLOCK_RANGE - 1n;
+    const range = blockRange();
+    const chunkEnd = chunkStart + range - 1n > currentBlock ? currentBlock : chunkStart + range - 1n;
 
     try {
       const logs = await publicClient.getLogs({
@@ -180,7 +213,8 @@ async function checkDao(notify, dao, currentBlock, state) {
 
       state[stateKey] = { lastProcessedBlock: chunkEnd.toString() };
     } catch (err) {
-      console.error(`Event listener: couldn't check DAO ${dao.governanceAddress} (${dao.model}), blocks ${chunkStart}-${chunkEnd}:`, err.message);
+      if (learnRange(err)) continue; // retry this chunk at the RPC's own limit
+      console.error(`Event listener: couldn't check DAO ${dao.governanceAddress} (${dao.model}), blocks ${chunkStart}-${chunkEnd}:`, err.shortMessage ?? err.message);
       return; // stop here for this poll - already-saved chunks stay saved, resume from here next time
     }
 
@@ -243,7 +277,12 @@ export function startEventListener(target, pollIntervalMs = 20_000) {
       : target;
   const statePath = statePathFor(platform);
 
+  // A pass can outlast the interval (a far-behind DAO, a small-range RPC):
+  // never run two at once, or both would post the same notifications.
+  let polling = false;
   async function pollOnce() {
+    if (polling) return;
+    polling = true;
     try {
       const daos = getAllRegisteredDaos().filter((dao) => dao.platform === platform);
       if (daos.length === 0) return;
@@ -259,6 +298,7 @@ export function startEventListener(target, pollIntervalMs = 20_000) {
             const currentBlock = await publicClient.getBlockNumber();
             for (const dao of networkDaos) {
               await checkDao(notify, dao, currentBlock, state);
+              writeState(statePath, state); // progress survives a restart mid-pass
             }
           });
         } catch (err) {
@@ -270,6 +310,8 @@ export function startEventListener(target, pollIntervalMs = 20_000) {
       writeState(statePath, state);
     } catch (err) {
       console.error("Event listener: poll cycle failed:", err.message);
+    } finally {
+      polling = false;
     }
   }
 
