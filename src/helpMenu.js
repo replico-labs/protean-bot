@@ -33,7 +33,8 @@ const ORDER = Object.keys(TOPICS);
  */
 export function helpReply({ sections, topic, intro, cmd }) {
   const present = sections.filter((s) => s.lines.length).sort((a, b) => ORDER.indexOf(a.key) - ORDER.indexOf(b.key));
-  const key = topic?.toLowerCase();
+  // "/help @proteandao_bot" (with a space) passes the bot's name as a word: not a topic.
+  const key = topic?.startsWith("@") ? undefined : topic?.toLowerCase();
 
   if (key === "all") {
     return { text: [intro, ...present.flatMap((s) => ["", `*${s.title}*`, ...s.lines])].join("\n"), buttons: [] };
