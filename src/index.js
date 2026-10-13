@@ -84,6 +84,7 @@ import { integrationListLines, actionInfoText } from "./integrations/describe.js
 import { actionAppliesTo, actionArgSpec, buildActionProposal, buildIntegrationProposal, computeHandoverProposals } from "./proposalBuilder.js";
 import { startEventListener } from "./eventListener.js";
 import { registerTelegramMenu } from "./telegramMenu.js";
+import { helpReply } from "./helpMenu.js";
 import { proposalButtons, telegramKeyboard, decodeButton, BUTTON_COMMANDS } from "./buttons.js";
 import { whatsappLinkConfigured, whatsappLinkRoutes } from "./platforms/whatsappLink.js";
 import { proposalPagesConfigured, startProposalApi, proposalPageUrl, proposalCreated, pendingSubmitLink, proposalStartPayload, parseProposalStartPayload, knownDaoModel, isSolanaNetwork } from "./proposalPages.js";
@@ -546,9 +547,11 @@ const MODEL_HELP_BLOCKS = {
   ],
 };
 
-bot.command("help", async (ctx) => {
-  const lines = [
-    "*Setup*",
+/** /help's topics for this chat's EVM DAO, market and wrapper (helpMenu.js). */
+function telegramHelpSections(chatId) {
+  const sections = [];
+  const section = (key, title, lines) => sections.push({ key, title, lines });
+  section("setup", "Setup", [
     "/createdao `<name> <symbol> <initialSupply> <maxSupply> [model] <network>` — the main \"spin up a new DAO\" command: deploys a token, treasury, and governance contract, all linked to this chat (group owner/admins). Models: " + SUPPORTED_MODELS.filter((m) => m !== "board").join(", "),
     "/createboarddao `<name> <signer1> <signer2> ... <network>` — for a Board (multisig) DAO specifically — no token at all, so it's a separate command (group owner/admins)",
     "/network — which chain this chat's DAO is on, and which networks this bot supports",
@@ -557,18 +560,16 @@ bot.command("help", async (ctx) => {
     "/deploywelcomedistributor `<amountPerClaim> <distributionCap>` — solves \"everyone's tokens are stuck in the operator wallet\": deploys a contract new members can claim from (creator only)",
     "/deploynftwrapper — one per DAO: deploys the contract that holds this DAO's NFTs and lists them on marketplaces like OpenSea — NFTs go here, never to the treasury (creator only)",
     "/setdistributor `<address>` — link an already-deployed welcome distributor so /claim actually works (admin)",
-    "",
-    "*Your wallet*",
+  ]);
+  section("wallet", "Your wallet", [
     "/wallet — show your wallet address (created automatically the first time you need one — no setup required)",
     "/migratewallet — used this bot back when it derived wallets from a shared seed? Move your funds to the new, individually-encrypted system",
-  ];
+  ]);
 
-  const daoAddress = getChatDAO(ctx.chat.id);
+  const daoAddress = getChatDAO(chatId);
+  const model = daoAddress ? getChatModel(chatId) : null;
   if (daoAddress) {
-    const model = getChatModel(ctx.chat.id);
-    lines.push(
-      "",
-      `*DAO info* (this group's DAO uses ${model} governance)`,
+    const lines = [
       "/dao — DAO name, token, treasury, and full governance config in one place",
       "/treasury — current treasury balance",
       "/contribute — want to donate? Get the treasury's address sent to you privately",
@@ -579,30 +580,28 @@ bot.command("help", async (ctx) => {
       "/tip `<amount> <recipient> [tokenAddressOrTicker]` — distribute tokens from the DAO's own operator-held supply (creator only) — this is how newly-created tokens actually reach people",
       "/send `<amount> <recipient> [tokenAddressOrTicker]` — send tokens YOU personally hold to anyone, no restrictions — add the native symbol (`MON`, `ETH`, `HYPE`) or `native` at the end to send native currency instead of a token",
       "/proposals — see every proposal this DAO has, with current status",
-      "/proposal `<id>` — full detail on one specific proposal, with its page link (and, for its proposer, the private link to add the details if they haven't yet)"
-    );
+      "/proposal `<id>` — full detail on one specific proposal, with its page link (and, for its proposer, the private link to add the details if they haven't yet)",
+    ];
     if (hasToken(model)) {
       lines.push(
         "/stake `<amount>` — convert raw tokens into voting power",
         "/unstake `<amount>` — convert voting power back into raw, transferable tokens"
       );
     }
-    lines.push("", "*Proposals & actions for this DAO*", ...(MODEL_HELP_BLOCKS[model] ?? ["No commands known for this model."]));
-    lines.push(
+    section("dao", "The DAO", lines);
+    const proposing = [...(MODEL_HELP_BLOCKS[model] ?? ["No commands known for this model."])];
+    proposing.push(
       "/listactions — ready-made actions this DAO can propose, including swaps, lending, staking and more on this network's protocols",
       "/proposeaction `<actionId> <args...> <description>` — propose one of them; the bot encodes every step",
       "/actioninfo `<actionId>` — what any action does, its arguments and their units (and, for protocol actions, where addresses were checked)"
     );
-    if (model === "sowellian") lines.push("/feeds `<search>` — find a Pyth price feed for an oracle proposal's `feed=`, e.g. /feeds eth");
-  } else {
-    lines.push("", "_This group isn't linked to a DAO yet - run /register or /createdao to see DAO commands here._");
+    if (model === "sowellian") proposing.push("/feeds `<search>` — find a Pyth price feed for an oracle proposal's `feed=`, e.g. /feeds eth");
+    section("proposals", `Proposals (${model})`, proposing);
   }
 
-  const marketAddress = getChatMarket(ctx.chat.id);
-  if (marketAddress) {
-    lines.push(
-      "",
-      "*Opportunity Market* (linked to this group — runs on Sepolia, separate from everything above)",
+  if (getChatMarket(chatId)) {
+    section("opportunity", "Opportunity Market", [
+      "_Linked to this group — runs on Sepolia, separate from the DAO._",
       "/listopportunity `<metadataURI>` — add something people can confidentially back",
       "/deposit `<amount>` — put underlying tokens into the market (this part is public; what you do with it after isn't)",
       "/back — the core confidential action: run it bare and the bot DMs you to collect your opportunity + amount privately, so neither ever appears in this chat",
@@ -618,38 +617,55 @@ bot.command("help", async (ctx) => {
       "/cancelmarket — deployer only: cancels the market so everyone can reclaim their stake",
       "/revealwinningtotal — deployer only, but public on purpose: everyone needs this number to compute their own reward",
       "/allbets — deployer only: decrypts every single bet at once, sent to you privately",
-      "/analytics — deployer only: totals and average bets, overall and per opportunity, sent to you privately"
-    );
+      "/analytics — deployer only: totals and average bets, overall and per opportunity, sent to you privately",
+    ]);
   } else {
-    lines.push(
-      "",
-      "_No Opportunity Market linked - /registermarket `<address>` or /createmarket `<underlyingToken>` to link one (group owner/admins), /unregistermarket to unlink (group admins only)._"
-    );
+    section("opportunity", "Opportunity Market", [
+      "_No Opportunity Market linked - /registermarket `<address>` or /createmarket `<underlyingToken>` to link one (group owner/admins), /unregistermarket to unlink (group admins only)._",
+    ]);
   }
 
-  const guardWrapperAddress = getChatGuardWrapper(ctx.chat.id);
-  if (guardWrapperAddress) {
-    lines.push(
-      "",
-      "*Guard Wrapper* (linked to this group)",
+  if (getChatGuardWrapper(chatId)) {
+    section("guard", "Guard wrapper", [
       "/guardwrapper — current signers, required confirmations, and tenure status",
       "/instruction `<id>` — full detail on one instruction, including its raw calldata",
       "/confirminstruction `<id>` — signers only: confirm a pending instruction, executes automatically once enough do",
       "/rejectinstruction `<id>` — signers only: permanently cancel an instruction once enough signers agree",
       "/revokeconfirmation `<id>` — withdraw your own earlier confirmation before execution",
-      "/handovertowrapper `<wrapperAddress>` — creator only: computes the proposals that hand Treasury and token-minting control to a wrapper, sent to you privately"
-    );
-  } else {
-    lines.push(
-      "",
-      "_No guard wrapper linked - /deployguardwrapper `<requiredApprovals> <tenureLengthSeconds> <signer...>` to deploy one, or /registerguardwrapper `<address>` to link an existing one (creator only)._"
-    );
+      "/handovertowrapper `<wrapperAddress>` — creator only: computes the proposals that hand Treasury and token-minting control to a wrapper, sent to you privately",
+    ]);
+  } else if (daoAddress) {
+    section("guard", "Guard wrapper", [
+      "_No guard wrapper linked - /deployguardwrapper `<requiredApprovals> <tenureLengthSeconds> <signer...>` to deploy one, or /registerguardwrapper `<address>` to link an existing one (creator only)._",
+    ]);
   }
 
-  lines.push("", "*Welcome tokens*", "/claim — claim your welcome tokens");
+  section("welcome", "Welcome tokens", ["/claim — claim your welcome tokens"]);
 
-  await replyChunked(ctx, lines, { parse_mode: "Markdown" });
+  const intro = daoAddress
+    ? `*Protean DAO* — this group's DAO uses *${model}* governance`
+    : "*Protean DAO* — this group isn't linked to a DAO yet. Run /createdao or /register to link one (see Setup).";
+  return { intro, sections };
+}
+
+/** `/help [topic]` for this chat: a Solana DAO's when it has one, else the EVM one. */
+async function telegramHelp(chat, userId, topic) {
+  if (SOLANA_ENABLED) {
+    const ctx = { platform: "telegram", chatId: chat.id, userId, args: topic ? [topic] : [], isDirect: chat.type === "private", cmd: (n) => `/${n}` };
+    const solana = await runSolanaCommand("help", ctx);
+    if (solana) return solana;
+  }
+  const { intro, sections } = telegramHelpSections(chat.id);
+  return helpReply({ sections, topic, intro, cmd: (n) => `/${n}` });
+}
+
+bot.command("help", async (ctx) => {
+  const topic = splitArgs(ctx.match)[0];
+  const { text, buttons } = await telegramHelp(ctx.chat, ctx.from.id, topic);
+  if (!buttons?.length) return replyChunked(ctx, text.split("\n"), { parse_mode: "Markdown" });
+  await ctx.reply(text, { parse_mode: "Markdown", reply_markup: telegramKeyboard(buttons) });
 });
+
 
 /*//////////////////////////////////////////////////////////////
                             /createdao
@@ -4304,9 +4320,17 @@ bot.callbackQuery(/^c:/, async (ctx) => {
     return;
   }
   const [name, args] = decoded;
+  // Help topics swap the help message in place instead of posting a new one.
+  if (name === "help" && args[0] !== "all") {
+    await ctx.answerCallbackQuery().catch(() => {});
+    const { text, buttons } = await telegramHelp(message.chat, ctx.from.id, args[0]);
+    const extra = { reply_markup: telegramKeyboard(buttons ?? []), link_preview_options: { is_disabled: true } };
+    await ctx.editMessageText(text, { parse_mode: "Markdown", ...extra }).catch(() => ctx.editMessageText(text, extra).catch(() => {}));
+    return;
+  }
   const text = `/${name}${args.length ? " " + args.join(" ") : ""}`;
   await ctx.answerCallbackQuery({ text: `Running ${text}…` }).catch(() => {});
-  if (name !== "proposal") {
+  if (name !== "proposal" && name !== "help") {
     const who = [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" ") || ctx.from.username || "Someone";
     await ctx.api.sendMessage(message.chat.id, `👆 ${who}: ${text}`).catch(() => {});
   }

@@ -2,6 +2,7 @@ import { getChatDAO, getChatModel, getChatMarket, getChatGuardWrapper, getChatNe
 import { runOnNetwork } from "../networks.js";
 import { hasToken } from "../governance/common.js";
 import { UserError, reply } from "./helpers.js";
+import { helpReply } from "../helpMenu.js";
 import { CORE_COMMANDS } from "./commands/core.js";
 import { runSolanaCommand } from "../solana/commands.js";
 import { SETUP_COMMANDS } from "./commands/setup.js";
@@ -67,27 +68,31 @@ const CORE_META = {
 for (const [name, [section, usage, tokenOnly]] of Object.entries(CORE_META)) {
   Object.assign(CORE_COMMANDS[name], { section, usage, ...(tokenOnly ? { tokenOnly: true } : {}) });
 }
+// Board confirms, conviction supports, Sowellian and decision markets have
+// their own steps: /vote only does anything for these.
+CORE_COMMANDS.vote.models = ["tokenWeighted", "quadratic", "liquid", "optimistic", "sortition", "delegate"];
 
-const SECTION_ORDER = [
-  "Setup",
-  "Your wallet",
-  "Tokens",
-  "The DAO",
-  "Proposing",
-  "Deciding",
-  "Council",
-  "Sowellian",
-  "Decision markets",
-  "Guard wrapper",
-  "Opportunity Market",
-];
+// Help sections, in order, and the topic word for each (helpMenu.js).
+const SECTION_ORDER = {
+  Setup: "setup",
+  "Your wallet": "wallet",
+  Tokens: "tokens",
+  "The DAO": "dao",
+  Proposing: "proposing",
+  Deciding: "deciding",
+  Council: "council",
+  Sowellian: "sowellian",
+  "Decision markets": "markets",
+  "Guard wrapper": "guard",
+  "Opportunity Market": "opportunity",
+};
 
 const help = {
   section: "Help",
-  usage: "",
-  description: "Show the commands that apply to this channel",
+  usage: "[topic]",
+  description: "The commands that apply to this channel, by topic",
   ephemeralByDefault: true,
-  options: [],
+  options: [{ name: "topic", description: "One topic, or all", required: false, choices: [...Object.values(SECTION_ORDER), "all"] }],
   async run(ctx) {
     const hasDao = Boolean(getChatDAO(ctx.chatId, ctx.platform));
     const model = hasDao ? getChatModel(ctx.chatId, ctx.platform) : null;
@@ -103,14 +108,16 @@ const help = {
       return true;
     };
 
-    const lines = [model ? `*Protean DAO* — this channel's DAO uses *${model}* governance` : "*Protean DAO* — no DAO linked here yet"];
-    for (const section of SECTION_ORDER) {
-      const entries = Object.entries(COMMANDS).filter(([name, c]) => c.section === section && applies(name, c));
-      if (!entries.length) continue;
-      lines.push("", `*${section}*`);
-      for (const [name, c] of entries) lines.push(`\`${ctx.cmd(name)}${c.usage ? " " + c.usage : ""}\` — ${c.description}`);
-    }
-    return reply(lines.join("\n"), { ephemeral: true });
+    const sections = Object.entries(SECTION_ORDER).map(([title, key]) => ({
+      key,
+      title,
+      lines: Object.entries(COMMANDS)
+        .filter(([name, c]) => c.section === title && applies(name, c))
+        .map(([name, c]) => `\`${ctx.cmd(name)}${c.usage ? " " + c.usage : ""}\` — ${c.description}`),
+    }));
+    const intro = model ? `*Protean DAO* — this channel's DAO uses *${model}* governance` : "*Protean DAO* — no DAO linked here yet";
+    const { text, buttons } = helpReply({ sections, topic: ctx.args?.[0], intro, cmd: ctx.cmd });
+    return reply(text, { ephemeral: true, buttons });
   },
 };
 

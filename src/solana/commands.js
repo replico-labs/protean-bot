@@ -2,6 +2,7 @@ import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { getChatSolana, registerSolanaChat, unregisterSolanaChat, updateChatSolana } from "../db.js";
 import { proposalButtons } from "../buttons.js";
+import { helpReply } from "../helpMenu.js";
 import { SOLANA_ENABLED, SOLANA_MODELS, getSolanaNetwork, resolveSolanaNetwork, explorerUrl, getSolanaOperator } from "./config.js";
 import { getOrCreateSolanaKeypair, getSolanaAddress, ensureSolFunded } from "./wallets.js";
 import { ACTIONS, MODEL_WORDS, actionApplies, listActionsText, actionInfoText } from "./actions.js";
@@ -340,19 +341,36 @@ async function assetLines(network, d, g, tok, now) {
 // commands
 // ---------------------------------------------------------------
 
+// /help's topics: [topic, title, commands]. A command left out of every
+// topic still works; it just isn't listed.
+const HELP_SECTIONS = [
+  ["setup", "Setup", ["network", "unregister"]],
+  ["wallet", "Your wallet", ["wallet", "balance", "stake", "unstake"]],
+  ["dao", "The DAO", ["dao", "treasury", "tip", "proposals", "proposal"]],
+  ["proposing", "Proposing", ["propose", "proposeaction", "listactions", "actioninfo"]],
+  ["deciding", "Deciding", ["vote", "challenge", "support", "withdrawsupport", "mysupport", "assets", "confirm", "revoke", "queue", "execute", "cancel"]],
+  ["council", "Council", ["council", "startelection", "declarecandidacy", "voteinelection", "finalizeelection", "initiaterecall", "voterecall", "finalizerecall"]],
+];
+
 const COMMANDS = {
   help: {
-    usage: "",
-    description: "The commands for this chat's Solana DAO",
+    usage: "[topic]",
+    description: "The commands for this chat's Solana DAO, by topic",
     async run(ctx) {
       const link = getChatSolana(ctx.chatId, ctx.platform);
-      const lines = [`*Protean DAO on Solana* — ${MODEL_LABEL[link.model] ?? link.model} DAO on ${getSolanaNetwork(link.network).name}`, ""];
-      for (const [name, c] of Object.entries(COMMANDS)) {
-        if (c.models && !c.models.includes(link.model)) continue;
-        lines.push(`\`${ctx.cmd(name)}${c.usage ? " " + c.usage : ""}\` — ${c.description}`);
-      }
-      lines.push("", "Opportunity Market commands work here as usual.");
-      return reply(lines.join("\n"));
+      const sections = HELP_SECTIONS.map(([key, title, names]) => ({
+        key,
+        title,
+        lines: names
+          .filter((name) => COMMANDS[name] && !(COMMANDS[name].models && !COMMANDS[name].models.includes(link.model)))
+          .map((name) => `\`${ctx.cmd(name)}${COMMANDS[name].usage ? " " + COMMANDS[name].usage : ""}\` — ${COMMANDS[name].description}`),
+      }));
+      const intro = [
+        `*Protean DAO on Solana* — ${MODEL_LABEL[link.model] ?? link.model} DAO on ${getSolanaNetwork(link.network).name}`,
+        "Opportunity Market commands work here as usual.",
+      ].join("\n");
+      const { text, buttons } = helpReply({ sections, topic: ctx.args?.[0], intro, cmd: ctx.cmd });
+      return reply(text, { buttons });
     },
   },
 

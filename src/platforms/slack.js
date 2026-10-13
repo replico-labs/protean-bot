@@ -91,7 +91,7 @@ export async function handleSlashCommand({ command, ack, respond, client }) {
   recordSlackTeam(command.channel_id, command.team_id);
   // Public results post to the channel so the whole group sees votes and
   // proposals, same as Telegram; errors and private details stay ephemeral.
-  await respond({ response_type: result.ephemeral ? "ephemeral" : "in_channel", text: result.text, mrkdwn: true, ...(result.ephemeral ? {} : slackBlocks(result.text, result.buttons)) });
+  await respond({ response_type: result.ephemeral ? "ephemeral" : "in_channel", text: result.text, mrkdwn: true, ...slackBlocks(result.text, result.buttons) });
   // Something only the caller should see after a public reply (a proposal's edit link).
   if (result.privateFollowUp) await respond({ response_type: "ephemeral", text: result.privateFollowUp, mrkdwn: true });
 }
@@ -128,6 +128,11 @@ export async function handleButton({ ack, body, action, respond }) {
   };
   const result = await runCommand(name, ctx);
   if (body.team?.id) recordSlackTeam(channelId, body.team.id);
+  // Help topics swap the (private) help message in place.
+  if (name === "help") {
+    await respond({ response_type: "ephemeral", replace_original: true, text: result.text, mrkdwn: true, ...slackBlocks(result.text, result.buttons) });
+    return;
+  }
   const text = `<@${body.user.id}> → \`${SLASH_COMMAND} ${name} ${args.join(" ")}\`\n\n${result.text}`;
   await respond({ response_type: result.ephemeral ? "ephemeral" : "in_channel", replace_original: false, text, mrkdwn: true, ...(result.ephemeral ? {} : slackBlocks(text, result.buttons)) });
   if (result.privateFollowUp) await respond({ response_type: "ephemeral", replace_original: false, text: result.privateFollowUp, mrkdwn: true });

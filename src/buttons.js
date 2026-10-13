@@ -73,7 +73,7 @@ export function decodeButton(data) {
 }
 
 /** Only these commands can come from a button - a forged payload can't run anything else. */
-export const BUTTON_COMMANDS = new Set(["vote", "challenge", "support", "confirm", "queue", "execute", "proposal"]);
+export const BUTTON_COMMANDS = new Set(["vote", "challenge", "support", "confirm", "queue", "execute", "proposal", "help"]);
 
 /** Telegram's inline keyboard for `rows`. */
 export function telegramKeyboard(rows) {

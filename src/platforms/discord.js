@@ -162,7 +162,6 @@ async function handleButton(interaction) {
   const decoded = decodeButton(interaction.customId);
   if (!decoded || !BUTTON_COMMANDS.has(decoded[0]) || !COMMANDS[decoded[0]]) return;
   const [name, args] = decoded;
-  await interaction.deferReply();
   const ctx = {
     platform: "discord",
     chatId: interaction.channelId,
@@ -172,6 +171,15 @@ async function handleButton(interaction) {
     isAdmin: interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ?? false,
     cmd: discordCommand,
   };
+  // Help topics swap the (private) help message in place.
+  if (name === "help") {
+    const result = await runCommand(name, ctx);
+    const [first, ...more] = splitForDiscord(toDiscordMarkdown(result.text));
+    await interaction.update({ content: first, components: more.length ? [] : discordComponents(result.buttons) });
+    for (const content of more) await interaction.followUp({ content, flags: MessageFlags.Ephemeral });
+    return;
+  }
+  await interaction.deferReply();
   const result = await runCommand(name, ctx);
   const [first, ...more] = splitForDiscord(toDiscordMarkdown(`<@${interaction.user.id}> → \`${discordCommand(name)} ${args.join(" ")}\`\n\n${result.text}`));
   if (result.ephemeral) {
@@ -219,7 +227,7 @@ export async function handleInteraction(interaction) {
     await interaction.followUp({ content: first, ...privateFlags });
   } else {
     // Buttons go on the reply only when it's the whole answer in one message.
-    await interaction.editReply({ content: first, ...(more.length === 0 && !command.ephemeralByDefault ? { components: discordComponents(result.buttons) } : {}) });
+    await interaction.editReply({ content: first, ...(more.length === 0 ? { components: discordComponents(result.buttons) } : {}) });
   }
   const private_ = Boolean(result.ephemeral || command.ephemeralByDefault);
   for (const content of more) await interaction.followUp({ content, ...(private_ ? privateFlags : {}) });
