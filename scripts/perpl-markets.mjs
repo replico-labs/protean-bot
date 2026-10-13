@@ -8,6 +8,7 @@
  *   node scripts/perpl-markets.mjs --network monad-mainnet
  *   node scripts/perpl-markets.mjs --max 4096      # scan further (default 2048)
  *   node scripts/perpl-markets.mjs --rps 4         # slower, for a stricter RPC (default 8/s)
+ *   node scripts/perpl-markets.mjs --address 0xTREASURY   # can this address trade? (no market scan)
  *
  * Uses the network's RPC from .env (RPC_URL for Monad testnet,
  * MONAD_MAINNET_RPC_URL for mainnet) or the public one.
@@ -48,6 +49,20 @@ const [symbol, name, decimals] = await Promise.all(["symbol", "name", "decimals"
 console.log(`Perpl exchange on ${chain.name}: ${exchange}${(await read("isHalted")) ? "  (HALTED)" : ""}`);
 console.log(`Collateral: ${collateral}  ${symbol} (${name}), ${decimals} decimals`);
 console.log(`Pinned in the bot: ${d.collateral}${collateral.toLowerCase() === d.collateral.toLowerCase() ? "  ✓ same" : "  ✗ DIFFERENT - update perpl.js"}`);
+// --address: whitelist and account status of one address (e.g. a DAO's treasury), then stop.
+const who = arg("address");
+if (who) {
+  const enabled = await read("whitelistingEnabled");
+  const listed = enabled ? await read("whitelisted", [who]) : true;
+  const account = await read("getAccountByAddr", [who]).catch(() => null);
+  console.log(`\nAddress ${who}`);
+  console.log(`  Whitelisting on the exchange: ${enabled ? "ON - only listed addresses can open an account" : "OFF - anyone can trade, nothing to do"}`);
+  if (enabled) console.log(`  This address: ${listed ? "✓ whitelisted" : "✗ NOT whitelisted - ask Perpl to whitelist it"}`);
+  console.log(`  Perpl account: ${account && account.accountId > 0n ? `#${account.accountId}, ${Number(account.balanceCNS) / 10 ** Number(decimals)} ${symbol} free` : "none yet (the first perpl-deposit opens it)"}`);
+  console.log(`  Minimum first deposit: ${Number(await read("getMinAccountOpenCNS")) / 10 ** Number(decimals)} ${symbol}`);
+  process.exit(0);
+}
+
 console.log(`\nScanning market ids 0-${max} at ${rps} requests a second (~${Math.ceil(max / rps / 60)} min)…`);
 
 const found = [];
