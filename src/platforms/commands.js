@@ -3,6 +3,7 @@ import { runOnNetwork } from "../networks.js";
 import { hasToken } from "../governance/common.js";
 import { UserError, reply } from "./helpers.js";
 import { helpReply } from "../helpMenu.js";
+import { withTxTracking, takeTxLinks } from "../txLinks.js";
 import { CORE_COMMANDS } from "./commands/core.js";
 import { runSolanaCommand } from "../solana/commands.js";
 import { SETUP_COMMANDS } from "./commands/setup.js";
@@ -157,6 +158,15 @@ export async function runCommand(name, ctx) {
       { ephemeral: true }
     );
   }
+  // Explorer links for any EVM transactions the command sends (txLinks.js).
+  return withTxTracking(async () => {
+    const result = await runTracked(name, command, ctx);
+    const links = takeTxLinks();
+    return links ? { ...result, text: result.text + links } : result;
+  });
+}
+
+async function runTracked(name, command, ctx) {
   // A Solana DAO's chat, or a Solana DAO being created or linked: handled in
   // src/solana (null when it isn't a Solana matter, or Solana is off).
   const solana = await runSolanaCommand(name, { ...ctx, command: name });

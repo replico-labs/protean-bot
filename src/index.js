@@ -10,7 +10,7 @@ import { takeModelOptions, checkModelOptions, modelOptionsUsage, proposeForModel
 import { feedsText } from "./governance/sowellian.js";
 import { rewardComputedText, withdrawnText } from "./opportunityMarket/payoutText.js";
 import { marketSendMode, sendFromMarketWallet, marketWalletBalances } from "./opportunityMarket/send.js";
-import { currentNetwork, explorerAddressLine, isNativeTokenWord, runOnNetwork, takeNetworkArg, describeNetwork, ENABLED_NETWORKS, getNetwork, blocksToDuration } from "./networks.js";
+import { currentNetwork, explorerAddressLine, explorerTxUrl, isNativeTokenWord, runOnNetwork, takeNetworkArg, describeNetwork, ENABLED_NETWORKS, getNetwork, blocksToDuration } from "./networks.js";
 import {
   registerChat,
   getChatDAO,
@@ -85,6 +85,7 @@ import { actionAppliesTo, actionArgSpec, buildActionProposal, buildIntegrationPr
 import { startEventListener } from "./eventListener.js";
 import { registerTelegramMenu } from "./telegramMenu.js";
 import { helpReply } from "./helpMenu.js";
+import { withTxTracking, trackedChatId, takeTxLinks, trackTx } from "./txLinks.js";
 import { proposalButtons, telegramKeyboard, decodeButton, BUTTON_COMMANDS } from "./buttons.js";
 import { whatsappLinkConfigured, whatsappLinkRoutes } from "./platforms/whatsappLink.js";
 import { proposalPagesConfigured, startProposalApi, proposalPageUrl, proposalCreated, pendingSubmitLink, proposalStartPayload, parseProposalStartPayload, knownDaoModel, isSolanaNetwork } from "./proposalPages.js";
@@ -130,6 +131,22 @@ bot.use(sequentialize((ctx) => ctx.from?.id?.toString()));
 // to a Base DAO reads and writes Base, one linked to Monad reads Monad.
 // Groups with no DAO yet, and DMs, use the bot's default network.
 bot.use((ctx, next) => runOnNetwork(ctx.chat ? getChatNetwork(ctx.chat.id) : currentNetwork().id, next));
+
+/**
+ * Explorer links: transactions a command sends (txLinks.js) are linked at
+ * the end of its next message to the same chat - the result, never a
+ * "⏳ working on it" status message.
+ */
+bot.use((ctx, next) => withTxTracking(next, ctx.chat?.id ?? null));
+bot.api.config.use((prev, method, payload, signal) => {
+  if ((method === "sendMessage" || method === "editMessageText") && typeof payload?.text === "string" && !payload.text.startsWith("⏳") && String(payload.chat_id) === String(trackedChatId())) {
+    const links = takeTxLinks();
+    if (links && payload.text.length + links.length <= 4096) {
+      payload = { ...payload, text: payload.text + links, link_preview_options: payload.link_preview_options ?? { is_disabled: true } };
+    }
+  }
+  return prev(method, payload, signal);
+});
 
 /**
  * Creating, linking and unlinking a group's DAO or market decides what
@@ -1262,7 +1279,7 @@ bot.command("confirminstruction", async (ctx) => {
     await ctx.api.editMessageText(
       ctx.chat.id,
       statusMsg.message_id,
-      `✅ Confirmed instruction #${idStr}.\nTx: \`${short(hash)}\`\n\nCheck \`/instruction ${idStr}\` to see if it's executed yet.`,
+      `✅ Confirmed instruction #${idStr}.\n\nCheck \`/instruction ${idStr}\` to see if it's executed yet.`,
       { parse_mode: "Markdown" }
     );
   } catch (err) {
@@ -1301,7 +1318,7 @@ bot.command("rejectinstruction", async (ctx) => {
     await ctx.api.editMessageText(
       ctx.chat.id,
       statusMsg.message_id,
-      `✅ Rejected instruction #${idStr}.\nTx: \`${short(hash)}\``,
+      `✅ Rejected instruction #${idStr}.`,
       { parse_mode: "Markdown" }
     );
   } catch (err) {
@@ -1340,7 +1357,7 @@ bot.command("revokeconfirmation", async (ctx) => {
     await ctx.api.editMessageText(
       ctx.chat.id,
       statusMsg.message_id,
-      `✅ Revoked your confirmation on instruction #${idStr}.\nTx: \`${short(hash)}\``,
+      `✅ Revoked your confirmation on instruction #${idStr}.`,
       { parse_mode: "Markdown" }
     );
   } catch (err) {
@@ -1387,7 +1404,7 @@ bot.command("wallet", async (ctx) => {
     const account = await getOrCreateUserAccount(ctx.from.id);
     const solana = await solanaWalletLine(ctx.from.id, "telegram");
     await ctx.reply(
-      `Your wallet:\n\`${account.address}\`${solana ? `\n${solana}` : ""}\n\nTap the address above to copy it. This wallet is generated automatically from your Telegram account — no separate connect step needed.`,
+      `Your wallet:\n\`${account.address}\`${solana ? `\n${solana}` : ""}${explorerAddressLine(account.address) ? `\n${explorerAddressLine(account.address)}` : ""}\n\nTap the address above to copy it. This wallet is generated automatically from your Telegram account — no separate connect step needed.`,
       { parse_mode: "Markdown" }
     );
   } catch (err) {
@@ -1457,6 +1474,7 @@ bot.command("migratewallet", async (ctx) => {
       maxFeePerGas: sweepFees.maxFeePerGas,
       maxPriorityFeePerGas: sweepFees.maxPriorityFeePerGas,
     });
+    trackTx(explorerTxUrl(hash));
     await publicClient.waitForTransactionReceipt({ hash });
 
     await ctx.api.editMessageText(
@@ -1669,7 +1687,7 @@ bot.command("tip", async (ctx) => {
 
     const tokenAddress = await resolveToken(ctx, address, tokenRef);
     const { hash } = await tipTokens(walletClient, tokenAddress, recipientRaw, amountRaw);
-    await ctx.reply(`✅ Tipped ${amountRaw} to \`${short(recipientRaw)}\`.\nTx: \`${short(hash)}\``, { parse_mode: "Markdown" });
+    await ctx.reply(`✅ Tipped ${amountRaw} to \`${short(recipientRaw)}\`.`, { parse_mode: "Markdown" });
   } catch (err) {
     console.error(err);
     await ctx.reply(`Couldn't send that tip: ${err.shortMessage || err.message}`);
@@ -1716,7 +1734,7 @@ bot.command("send", async (ctx) => {
       await ctx.api.editMessageText(
         ctx.chat.id,
         statusMsg.message_id,
-        `✅ Sent ${sent} to \`${short(recipientRaw)}\` on Sepolia.\nTx: \`${short(hash)}\`\nYou now hold ${left.token} and ${left.eth}.`,
+        `✅ Sent ${sent} to \`${short(recipientRaw)}\` on Sepolia.\nYou now hold ${left.token} and ${left.eth}.`,
         { parse_mode: "Markdown" }
       );
     } catch (err) {
@@ -1777,7 +1795,7 @@ bot.command("send", async (ctx) => {
     await ctx.api.editMessageText(
       ctx.chat.id,
       statusMsg.message_id,
-      `✅ Sent ${amountRaw}${isNativeMon ? ` ${currentNetwork().nativeSymbol}` : ""} to \`${short(recipientRaw)}\`.\nTx: \`${short(hash)}\``,
+      `✅ Sent ${amountRaw}${isNativeMon ? ` ${currentNetwork().nativeSymbol}` : ""} to \`${short(recipientRaw)}\`.`,
       { parse_mode: "Markdown" }
     );
   } catch (err) {

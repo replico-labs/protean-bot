@@ -1,8 +1,9 @@
 import { formatEther } from "viem";
 import { publicClient, walletClient, operatorAccount } from "./config.js";
-import { currentNetwork } from "./networks.js";
+import { currentNetwork, explorerTxUrl } from "./networks.js";
 import { recordGasTopup, isWalletStoreConfigured } from "./walletStore.js";
 import { fitGasLimit } from "./gasLimit.js";
+import { trackTx } from "./txLinks.js";
 
 /**
  * Gas sponsorship: the operator wallet pays for users' gas, never for the
@@ -221,5 +222,6 @@ export async function sendNativeSponsored(client, to, value) {
   await ensureCanAfford(client.account.address, gasCost, value);
   const hash = await client.sendTransaction({ to, value, gas: gasLimit, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas });
   recordSent(client.account.address, gasCost + value);
+  trackTx(explorerTxUrl(hash));
   return hash;
 }

@@ -3,7 +3,7 @@ import { takeModelOptions, checkModelOptions, modelOptionsUsage, proposeForModel
 import { feedsText } from "../../governance/sowellian.js";
 import { solanaWalletLine } from "../../solana/commands.js";
 import { isAddress, getAddress, formatEther } from "viem";
-import { currentNetwork, takeNetworkArg, runOnNetwork, getNetwork, ENABLED_NETWORKS, describeNetwork } from "../../networks.js";
+import { currentNetwork, takeNetworkArg, runOnNetwork, getNetwork, ENABLED_NETWORKS, describeNetwork, explorerAddressLine } from "../../networks.js";
 import { registerChat, recordChatLinker, getChatDAO, getChatModel, unregisterChat, getChatNftWrapper, getChatGuardWrapper, getChatNetwork, getRegisteredToken } from "../../db.js";
 import { getProposalCount, getTreasuryBalance, getVotingPower } from "../../contracts.js";
 import { getAdapter, SUPPORTED_MODELS } from "../../governance/index.js";
@@ -126,7 +126,7 @@ export const CORE_COMMANDS = {
       if (!isWalletStoreConfigured()) throw new UserError(NO_WALLETS);
       const account = await getOrCreateUserAccount(ctx.userId, ctx.platform);
       const solana = await solanaWalletLine(ctx.userId, ctx.platform);
-      return reply(`Your wallet:\n\`${account.address}\`${solana ? `\n${solana}` : ""}\n\nCreated automatically for your ${ctx.platform} account — no connect step needed.`, { ephemeral: true });
+      return reply(`Your wallet:\n\`${account.address}\`${solana ? `\n${solana}` : ""}${explorerAddressLine(account.address) ? `\n${explorerAddressLine(account.address)}` : ""}\n\nCreated automatically for your ${ctx.platform} account — no connect step needed.`, { ephemeral: true });
     },
   },
 

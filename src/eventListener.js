@@ -5,7 +5,7 @@ import { getAllRegisteredDaos } from "./db.js";
 import { formatEther } from "viem";
 import { publicClient, walletClient } from "./config.js";
 import { resolveDelegationsBehind, activeProposalIds, queueSweep } from "./governance/liquid.js";
-import { runOnNetwork } from "./networks.js";
+import { runOnNetwork, explorerTxUrl } from "./networks.js";
 import { readJson, writeJsonAtomic } from "./jsonFile.js";
 import { startSolanaListener } from "./solana/listener.js";
 
@@ -169,7 +169,8 @@ async function checkDao(notify, dao, currentBlock, state) {
           scheduleLiquidSweep(notify, dao, log.eventName, log.args ?? {});
           continue;
         }
-        const message = formatEvent(log.eventName, log.args ?? {});
+        const url = log.transactionHash ? explorerTxUrl(log.transactionHash) : null;
+        const message = formatEvent(log.eventName, log.args ?? {}) + (url ? `\n🔗 ${url}` : "");
         try {
           await notify(dao.chatId, message);
         } catch (sendErr) {

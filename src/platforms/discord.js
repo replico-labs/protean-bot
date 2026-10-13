@@ -55,7 +55,8 @@ export function toDiscordMarkdown(text) {
   return text
     .split(/(`[^`]*`)/)
     .map((part) => (part.startsWith("`") ? part : part.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1**$2**")))
-    .join("");
+    .join("")
+    .replace(/🔗 (https?:\/\/\S+)/g, "🔗 <$1>"); // explorer links (txLinks.js) without a preview card each
 }
 
 /**

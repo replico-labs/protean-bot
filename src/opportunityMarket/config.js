@@ -1,6 +1,7 @@
 import { createPublicClient, createWalletClient, http, formatEther } from "viem";
 import { failOnRevert } from "../receipts.js";
 import { fitGasLimit, contractTx } from "../gasLimit.js";
+import { trackTx } from "../txLinks.js";
 import { sepolia } from "viem/chains";
 import { SepoliaConfig } from "@zama-fhe/relayer-sdk/node";
 
@@ -114,7 +115,9 @@ export async function writeWithGasBuffer(client, contractParams) {
   const estimate = await estimateOrExplain(client.account.address, () => opportunityPublicClient.estimateContractGas(params));
   const gas = await fitGasLimit(opportunityPublicClient, contractTx(client.account, contractParams), estimate);
   const fees = await requireSepoliaGas(client.account.address, gas, contractParams.value ?? 0n);
-  return client.writeContract({ ...contractParams, gas, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas });
+  const hash = await client.writeContract({ ...contractParams, gas, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas });
+  trackTx(sepoliaTxUrl(hash));
+  return hash;
 }
 
 /** Sends Sepolia ETH with the same proven gas limit and up-front balance check. */
@@ -123,5 +126,13 @@ export async function sendNativeWithGasLimit(client, to, value) {
   const estimate = await estimateOrExplain(client.account.address, () => opportunityPublicClient.estimateGas(tx));
   const gas = await fitGasLimit(opportunityPublicClient, tx, estimate);
   const fees = await requireSepoliaGas(client.account.address, gas, value);
-  return client.sendTransaction({ to, value, gas, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas });
+  const hash = await client.sendTransaction({ to, value, gas, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas });
+  trackTx(sepoliaTxUrl(hash));
+  return hash;
+}
+
+/** A Sepolia transaction on Etherscan, for the reply's explorer link (txLinks.js). */
+export function sepoliaTxUrl(hash) {
+  const explorer = opportunityMarketChain.blockExplorers?.default?.url;
+  return explorer ? `${explorer}/tx/${hash}` : null;
 }

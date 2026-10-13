@@ -1,10 +1,11 @@
 import "dotenv/config";
 import { privateKeyToAccount } from "viem/accounts";
-import { currentNetwork, networkEnv, attachOperator, operatorClientFor } from "./networks.js";
+import { currentNetwork, networkEnv, attachOperator, operatorClientFor, explorerTxUrl } from "./networks.js";
 import { encodeDeployData } from "viem";
 import { operatorNonceManager } from "./operatorNonces.js";
 import { ensureCanAfford, feesFor, estimateWithFunding, estimateTxWithFunding, recordSent } from "./gasSponsor.js";
 import { fitGasLimit, contractTx } from "./gasLimit.js";
+import { trackTx } from "./txLinks.js";
 
 /**
  * Everything below that touches a chain follows whichever network the
@@ -175,6 +176,7 @@ export async function writeWithGasBuffer(client, contractParams) {
   await ensureCanAfford(client.account.address, gasCost, contractParams.value ?? 0n);
   const hash = await client.writeContract({ ...contractParams, gas, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas });
   recordSent(client.account.address, gasCost + (contractParams.value ?? 0n));
+  trackTx(explorerTxUrl(hash));
   return hash;
 }
 // Deployments can need a few million gas; enough for the estimate to run
@@ -194,5 +196,6 @@ export async function deployWithGasLimit(client, { abi, bytecode, args = [] }) {
   await ensureCanAfford(client.account.address, gasCost);
   const hash = await client.deployContract({ abi, bytecode, args, gas, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas });
   recordSent(client.account.address, gasCost);
+  trackTx(explorerTxUrl(hash));
   return hash;
 }

@@ -77,7 +77,7 @@ export const TOKEN_COMMANDS = {
       requireCreator(ctx, "Only this DAO's creator can use tip.");
       const tokenAddress = await resolveToken(ctx, address, tokenRef);
       const { hash } = await tipTokens(walletClient, tokenAddress, recipientRaw, amountRaw);
-      return reply(`✅ Tipped ${amountRaw} to \`${short(recipientRaw)}\`.\nTx: \`${short(hash)}\``);
+      return reply(`✅ Tipped ${amountRaw} to \`${short(recipientRaw)}\`.`);
     },
   },
 
@@ -103,7 +103,7 @@ export const TOKEN_COMMANDS = {
         const { client } = await opportunityClient(ctx);
         const { hash, sent } = await sendFromMarketWallet(client, market, recipientRaw, amountRaw, mode);
         const left = await marketWalletBalances(market, client.account.address);
-        return reply(`✅ Sent ${sent} to \`${short(recipientRaw)}\` on Sepolia.\nTx: \`${short(hash)}\`\nYou now hold ${left.token} and ${left.eth}.`);
+        return reply(`✅ Sent ${sent} to \`${short(recipientRaw)}\` on Sepolia.\nYou now hold ${left.token} and ${left.eth}.`);
       }
 
       const address = requireDao(ctx);
@@ -122,7 +122,7 @@ export const TOKEN_COMMANDS = {
         const tokenAddress = await resolveToken(ctx, address, tokenRef);
         ({ hash } = await tipTokens(client, tokenAddress, recipientRaw, amountRaw));
       }
-      return reply(`✅ Sent ${amountRaw}${isNativeMon ? ` ${currentNetwork().nativeSymbol}` : ""} to \`${short(recipientRaw)}\`.\nTx: \`${short(hash)}\``);
+      return reply(`✅ Sent ${amountRaw}${isNativeMon ? ` ${currentNetwork().nativeSymbol}` : ""} to \`${short(recipientRaw)}\`.`);
     },
   },
 

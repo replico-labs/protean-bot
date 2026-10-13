@@ -78,6 +78,7 @@ const DEFINITIONS = {
     // A pool of nodes behind one URL: pin reads so they never go back in time (receipts.js).
     consistentReads: true,
     chain: hyperliquidEvmTestnet,
+    explorerUrl: "https://testnet.hyperevm-explorer.xyz",
     envPrefix: "HYPEREVM_TESTNET",
     blockTimeMs: 1000,
     gas: { min: "0.001", first: "0.01", repeat: "0.005" },
@@ -180,7 +181,8 @@ export function getNetwork(id) {
     chain,
     rpcUrl,
     nativeSymbol: chain.nativeCurrency.symbol,
-    explorerUrl: chain.blockExplorers?.default?.url ?? null,
+    // <PREFIX>_EXPLORER_URL overrides; viem's chain lists none for HyperEVM testnet.
+    explorerUrl: (networkEnv(canonical, "EXPLORER_URL") || def.explorerUrl || chain.blockExplorers?.default?.url || "").replace(/\/+$/, "") || null,
     blockTimeMs,
     // Short governance periods for new DAOs (see creationConfig). Testnets only.
     fastTimings: networkEnv(canonical, "FAST_TIMINGS") === "true" && Boolean(chain.testnet),
@@ -355,6 +357,11 @@ export function blocksToDuration(blocks, network = currentNetwork()) {
   if (hours < 1) return `~${Math.max(1, Math.round(hours * 60))}m`;
   if (hours < 48) return `~${hours.toFixed(1)}h`;
   return `~${(hours / 24).toFixed(1)}d`;
+}
+
+/** A transaction's explorer page on `network`, or null if it has no explorer. */
+export function explorerTxUrl(hash, network = currentNetwork()) {
+  return network.explorerUrl ? `${network.explorerUrl}/tx/${hash}` : null;
 }
 
 /** "Explorer: <url>/address/<addr>" on the current network, or null if it has no explorer. */

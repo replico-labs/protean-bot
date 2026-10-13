@@ -421,7 +421,7 @@ export const SETUP_COMMANDS = {
       const id = parseId(ctx.args[0], `${ctx.cmd("confirminstruction")} <id>`);
       const { client } = await userClient(ctx);
       const { hash } = await guardWrapper.confirmInstruction(client, address, id);
-      return reply(`✅ Confirmed instruction #${id}.\nTx: \`${short(hash)}\`\n\nCheck \`${ctx.cmd("instruction")} ${id}\` to see if it's executed.`);
+      return reply(`✅ Confirmed instruction #${id}.\n\nCheck \`${ctx.cmd("instruction")} ${id}\` to see if it's executed.`);
     },
   },
 
@@ -435,7 +435,7 @@ export const SETUP_COMMANDS = {
       const id = parseId(ctx.args[0], `${ctx.cmd("rejectinstruction")} <id>`);
       const { client } = await userClient(ctx);
       const { hash } = await guardWrapper.rejectInstruction(client, address, id);
-      return reply(`✅ Rejected instruction #${id}.\nTx: \`${short(hash)}\``);
+      return reply(`✅ Rejected instruction #${id}.`);
     },
   },
 
@@ -449,7 +449,7 @@ export const SETUP_COMMANDS = {
       const id = parseId(ctx.args[0], `${ctx.cmd("revokeconfirmation")} <id>`);
       const { client } = await userClient(ctx);
       const { hash } = await guardWrapper.revokeConfirmation(client, address, id);
-      return reply(`✅ Revoked your confirmation on instruction #${id}.\nTx: \`${short(hash)}\``);
+      return reply(`✅ Revoked your confirmation on instruction #${id}.`);
     },
   },
 };
