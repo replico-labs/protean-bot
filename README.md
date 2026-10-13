@@ -330,7 +330,7 @@ Sowellian oracle proposals need no keeper: `/resolveviaoracle` posts Pyth's pric
 
 To try it on a local chain first: start `anvil --chain-id 10143 --block-time 1`, build Spaces (`FOUNDRY_PROFILE=size-limited forge build`, plus `forge build test/PythAdapters.t.sol` for the stand-in Entropy), run `node scripts/deploy-local-evm.mjs > local.env`, and run the test with those variables, `BLOCK_TIME_MS=1000` and an anvil account as `OPERATOR_PRIVATE_KEY`.
 
-`<PREFIX>_FAST_TIMINGS=true` (`FAST_TIMINGS` on Monad testnet) gives the bot's own new DAOs the same short periods, for trying flows by hand. Testnets only.
+`<PREFIX>_FAST_TIMINGS=true` (`FAST_TIMINGS` on Monad testnet) gives the bot's own new DAOs the same short periods, for trying flows by hand. Testnets only. `<PREFIX>_FAST_SCALE` multiplies them: `0.5` gives ~1 minute votes and 30 second timelocks, `0.25` ~30 seconds and 15 seconds (`FAST_SCALE` on Monad testnet); it only affects DAOs created after it's set.
 
 ## Security — read before deploying anywhere real
 

@@ -53,7 +53,17 @@ console.log(`\nScanning market ids 0-${max} at ${rps} requests a second (~${Math
 const found = [];
 for (let id = 0; id <= max; id++) {
   if (id % 256 === 0) console.log(`  …checking ${id}-${Math.min(id + 255, max)}`);
-  if (!(await read("perpetualExists", [BigInt(id)]))) continue;
+  // Past the exchange's highest possible id, perpetualExists reverts
+  // instead of returning false (testnet: from 1021) - that's the end.
+  let exists;
+  try {
+    exists = await read("perpetualExists", [BigInt(id)]);
+  } catch (err) {
+    if (!/reverted/i.test(err.shortMessage ?? err.message)) throw err;
+    console.log(`  (the exchange takes no ids from ${id} up - done)`);
+    break;
+  }
+  if (!exists) continue;
   const p = await read("getPerpetualInfo", [BigInt(id)]);
   found.push({ id, symbol: p.symbol, name: p.name });
   console.log(`  id ${String(id).padStart(4)}  ${p.symbol.padEnd(6)} ${p.name}  (price decimals ${p.priceDecimals}, lot decimals ${p.lotDecimals})`);

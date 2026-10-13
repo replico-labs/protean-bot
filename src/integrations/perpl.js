@@ -45,9 +45,10 @@ export const protocol = {
       exchange: "0x1964c32f0be608e7d29302aff5e61268e72080cc",
       // The api-docs README lists an older testnet collateral token; this is the one the exchange itself reports.
       collateral: "0xa9012a055bd4e0edff8ce09f960291c09d5322dc",
-      markets: { BTC: 16, ETH: 32, SOL: 48, MON: 64, ZEC: 256 },
+      markets: { BTC: 16, ETH: 32, SOL: 48, MON: 64, ZEC: 256, LIT: 272, VVV: 288, TAO: 304, PUMP: 320, NEAR: 336, UNI: 352, ARB: 368, AAVE: 384, MORPHO: 400, ENA: 416 },
       sources: [
         "PerplFoundation/api-docs README (Network Configuration, Markets)",
+        "markets: every id 0-1020 read from the exchange (perpetualExists + getPerpetualInfo) by scripts/perpl-markets.mjs, 2026-10-13",
         "collateral: the exchange's own getExchangeInfo().collateralToken on Monad testnet (verify:integrations, 2026-09-28)",
       ],
     },

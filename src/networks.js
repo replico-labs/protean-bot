@@ -299,7 +299,8 @@ export function scaleBlockFields(model, config, network = currentNetwork()) {
  * defaults, and get the same scaling. Ignored on mainnets. DAOs created
  * while it's on keep these periods for good; turning it off only changes
  * DAOs created after. A network's fastScale (<PREFIX>_FAST_SCALE, 3 on
- * HyperEVM testnet) stretches every one of them.
+ * HyperEVM testnet) stretches every one of them - or shrinks them, below 1
+ * (0.5: ~1 minute votes, 30 second timelocks).
  */
 const FAST_VOTE_BLOCKS = 300; // ~2 min at 400ms
 const FAST = {
@@ -322,7 +323,7 @@ const FAST = {
   conviction: {
     timelockDelay: 60,
     convictionGrowthRate: (c, network) =>
-      (BigInt(c.minThresholdConviction) * BigInt(network.blockTimeMs)) / BigInt(FAST_VOTE_BLOCKS * REFERENCE_BLOCK_TIME_MS * network.fastScale),
+      (BigInt(c.minThresholdConviction) * BigInt(network.blockTimeMs)) / BigInt(Math.max(1, Math.round(FAST_VOTE_BLOCKS * REFERENCE_BLOCK_TIME_MS * network.fastScale))),
   },
   sowellian: {
     approvalVotingPeriod: FAST_VOTE_BLOCKS,
@@ -345,7 +346,8 @@ export function creationConfig(model, config, network = currentNetwork()) {
   const merged = { ...config };
   for (const [field, value] of Object.entries(fast)) {
     if (!(field in config)) continue;
-    const v = typeof value === "function" ? value(config, network) : Math.round(value * network.fastScale);
+    // Never 0: a fractional FAST_SCALE (0.5 = twice as fast) can't shrink a period away.
+    const v = typeof value === "function" ? value(config, network) : Math.max(1, Math.round(value * network.fastScale));
     merged[field] = typeof config[field] === "bigint" ? BigInt(v) : Number(v);
   }
   return scaleBlockFields(model, merged, network);
