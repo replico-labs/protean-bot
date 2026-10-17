@@ -4,6 +4,7 @@ import { createPublicClient, createWalletClient, http, defineChain, parseEther }
 import { monad, monadTestnet, base, baseSepolia, hyperEvm, hyperliquidEvmTestnet } from "viem/chains";
 import { failOnRevert, monotonicReads } from "./receipts.js";
 import { pacedFetch } from "./rpcPacing.js";
+import { stickyFallback } from "./rpcFallback.js";
 
 /**
  * Every chain the governance side of the bot can run on. Opportunity
@@ -157,6 +158,19 @@ export function networkEnv(id, name) {
 
 const built = new Map();
 
+/**
+ * This network's RPCs in the order they're tried: <PREFIX>_RPC_URL, then
+ * <PREFIX>_RPC_URLS (comma-separated), then the chain's public RPC as the
+ * last resort - unless <PREFIX>_RPC_PUBLIC_FALLBACK=false, or nothing is
+ * set at all (then the public one is the only one).
+ */
+function rpcUrlsFor(id, def) {
+  const publicRpc = def.chain.rpcUrls.default.http[0];
+  const listed = [networkEnv(id, "RPC_URL"), ...(networkEnv(id, "RPC_URLS") ?? "").split(",")].map((u) => u?.trim()).filter(Boolean);
+  if (networkEnv(id, "RPC_PUBLIC_FALLBACK") !== "false") listed.push(publicRpc);
+  return [...new Set(listed)];
+}
+
 /** Everything about one network, built once. */
 export function getNetwork(id) {
   const canonical = resolveNetworkId(id);
@@ -164,7 +178,8 @@ export function getNetwork(id) {
   if (built.has(canonical)) return built.get(canonical);
 
   const def = DEFINITIONS[canonical];
-  const rpcUrl = networkEnv(canonical, "RPC_URL") || def.chain.rpcUrls.default.http[0];
+  const rpcUrls = rpcUrlsFor(canonical, def);
+  const rpcUrl = rpcUrls[0];
   // Our own RPC goes into the chain object, so any client built from it
   // (including per-user wallet clients) uses it with a bare http().
   const chain = defineChain({ ...def.chain, rpcUrls: { default: { http: [rpcUrl] } } });
@@ -173,13 +188,19 @@ export function getNetwork(id) {
   // Every client on this network shares one pace (rpcPacing.js): at most
   // <PREFIX>_RPC_MAX_RPS requests a second from this process, default 10.
   const maxRps = Number(networkEnv(canonical, "RPC_MAX_RPS")) || 10;
-  const fetchFn = pacedFetch(rpcUrl, maxRps);
-  const transport = () => http(rpcUrl, { fetchFn, retryCount: 4, retryDelay: 400 });
+  // With more than one RPC, each gets one retry and then the next takes
+  // over (rpcFallback.js): a provider that hangs or has run out of credits
+  // stops nothing.
+  const single = rpcUrls.length === 1;
+  const one = (url) => http(url, { fetchFn: pacedFetch(url, maxRps), retryCount: single ? 4 : 1, retryDelay: 400 });
+  const shared = single ? null : stickyFallback(rpcUrls.map(one));
+  const transport = () => shared ?? one(rpcUrl);
 
   const network = {
     id: canonical,
     chain,
     rpcUrl,
+    rpcUrls,
     nativeSymbol: chain.nativeCurrency.symbol,
     // <PREFIX>_EXPLORER_URL overrides; viem's chain lists none for HyperEVM testnet.
     explorerUrl: (networkEnv(canonical, "EXPLORER_URL") || def.explorerUrl || chain.blockExplorers?.default?.url || "").replace(/\/+$/, "") || null,

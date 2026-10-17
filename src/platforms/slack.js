@@ -1,3 +1,5 @@
+// First: blanks tokens and RPC keys in everything logged after this.
+import "../logRedaction.js";
 import bolt from "@slack/bolt";
 import { COMMANDS, runCommand, ADMIN_COMMANDS } from "./commands.js";
 import { attemptClaim } from "./commands/setup.js";

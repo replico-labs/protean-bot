@@ -1,3 +1,5 @@
+// First: blanks tokens and RPC keys in everything logged after this.
+import "../logRedaction.js";
 import { walletClient, operatorAccount } from "../config.js";
 import { currentNetwork, runOnNetwork, resolveNetworkId, DEFAULT_NETWORK } from "../networks.js";
 import { getGovernanceDaosByModel } from "../db.js";

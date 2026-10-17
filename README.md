@@ -12,7 +12,8 @@ Contracts live in the companion repo, [`Spaces`](https://github.com/replico-labs
 - **Live on Base Sepolia:** the same eleven flows (all ten models plus Sowellian's Pyth-price route) pass `scripts/test-evm-models.mjs`, for about 0.0024 ETH of operator gas.
 - **Deployed on HyperEVM testnet** (and Base Sepolia): all ten factories plus the Pyth Entropy and price-feed adapters, built with Spaces' `size-limited` profile (addresses in Spaces' README).
 - **Live on HyperEVM testnet:** the same eleven flows pass `scripts/test-evm-models.mjs` (189 steps, ~0.0074 HYPE of operator gas), on small blocks, with the two-step Decision Markets factory. Fast timings there are 3x as long (`HYPEREVM_TESTNET_FAST_SCALE`), since each step takes ~3x as long as on Monad or Base.
-- **Not yet run live:** the mainnets (nothing deployed), and real Discord and Slack workspaces. (WhatsApp runs live as its own Railway service; Pyth Entropy and Hermes prices have both run on Monad testnet; an Opportunity Market has run end to end through Telegram on Sepolia, FHE relayer included.) See [What's not verified yet](#whats-not-verified-yet).
+- **Discord runs live:** a real server has run an optimistic DAO's proposals and treasury transfers through the slash commands.
+- **Not yet run live:** the mainnets (nothing deployed), and a real Slack workspace. (WhatsApp runs live as its own Railway service; Pyth Entropy and Hermes prices have both run on Monad testnet; an Opportunity Market has run end to end through Telegram on Sepolia, FHE relayer included.) See [What's not verified yet](#whats-not-verified-yet).
 
 ## How wallets work
 
@@ -284,7 +285,9 @@ Every reply to a command that sends a transaction on Monad, Base or HyperEVM end
 
 ## Notifications
 
-Every platform's process polls its linked DAOs (every 20 s) and posts proposal created / queued / executed / cancelled, plus model-specific events, to the linked chat. Each network is polled separately, and ranges are fetched in ≤90-block chunks (Monad testnet caps `eth_getLogs` at 100 blocks), saving progress after each chunk.
+Every platform's process polls its linked DAOs (every 20 s) and posts proposal created / queued / executed / cancelled, plus model-specific events, to the linked chat. Each network is polled separately, with **one `eth_getLogs` per block range for all of that network's DAOs** (every address and event in one filter), so RPC use doesn't grow with the number of DAOs — metered plans bill per call. Ranges are ≤90 blocks (Monad testnet caps `eth_getLogs` at 100), or the RPC's own limit, which the listener learns from its error (QuickNode's free plan: 5). Each DAO's progress is saved after every range.
+
+**Backup RPCs.** `RPC_URL` can be followed by `RPC_URLS` (comma separated, per network with a prefix: `BASE_RPC_URLS`), and the chain's public RPC is always the last resort unless `RPC_PUBLIC_FALLBACK=false`. Requests go to the first RPC that's up; one that times out, refuses or runs out of credits is skipped for a minute (logged once), then tried again. A reverted call is an answer, not a failure, and doesn't switch.
 
 ## Setup
 
@@ -299,6 +302,7 @@ npm start
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | the Telegram bot | from BotFather |
 | `RPC_URL` | optional | Monad testnet; viem's public RPC by default |
+| `RPC_URLS`, `RPC_PUBLIC_FALLBACK` | optional | backup RPCs, tried in order when one fails; the public RPC is the last unless `false` — see [Notifications](#notifications) |
 | `NETWORKS`, `DEFAULT_NETWORK` | more than one network | see [Networks](#networks) |
 | `OPERATOR_PRIVATE_KEY` | `/createdao`, `/claim`, gas top-ups, keepers | a funded hot wallet on every enabled network — see Security |
 | `FACTORY_ADDRESS` + `<MODEL>_FACTORY_ADDRESS` | `/createdao` per model | per network with a prefix (`BASE_FACTORY_ADDRESS`); a model with no address can't be created there, but can still be `/register`ed |
@@ -339,6 +343,7 @@ To try it on a local chain first: start `anvil --chain-id 10143 --block-time 1`,
 - **KMS IAM scope.** The bot's AWS credentials should only be able to `Decrypt` and `GenerateDataKey` on the one key — not manage or delete it.
 - **`SUPABASE_SERVICE_ROLE_KEY`** bypasses Row Level Security by design. Treat it like a database root password.
 - **`MASTER_WALLET_SEED`** (legacy) can derive every old wallet's key. Remove it once no old wallet holds funds.
+- **Logs are redacted** (`src/logRedaction.js`, loaded first by every process): the Telegram token, any env value named like a key/token/secret, and key-like parts of RPC URLs are blanked before a line is written. Still, don't paste raw logs publicly, and rotate anything that was logged before this was added.
 
 ## Known limitations
 
@@ -355,7 +360,7 @@ To try it on a local chain first: start `anvil --chain-id 10143 --block-time 1`,
   - Aave, HyperLend, shMON, Nad.fun, Perpl, Flaunch and HyperCore ran against stand-ins with the protocols' exact function signatures.
   - HyperCore's action bytes were also compared with those produced by hyper-evm-lib.
 
-- Real Discord and Slack workspaces
+- A real Slack workspace
 
 ## Not built yet
 

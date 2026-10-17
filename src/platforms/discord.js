@@ -1,3 +1,5 @@
+// First: blanks tokens and RPC keys in everything logged after this.
+import "../logRedaction.js";
 import { Client, Events, GatewayIntentBits, PermissionFlagsBits, REST, Routes, SlashCommandBuilder, MessageFlags, ActionRowBuilder, ButtonBuilder, ButtonStyle } from "discord.js";
 import { COMMANDS, runCommand, ADMIN_COMMANDS } from "./commands.js";
 import { OPPORTUNITY_COMMANDS } from "./commands/opportunity.js";

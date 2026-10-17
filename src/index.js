@@ -1,3 +1,5 @@
+// First: blanks tokens and RPC keys in everything logged after this.
+import "./logRedaction.js";
 import { Bot } from "grammy";
 import { SOLANA_ENABLED } from "./solana/config.js";
 import { requireNetworkArg, networkCodesText, exampleNetwork } from "./networkChoice.js";

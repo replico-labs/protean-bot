@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { getAllRegisteredDaos } from "./db.js";
-import { formatEther } from "viem";
+import { formatEther, parseEventLogs, toEventSelector, toHex } from "viem";
 import { publicClient, walletClient } from "./config.js";
 import { resolveDelegationsBehind, activeProposalIds, queueSweep } from "./governance/liquid.js";
 import { runOnNetwork, explorerTxUrl, currentNetwork, networkEnv } from "./networks.js";
@@ -102,13 +102,6 @@ function short(address) {
   return `${address.slice(0, 6)}…${address.slice(-4)}`;
 }
 
-/**
- * Checks one DAO for any interesting events since the last time it was
- * processed, and posts each one found to its linked chat. Never throws
- * - a problem with one DAO (a bad ABI, an RPC hiccup) is logged and
- * skipped, so it can't take down the whole polling loop for every
- * other DAO.
- */
 // Monad testnet's eth_getLogs enforces a hard 100-block range per call
 // (confirmed directly from a real RPC error: "eth_getLogs is limited to
 // a 100 range") - both the initial lookback window and any gap between
@@ -145,18 +138,20 @@ function learnRange(err) {
 // one tiny chunk at a time. EVENT_LISTENER_MAX_CATCHUP_BLOCKS overrides.
 const MAX_CATCHUP_BLOCKS = BigInt(Number(process.env.EVENT_LISTENER_MAX_CATCHUP_BLOCKS) || 600);
 
-async function checkDao(notify, dao, currentBlock, state) {
+/**
+ * What one DAO wants from the logs: its events, where its progress is kept,
+ * and the first block still to read. Null when there's nothing to watch.
+ */
+function watchFor(dao, currentBlock, state) {
   const abiName = modelToAbiName(dao.model);
-  if (!abiName) return;
-
-  const abi = loadAbi(abiName);
-  if (!abi) return;
+  const abi = abiName && loadAbi(abiName);
+  if (!abi) return null;
 
   // Liquid DAOs: votes and delegations trigger delegated-vote sweeps (not
   // chat posts). Needs the operator wallet, which pays for them.
   const sweepEvents = dao.model === "liquid" && walletClient ? LIQUID_SWEEP_EVENTS : [];
-  const watchableEvents = abi.filter((item) => item.type === "event" && (INTERESTING_EVENT_NAMES.includes(item.name) || sweepEvents.includes(item.name)));
-  if (watchableEvents.length === 0) return;
+  const events = abi.filter((item) => item.type === "event" && (INTERESTING_EVENT_NAMES.includes(item.name) || sweepEvents.includes(item.name)));
+  if (events.length === 0) return null;
 
   // Block numbers only mean something on one chain, so the key includes
   // the network - except Monad testnet, which keeps the key it had before
@@ -167,57 +162,76 @@ async function checkDao(notify, dao, currentBlock, state) {
 
   // First time seeing this DAO: start from a recent window rather than
   // scanning the contract's entire history - avoids a flood of
-  // long-past notifications the first time the listener ever runs
-  // against it. Deliberately sized to MAX_BLOCK_RANGE itself, not some
-  // larger number, since anything larger just becomes the first chunk
-  // to process below anyway.
-  let fromBlock = lastProcessed !== undefined ? BigInt(lastProcessed) + 1n : currentBlock - MAX_BLOCK_RANGE > 0n ? currentBlock - MAX_BLOCK_RANGE : 0n;
-
-  if (fromBlock > currentBlock) return;
-  if (currentBlock - fromBlock > MAX_CATCHUP_BLOCKS) {
-    console.log(`Event listener: DAO ${dao.governanceAddress} is ${currentBlock - fromBlock} blocks behind - skipping to the last ${MAX_CATCHUP_BLOCKS}.`);
-    fromBlock = currentBlock - MAX_CATCHUP_BLOCKS;
-    state[stateKey] = { lastProcessedBlock: (fromBlock - 1n).toString() };
+  // long-past notifications the first time the listener runs against it.
+  let from = lastProcessed !== undefined ? BigInt(lastProcessed) + 1n : currentBlock - MAX_BLOCK_RANGE > 0n ? currentBlock - MAX_BLOCK_RANGE : 0n;
+  if (from > currentBlock) return null;
+  if (currentBlock - from > MAX_CATCHUP_BLOCKS) {
+    console.log(`Event listener: DAO ${dao.governanceAddress} is ${currentBlock - from} blocks behind - skipping to the last ${MAX_CATCHUP_BLOCKS}.`);
+    from = currentBlock - MAX_CATCHUP_BLOCKS;
+    state[stateKey] = { lastProcessedBlock: (from - 1n).toString() };
   }
+  return { dao, stateKey, events, sweepEvents, from, address: dao.governanceAddress.toLowerCase() };
+}
 
-  // Walk the full range in <=MAX_BLOCK_RANGE chunks, saving progress
-  // after each one succeeds - if a later chunk fails (a transient RPC
-  // issue, say), everything already fetched stays saved, and the next
-  // poll resumes from there rather than redoing the whole backlog.
-  let chunkStart = fromBlock;
+// Addresses per eth_getLogs call - providers cap the list (commonly ~1000).
+const ADDRESSES_PER_CALL = 100;
+
+/**
+ * Checks every DAO on one network for interesting events since each was
+ * last processed, and posts what it finds to the linked chats. One
+ * eth_getLogs per block range covers them all (every DAO's address and
+ * event in one filter), so RPC use doesn't grow with the number of DAOs -
+ * metered providers (QuickNode's free plan) bill per call. Each DAO keeps
+ * its own progress; `save` persists it after every range. Never throws: an
+ * RPC problem is logged and the next poll resumes from the saved progress.
+ */
+async function checkNetwork(notify, daos, currentBlock, state, save) {
+  const watches = daos.map((dao) => watchFor(dao, currentBlock, state)).filter(Boolean);
+  if (watches.length === 0) return;
+  const addresses = [...new Set(watches.map((w) => w.address))];
+  const topics = [...new Set(watches.flatMap((w) => w.events.map((e) => toEventSelector(e))))];
+
+  // Walk from the furthest-behind DAO to the head in ranges the RPC
+  // accepts, saving progress after each - a failure part way keeps
+  // everything already read.
+  let chunkStart = watches.reduce((min, w) => (w.from < min ? w.from : min), currentBlock);
   while (chunkStart <= currentBlock) {
     const range = blockRange();
     const chunkEnd = chunkStart + range - 1n > currentBlock ? currentBlock : chunkStart + range - 1n;
 
+    const logs = [];
     try {
-      const logs = await publicClient.getLogs({
-        address: dao.governanceAddress,
-        events: watchableEvents,
-        fromBlock: chunkStart,
-        toBlock: chunkEnd,
-      });
+      for (let i = 0; i < addresses.length; i += ADDRESSES_PER_CALL) {
+        const filter = { address: addresses.slice(i, i + ADDRESSES_PER_CALL), topics: [topics], fromBlock: toHex(chunkStart), toBlock: toHex(chunkEnd) };
+        logs.push(...(await publicClient.request({ method: "eth_getLogs", params: [filter] })));
+      }
+    } catch (err) {
+      if (learnRange(err)) continue; // retry this range at the RPC's own limit
+      console.error(`Event listener: couldn't read events for ${watches.length} DAO(s), blocks ${chunkStart}-${chunkEnd}:`, err.shortMessage ?? err.message);
+      return; // already-saved ranges stay saved; the next poll resumes from there
+    }
 
-      for (const log of logs) {
-        if (sweepEvents.includes(log.eventName)) {
-          scheduleLiquidSweep(notify, dao, log.eventName, log.args ?? {});
+    for (const w of watches) {
+      if (w.from > chunkEnd) continue;
+      // Each DAO decodes only its own logs with its own ABI (the same event
+      // name can differ between models), and only blocks it hasn't seen.
+      const mine = logs.filter((log) => log.address.toLowerCase() === w.address && BigInt(log.blockNumber) >= w.from);
+      for (const log of parseEventLogs({ abi: w.events, logs: mine })) {
+        if (w.sweepEvents.includes(log.eventName)) {
+          scheduleLiquidSweep(notify, w.dao, log.eventName, log.args ?? {});
           continue;
         }
         const url = log.transactionHash ? explorerTxUrl(log.transactionHash) : null;
         const message = formatEvent(log.eventName, log.args ?? {}) + (url ? `\n🔗 ${url}` : "");
         try {
-          await notify(dao.chatId, message);
+          await notify(w.dao.chatId, message);
         } catch (sendErr) {
-          console.error(`Event listener: couldn't notify chat ${dao.chatId}:`, sendErr.message);
+          console.error(`Event listener: couldn't notify chat ${w.dao.chatId}:`, sendErr.message);
         }
       }
-
-      state[stateKey] = { lastProcessedBlock: chunkEnd.toString() };
-    } catch (err) {
-      if (learnRange(err)) continue; // retry this chunk at the RPC's own limit
-      console.error(`Event listener: couldn't check DAO ${dao.governanceAddress} (${dao.model}), blocks ${chunkStart}-${chunkEnd}:`, err.shortMessage ?? err.message);
-      return; // stop here for this poll - already-saved chunks stay saved, resume from here next time
+      state[w.stateKey] = { lastProcessedBlock: chunkEnd.toString() };
     }
-
+    save();
     chunkStart = chunkEnd + 1n;
   }
 }
@@ -296,10 +310,8 @@ export function startEventListener(target, pollIntervalMs = 20_000) {
         try {
           await runOnNetwork(network, async () => {
             const currentBlock = await publicClient.getBlockNumber();
-            for (const dao of networkDaos) {
-              await checkDao(notify, dao, currentBlock, state);
-              writeState(statePath, state); // progress survives a restart mid-pass
-            }
+            // Progress is saved after every range, so it survives a restart mid-pass.
+            await checkNetwork(notify, networkDaos, currentBlock, state, () => writeState(statePath, state));
           });
         } catch (err) {
           // One unreachable network must not stop notifications for the others.
