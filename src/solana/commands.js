@@ -8,6 +8,9 @@ import { getOrCreateSolanaKeypair, getSolanaAddress, ensureSolFunded } from "./w
 import { ACTIONS, MODEL_WORDS, actionApplies, listActionsText, actionInfoText } from "./actions.js";
 import * as v from "./vortex.js";
 import { proposalCreated, proposalPageUrl, pendingSubmitLink, proposalStartPayload } from "../proposalPages.js";
+import { takeModelOptions, oracleGoalValue, oracleFeedLine } from "../modelProposal.js";
+import { lookupPythFeed } from "../governance/sowellian.js";
+import { parseDuration } from "../integrations/common.js";
 
 /**
  * Commands for chats linked to a Solana (Vortexes) DAO, shared by every
@@ -16,9 +19,10 @@ import { proposalCreated, proposalPageUrl, pendingSubmitLink, proposalStartPaylo
  * same platform-neutral context the registry uses ({ platform, chatId,
  * userId, args, named?, isAdmin, isDirect, cmd }). A reply is { text }.
  *
- * All six Vortexes models: token-weighted, quadratic, optimistic,
- * conviction and delegate DAOs (each with a new token), and board DAOs.
- * Command names match the EVM side's, so members use the same words.
+ * All ten Vortexes models: token-weighted, quadratic, optimistic,
+ * conviction, delegate, liquid, sortition, Sowellian and decision markets
+ * DAOs (each with a new token), and board DAOs. Command names match the
+ * EVM side's, so members use the same words.
  */
 
 class SolanaUserError extends Error {}
@@ -34,7 +38,7 @@ const PASS_THROUGH = new Set([
   "analytics", "fundrewardpool", "cancelmarket", "resolve", "revealwinningtotal", "reclaimstake", "computereward", "withdraw", "withdrawreward",
 ]);
 
-const SLOW = new Set(["createdao", "createboarddao", "execute", "proposeaction"]);
+const SLOW = new Set(["createdao", "createboarddao", "execute", "proposeaction", "startsortition"]);
 
 /** Whether a command may take a while (Telegram shows a "working" note first). */
 export function isSlowSolanaCommand(name) {
@@ -48,9 +52,16 @@ const MODEL_LABEL = {
   board: "board",
   conviction: "conviction",
   delegate: "delegate",
+  liquid: "liquid",
+  sortition: "sortition",
+  sowellian: "Sowellian",
+  decisionMarkets: "decision markets",
 };
 const TOKEN = v.TOKEN_MODELS;
+const STAKE = v.STAKE_MODELS;
+const COUNCIL = v.COUNCIL_MODELS;
 const CHOICES = ["for", "against", "abstain"];
+const OUTCOMES = ["success", "failure"];
 
 // ---------------------------------------------------------------
 // formatting
@@ -217,6 +228,87 @@ function proposalBytes(instructions, description) {
   return 1_400 + ixBytes + Buffer.byteLength(description);
 }
 
+const U32_MAX = 2 ** 32 - 1;
+
+/**
+ * Sowellian's resolution criteria from its name=value words (the EVM
+ * side's: track, feed, goal, when, measure). The oracle is always Pyth on
+ * Solana: the proposal names a feed, and resolving reads Pyth's sponsored
+ * price account for it.
+ */
+async function sowellianCriteria(network, options) {
+  const track = (options.track ?? "human").toLowerCase();
+  if (track !== "human" && track !== "oracle") fail("track= must be human or oracle.");
+  const when = (options.when ?? "min").toLowerCase();
+  if (when !== "min" && when !== "max") fail("when= must be min (success if the result is at least goal) or max (at most goal).");
+  let measurementPeriod;
+  try {
+    measurementPeriod = parseDuration(options.measure, 7 * 86_400);
+  } catch (err) {
+    fail(`measure=: ${err.message}`);
+  }
+  if (measurementPeriod <= 0 || measurementPeriod > U32_MAX) fail("measure= must be longer than zero (and under 136 years).");
+  const base = { targetIsMinimum: when === "min", measurementPeriod };
+  if (track === "human") {
+    if (options.oracle || options.feed) fail("oracle= and feed= only apply with track=oracle.");
+    if (options.goal !== undefined && !/^-?\d+$/.test(options.goal)) fail("On the human track goal= is a whole number (it's only recorded; people decide the outcome).");
+    return { criteria: { method: { human: {} }, feedId: new Array(32).fill(0), targetValue: new v.BN(options.goal ?? "0"), ...base }, notes: [] };
+  }
+  if (options.oracle && options.oracle.toLowerCase() !== "pyth") fail("On Solana the oracle is always Pyth - leave out oracle=.");
+  if (!options.feed) fail("The oracle track needs feed=<pair>, e.g. feed=SOL/USD (or a Pyth feed ID, 0x + 64 hex).");
+  if (options.goal === undefined) fail("The oracle track needs goal=<price> - what the feed's price is compared against, e.g. goal=150.");
+  const targetValue = new v.BN(oracleGoalValue(options.goal).toString());
+  const feed = await lookupPythFeed(options.feed);
+  const feedId = Buffer.from(feed.id.slice(2), "hex");
+  const account = v.pythFeedAccount(feedId);
+  const notes = [oracleFeedLine(feed)];
+  if (!(await network.connection.getAccountInfo(account))) {
+    notes.push(`⚠️ Pyth keeps no sponsored price account for this feed on ${network.name}, so resolving it will need a price update account's address: \`resolveviaoracle <id> <account>\`.`);
+  }
+  return { criteria: { method: { oracle: {} }, feedId: [...feedId], targetValue, ...base }, notes };
+}
+
+/**
+ * The settings a Sowellian or decision markets proposal carries, from
+ * name=value words anywhere in `words`, and the words left over. Checks
+ * the proposer's wallet holds what proposing takes (the bond; the seeds).
+ * Returns { opts, rest, notes }.
+ */
+async function proposalOptions(ctx, c, words, kp) {
+  const { model, network, governance: g, tok } = c;
+  if (model !== "sowellian" && model !== "decisionMarkets") return { opts: {}, rest: words, notes: [] };
+  const { options, rest } = takeModelOptions(model, words);
+  if (model === "sowellian") {
+    const { criteria, notes } = await sowellianCriteria(network, options);
+    const bond = BigInt(g.config.proposalBond.toString());
+    const held = await v.tokenBalance(network, g.mint, kp.publicKey);
+    if (held < bond) fail(`Proposing posts a ${tok.fmt(bond)} ${tok.symbol} bond from your wallet (returned once it's settled, kept by the treasury if the approval vote fails); you hold ${tok.fmt(held)}.`);
+    return { opts: { criteria }, rest, notes };
+  }
+  if (!options.seed || !options.quote) fail(`A decision markets proposal seeds both markets from your wallet: add \`seed=<${tok.symbol}>\` and \`quote=<${v.quoteIsSol(g) ? "SOL" : "quote tokens"}>\`, e.g. \`seed=100 quote=0.5\`.`);
+  const quote = await v.mintInfo(network, g.quoteMint);
+  const seeds = { base: tok.parse(options.seed), quote: v.parseUnits(options.quote, quote.decimals) };
+  const quoteName = v.quoteIsSol(g) ? "SOL" : "quote tokens";
+  if (seeds.base < BigInt(g.config.minBaseSeed.toString())) fail(`seed= must be at least ${tok.fmt(g.config.minBaseSeed)} ${tok.symbol}.`);
+  if (seeds.quote < BigInt(g.config.minQuoteSeed.toString())) fail(`quote= must be at least ${v.formatUnits(g.config.minQuoteSeed, quote.decimals)} ${quoteName}.`);
+  const heldBase = await v.tokenBalance(network, g.mint, kp.publicKey);
+  if (heldBase < seeds.base) fail(`You hold ${tok.fmt(heldBase)} ${tok.symbol}, less than the ${tok.fmt(seeds.base)} seed.`);
+  await requireQuote(network, g, kp, seeds.quote, quote.decimals);
+  return { opts: { seeds }, rest, notes: [] };
+}
+
+/** Refuses unless the member's wallet holds `raw` of the quote token (SOL: plus a little for fees and rent). */
+async function requireQuote(network, g, kp, raw, decimals) {
+  if (v.quoteIsSol(g)) {
+    const have = BigInt(await network.connection.getBalance(kp.publicKey));
+    const margin = 5_000_000n;
+    if (have < raw + margin) fail(`That takes ${sol(raw)} from your own wallet, plus ~0.005 SOL for fees and rent; it holds ${sol(have)}. Send SOL to \`${kp.publicKey.toBase58()}\` first (the bot only tops up fees).`);
+    return;
+  }
+  const have = await v.tokenBalance(network, g.quoteMint, kp.publicKey);
+  if (have < raw) fail(`You hold ${v.formatUnits(have, decimals)} of the quote token, less than the ${v.formatUnits(raw, decimals)} needed.`);
+}
+
 /** Quadratic votes (√ of raw stake) shown on the token's scale: √600 tokens ≈ 24.49 votes. */
 function votesText(raw, tok) {
   return tok.decimals % 2 === 0 ? v.formatUnits(raw, tok.decimals / 2) : String(raw);
@@ -230,7 +322,7 @@ function tallyLine(model, t, tok) {
 }
 
 function requireCouncil(governance, kp) {
-  if (!governance.council.some((m) => m.equals(kp.publicKey))) fail(`Only council members can do that in a delegate DAO. Your Solana address is \`${kp.publicKey.toBase58()}\`.`);
+  if (!governance.council.some((m) => m.equals(kp.publicKey))) fail(`Only council members can do that here. Your Solana address is \`${kp.publicKey.toBase58()}\`.`);
 }
 
 function requireSigner(governance, kp) {
@@ -257,7 +349,14 @@ async function nextStep(ctx, c, id) {
       return `Back it with \`${ctx.cmd("support")} ${id}\`. It needs ${tok.fmt(p.requiredConviction)} conviction, which builds up while support holds.`;
     }
     case "delegate":
+    case "sortition":
       return `Council members vote: \`${ctx.cmd("vote")} ${id} for|against|abstain\` (votes last ${duration(g.config.votingPeriod)}).`;
+    case "liquid":
+      return `Vote with \`${ctx.cmd("vote")} ${id} for|against|abstain\` (votes last ${duration(g.config.votingPeriod)}). A delegate's vote carries their delegators' stake too; a delegator who votes themselves overrides it.`;
+    case "sowellian":
+      return `First an approval vote on opening it for positions, for ${duration(g.config.approvalVotingPeriod)}: \`${ctx.cmd("vote")} ${id} for|against|abstain\`. Then \`${ctx.cmd("finalizeapproval")} ${id}\`.`;
+    case "decisionMarkets":
+      return `Both markets trade for ${duration(g.config.tradingPeriod)}. Get conditional tokens with \`${ctx.cmd("split")} ${id} base|quote <amount>\`, then back pass or fail with \`${ctx.cmd("trade")} ${id} pass|fail buy|sell <amount>\`. Then \`${ctx.cmd("finalizeproposal")} ${id}\`.`;
     default:
       return `Vote with \`${ctx.cmd("vote")} ${id} for|against|abstain\` (votes last ${duration(g.config.votingPeriod)}).`;
   }
@@ -275,6 +374,13 @@ async function proposalMade(ctx, c, id, text) {
   const buttons = proposalButtons({ model: c.model, id, page: page?.page });
   if (!page) return reply(text, { buttons });
   return { text: `${text}\n\n📄 ${page.page} - the proposer is adding the details there.`, privateFollowUp: page.editText, startPayload: proposalStartPayload(args.network, args.dao, id), buttons };
+}
+
+/** The extra settings a model's proposals take, for usage lines ("" for most). */
+function optionsUsage(model) {
+  if (model === "sowellian") return "\nSowellian settings, anywhere after the action: `[track=human|oracle] [feed=SOL/USD] [goal=<price>] [when=min|max] [measure=7d]` (default: human track, measured 7 days after it runs).";
+  if (model === "decisionMarkets") return "\nDecision markets settings, anywhere after the action: `seed=<DAO tokens> quote=<SOL>` - both markets' starting liquidity, from your wallet.";
+  return "";
 }
 
 /** The DAO's rules in words. */
@@ -310,6 +416,34 @@ async function rulesLines(ctx, c, now) {
     }
     case "board":
       return [`Signers (${cfg.requiredApprovals} of ${g.signers.length} must confirm):`, ...g.signers.map((s) => `• \`${s.toBase58()}\``), `Timelock ${duration(cfg.timelock)}, ${duration(cfg.executionPeriod)} to run`];
+    case "liquid":
+      return [
+        `Rules: ${pct(cfg.quorumBps)} quorum, ${pct(cfg.approvalBps)} approval, votes last ${duration(cfg.votingPeriod)}, ${run(cfg.timelock, cfg.executionPeriod)}`,
+        `Members can hand their stake's vote to someone with \`${ctx.cmd("delegate")} <address>\` (one hop: a delegate can't delegate). Voting yourself always overrides your delegate.`,
+      ];
+    case "sortition": {
+      const ends = num(g.termEndsAt);
+      const pool = await v.readPool(network, d);
+      return [
+        `Council (${g.council.length} of ${cfg.councilSize} seats), drawn by lot from ${pool?.members.length ?? 0} member(s) in the pool:`,
+        ...g.council.map((m) => `• \`${m.toBase58()}\``),
+        `${v.sortitionQuorum(g)} council votes and ${pct(cfg.councilApprovalBps)} approval pass a proposal; votes last ${duration(cfg.votingPeriod)}, ${run(cfg.timelock, cfg.executionPeriod)}.`,
+        g.drawOpen ? `A draw is under way: \`${ctx.cmd("finalizesortition")}\` seats the council once the randomness arrives.` : ends > now ? `The council's term ends in ${duration(ends - now)}.` : `The council's term is over - anyone can \`${ctx.cmd("startsortition")}\`.`,
+      ];
+    }
+    case "sowellian":
+      return [
+        `Rules: proposing posts a ${tok.fmt(cfg.proposalBond)} ${tok.symbol} bond. An approval vote (${pct(cfg.approvalQuorumBps)} quorum, ${pct(cfg.approvalThresholdBps)}) runs ${duration(cfg.approvalVotingPeriod)}; then members back YES or NO with tokens for ${duration(cfg.positionsWindow)}, and it runs after a ${duration(cfg.executionTimelock)} timelock (${duration(cfg.executionPeriod)} to run).`,
+        `After its measurement period, an oracle (Pyth) or a person settles whether it worked. A person's answer posts a ${tok.fmt(cfg.resolutionBond)} bond and can be challenged within ${duration(cfg.challengePeriod)} (${tok.fmt(cfg.challengeBond)} bond), which opens a ${duration(cfg.adjudicationVotingPeriod)} vote. The winning side splits the whole pot.`,
+      ];
+    case "decisionMarkets": {
+      const quote = await v.mintInfo(network, g.quoteMint);
+      const quoteName = v.quoteIsSol(g) ? "SOL" : `token \`${short(g.quoteMint)}\``;
+      return [
+        `Rules: no votes. Each proposal opens a pass and a fail market for ${duration(cfg.tradingPeriod)}; it passes if the pass market's average price of ${tok.symbol} beats the fail market's by more than ${pct(cfg.thresholdBps)}. ${run(cfg.timelock, cfg.executionPeriod)}.`,
+        `Proposers seed both markets with at least ${tok.fmt(cfg.minBaseSeed)} ${tok.symbol} and ${v.formatUnits(cfg.minQuoteSeed, quote.decimals)} ${quoteName}.`,
+      ];
+    }
     default:
       return [];
   }
@@ -348,8 +482,10 @@ const HELP_SECTIONS = [
   ["wallet", "Your wallet", ["wallet", "balance", "stake", "unstake"]],
   ["dao", "The DAO", ["dao", "treasury", "tip", "proposals", "proposal"]],
   ["proposing", "Proposing", ["propose", "proposeaction", "listactions", "actioninfo"]],
-  ["deciding", "Deciding", ["vote", "challenge", "support", "withdrawsupport", "mysupport", "assets", "confirm", "revoke", "queue", "execute", "cancel"]],
-  ["council", "Council", ["council", "startelection", "declarecandidacy", "voteinelection", "finalizeelection", "initiaterecall", "voterecall", "finalizerecall"]],
+  ["deciding", "Deciding", ["vote", "delegate", "undelegate", "challenge", "support", "withdrawsupport", "mysupport", "assets", "confirm", "revoke", "queue", "execute", "cancel"]],
+  ["council", "Council", ["council", "startelection", "declarecandidacy", "voteinelection", "finalizeelection", "initiaterecall", "voterecall", "finalizerecall", "registereligible", "withdraweligibility", "startsortition", "finalizesortition"]],
+  ["sowellian", "Sowellian", ["castapprovalvote", "finalizeapproval", "takeposition", "resolveviaoracle", "proposeresolution", "challengeresolution", "finalizeunchallenged", "castadjudicationvote", "finalizeadjudication", "claimposition"]],
+  ["markets", "Markets", ["split", "trade", "merge", "finalizeproposal", "redeem", "reclaimliquidity"]],
 ];
 
 const COMMANDS = {
@@ -444,7 +580,9 @@ const COMMANDS = {
       const me = await getSolanaAddress(ctx.userId, ctx.platform);
       if (!me) return reply(`You don't have a Solana wallet yet - run \`${ctx.cmd("wallet")}\` to create one.`);
       const lines = [`\`${me.toBase58()}\``, `SOL: ${sol(await network.connection.getBalance(me))}`];
-      if (tok) {
+      if (model === "decisionMarkets") {
+        lines.push(`${tok.symbol} in your wallet: ${tok.fmt(await v.tokenBalance(network, governance.mint, me))}`, `Your pass/fail balances are per proposal: \`${ctx.cmd("proposal")} <id>\`.`);
+      } else if (tok) {
         const voter = await v.readVoter(network, model, d.voter(me));
         lines.push(`${tok.symbol} in your wallet: ${tok.fmt(await v.tokenBalance(network, governance.mint, me))}`, `Staked here: ${tok.fmt(voter?.amount ?? 0)}`);
         const now = await v.clusterNow(network);
@@ -454,7 +592,20 @@ const COMMANDS = {
           const p = await v.readProposal(network, model, voter.supporting);
           lines.push(`Backing proposal #${p?.id.toString() ?? "?"} with ${tok.fmt(voter.supportWeight)} (locked until you withdraw that support)`);
         }
-        if (model === "delegate") lines.push(governance.council.some((m) => m.equals(me)) ? "You're on the council." : "You're not on the council.");
+        if (COUNCIL.includes(model)) lines.push(governance.council.some((m) => m.equals(me)) ? "You're on the council." : "You're not on the council.");
+        if (model === "sortition") lines.push(voter?.eligible ? "You're in the pool for the next draw." : `You're not in the draw pool (\`${ctx.cmd("registereligible")}\`).`);
+        if (model === "liquid" && voter) {
+          if (!voter.delegate.equals(PublicKey.default)) {
+            lines.push(`Your vote is delegated to \`${voter.delegate.toBase58()}\` (voting yourself overrides it).`);
+            const held = num((await v.readVoter(network, model, d.voter(voter.delegate)))?.powerLockedUntil ?? 0);
+            if (held > now) lines.push(`Your delegation and stake can't change for ${duration(held - now)} (a vote your delegate cast with it is open).`);
+          }
+          if (voter.delegators > 0) {
+            lines.push(`${voter.delegators} member(s) delegate ${tok.fmt(voter.delegatedPower)} ${tok.symbol} to you; your votes carry it.`);
+            const powerLocked = num(voter.powerLockedUntil);
+            if (powerLocked > now) lines.push(`They can't change their delegation for ${duration(powerLocked - now)} (a vote of yours that counted it is open).`);
+          }
+        }
       } else {
         lines.push(governance.signers.some((s) => s.equals(me)) ? "You're a signer of this board." : "You're not a signer of this board.");
       }
@@ -465,15 +616,18 @@ const COMMANDS = {
   stake: {
     usage: "<amount>",
     description: "Stake tokens to vote with them",
-    models: TOKEN,
+    models: STAKE,
     async run(ctx) {
       const { network, d, model, governance, tok } = await loadDao(ctx);
-      requireModel(model, TOKEN, "Staking");
+      requireModel(model, STAKE, "Staking");
       if (!ctx.args[0]) fail(`Usage: \`${ctx.cmd("stake")} <amount>\``);
       const raw = tok.parse(ctx.args[0]);
       const kp = await member(ctx, network);
       const sig = await v.deposit(network, model, kp, d, governance, raw);
-      const extra = model === "conviction" ? `\nTo back a proposal with it, \`${ctx.cmd("support")} <id>\` (again, if you already back one).` : "";
+      const extra =
+        model === "conviction" ? `\nTo back a proposal with it, \`${ctx.cmd("support")} <id>\` (again, if you already back one).`
+        : model === "sortition" ? `\nTo be in the next council draw, \`${ctx.cmd("registereligible")}\`.`
+        : "";
       return reply(`✅ Staked ${tok.fmt(raw)} ${tok.symbol}.${extra}\n${explorerUrl(network, "tx", sig)}`);
     },
   },
@@ -481,10 +635,10 @@ const COMMANDS = {
   unstake: {
     usage: "<amount>",
     description: "Withdraw staked tokens",
-    models: TOKEN,
+    models: STAKE,
     async run(ctx) {
       const { network, d, model, governance, tok } = await loadDao(ctx);
-      requireModel(model, TOKEN, "Unstaking");
+      requireModel(model, STAKE, "Unstaking");
       if (!ctx.args[0]) fail(`Usage: \`${ctx.cmd("unstake")} <amount>\``);
       const raw = tok.parse(ctx.args[0]);
       const kp = await member(ctx, network);
@@ -515,12 +669,14 @@ const COMMANDS = {
     description: "Propose a payment from the treasury",
     async run(ctx) {
       const usage = `${ctx.cmd("propose")} <recipient> <amount> <SOL|token> <description>`;
-      const [to, amount, asset, ...words] = ctx.args;
-      if (!to || !amount || !asset || words.length === 0) fail(`Usage: \`${usage}\`\nExample: \`${ctx.cmd("propose")} 7Xf…k2 0.5 SOL Pay the designer\`\n\`token\` means this DAO's token; any token's mint address works too.`);
+      const [to, amount, asset, ...allWords] = ctx.args;
+      if (!to || !amount || !asset || allWords.length === 0) fail(`Usage: \`${usage}\`\nExample: \`${ctx.cmd("propose")} 7Xf…k2 0.5 SOL Pay the designer\`\n\`token\` means this DAO's token; any token's mint address works too.`);
       const c = await loadDao(ctx);
       const { network, d, model, governance, tok } = c;
       const recipient = parseKey(to, "the recipient");
+      const words = model === "sowellian" || model === "decisionMarkets" ? takeModelOptions(model, allWords).rest : allWords;
       const description = words.join(" ");
+      if (!description) fail(`Usage: \`${usage}\`${optionsUsage(model)}`);
       if (Buffer.byteLength(description) > 200) fail("Keep the description to 200 characters.");
 
       let mint = null;
@@ -540,10 +696,11 @@ const COMMANDS = {
       }
       const { instructions, budget } = await v.paymentInstructions(network, d, { recipient, raw, mint });
       const kp = await member(ctx, network, proposalBytes(instructions, description));
-      if (model === "delegate") requireCouncil(governance, kp);
+      if (COUNCIL.includes(model)) requireCouncil(governance, kp);
       if (model === "board") requireSigner(governance, kp);
-      const { id } = await v.propose(network, kp, d, model, instructions, description, { budget });
-      return proposalMade(ctx, c, id, `✅ Proposal *#${id}*: pay ${label} to \`${short(recipient)}\`\n_${description}_\n\n${await nextStep(ctx, c, id)}`);
+      const { opts, notes } = await proposalOptions(ctx, c, allWords, kp);
+      const { id } = await v.propose(network, kp, d, model, instructions, description, { budget, ...opts });
+      return proposalMade(ctx, c, id, [`✅ Proposal *#${id}*: pay ${label} to \`${short(recipient)}\``, `_${description}_`, ...notes, "", await nextStep(ctx, c, id)].join("\n"));
     },
   },
 
@@ -578,9 +735,11 @@ const COMMANDS = {
       const lines = [`*Proposal #${id}* — ${state}`, `_${p.metadataUri}_`, "", `Does: ${describeProposal(network, p)}`, `Proposed by \`${short(p.proposer)}\``];
       if (p.core.epoch !== d.record.epoch) lines.push("⚠️ Made under an earlier governance setup - it can no longer run.");
       const q = ctx.cmd("queue");
+      const me = await getSolanaAddress(ctx.userId, ctx.platform).catch(() => null);
       switch (model) {
         case "tokenWeighted":
         case "quadratic":
+        case "liquid":
           lines.push(tallyLine(model, p.tally, tok));
           if (state === "Active") lines.push(`Voting closes in ${duration(num(p.votingEndsAt) - now)}`);
           if (state === "Succeeded") lines.push(`Passed - queue it: \`${q} ${id}\``);
@@ -624,8 +783,24 @@ const COMMANDS = {
           lines.push(`Confirmed by ${p.confirmations.length} of ${g.signers.length} (needs ${g.config.requiredApprovals})`);
           if (state === "Active") lines.push(`Signers confirm with \`${ctx.cmd("confirm")} ${id}\``);
           break;
+        case "sortition": {
+          const t = v.sortitionTally(p);
+          lines.push(`Council votes: For ${t.for} · Against ${t.against} · Abstain ${t.abstain} (needs ${v.sortitionQuorum(g)} votes, ${pct(g.config.councilApprovalBps)} approval)`);
+          if (state === "Active") lines.push(`Council members vote with \`${ctx.cmd("vote")} ${id} for|against|abstain\`; closes in ${duration(num(p.votingEndsAt) - now)}`);
+          if (state === "Succeeded") lines.push(`Passed - queue it: \`${q} ${id}\``);
+          break;
+        }
+        case "sowellian":
+          lines.push(...(await sowellianLines(ctx, network, d, g, p, id, state, now, tok, me)));
+          break;
+        case "decisionMarkets":
+          lines.push(...(await marketLines(ctx, network, d, g, p, id, state, now, tok, me)));
+          break;
       }
-      if (state === "Queued") {
+      if (state === "Queued" && model === "sowellian") {
+        const at = v.sowellianExecutableAt(p, g.config);
+        lines.push(at > now ? `Positions are closed. It can run in ${duration(at - now)}: \`${ctx.cmd("execute")} ${id}\`` : `Ready to run: \`${ctx.cmd("execute")} ${id}\` (that starts its measurement period)`);
+      } else if (state === "Queued") {
         const at = num(p.queuedAt) + g.config.timelock;
         lines.push(at > now ? `Can run in ${duration(at - now)}: \`${ctx.cmd("execute")} ${id}\`` : `Ready to run: \`${ctx.cmd("execute")} ${id}\``);
       }
@@ -643,18 +818,27 @@ const COMMANDS = {
   vote: {
     usage: "<id> for|against|abstain",
     description: "Vote on a proposal",
-    models: ["tokenWeighted", "quadratic", "optimistic", "delegate"],
+    models: ["tokenWeighted", "quadratic", "optimistic", "delegate", "liquid", "sortition", "sowellian"],
     async run(ctx) {
       const usage = `${ctx.cmd("vote")} <id> for|against|abstain`;
       const id = parseId(ctx.args[0], usage);
-      const choice = parseChoice(ctx.args[1], usage);
-      const { network, d, model, governance, tok } = await loadDao(ctx);
+      const word = (ctx.args[1] ?? "").toLowerCase();
+      const c = await loadDao(ctx);
+      const { network, d, model, governance, tok } = c;
       if (model === "board") fail(`Board DAOs don't vote - signers confirm: \`${ctx.cmd("confirm")} ${id}\`.`);
       if (model === "conviction") fail(`Conviction DAOs don't vote - back a proposal with \`${ctx.cmd("support")} ${id}\`.`);
+      if (model === "decisionMarkets") fail(`Decision markets don't vote - trade on the outcome: \`${ctx.cmd("trade")} ${id} pass|fail buy|sell <amount>\`.`);
+      if (model === "sowellian") {
+        const p = await v.readProposal(network, model, d.proposal(id));
+        if (!p) fail(`There's no proposal #${id}.`);
+        if (v.variant(p.phase) === "adjudicating") return castSowellian(ctx, c, "adjudication", id, word);
+        return castSowellian(ctx, c, "approval", id, word);
+      }
+      const choice = parseChoice(word, usage);
       const kp = await member(ctx, network);
       const p = await v.readProposal(network, model, d.proposal(id));
       if (!p) fail(`There's no proposal #${id}.`);
-      if (model === "delegate") {
+      if (COUNCIL.includes(model)) {
         requireCouncil(governance, kp);
         if (p.votes.some((x) => x.member.equals(kp.publicKey))) fail(`You've already voted on #${id}.`);
         await v.vote(network, kp, d, model, id, choice);
@@ -664,9 +848,42 @@ const COMMANDS = {
       const voter = await requireStake(ctx, network, d, model, kp);
       if (await network.connection.getAccountInfo(d.vote(d.proposal(id), kp.publicKey))) fail(`You've already voted on #${id}.`);
       await v.vote(network, kp, d, model, id, choice);
+      if (model === "liquid") {
+        const own = BigInt(voter.amount.toString());
+        if (!voter.delegate.equals(PublicKey.default)) return reply(`✅ Voted *${choice}* on #${id} with your own ${tok.fmt(own)} staked, overriding your delegate \`${short(voter.delegate)}\` on this proposal. Your stake stays locked until voting closes.`);
+        const delegated = BigInt(voter.delegatedPower.toString());
+        const rec = await v.programFor(network, model).account.voteRecord.fetchNullable(d.vote(d.proposal(id), kp.publicKey));
+        const carried = rec ? BigInt(rec.delegated.toString()) : 0n;
+        const extra = delegated > 0n ? ` plus ${tok.fmt(carried)} delegated to you${carried < delegated ? ` (${tok.fmt(delegated - carried)} more is delegated, but came after this proposal opened or its owners voted themselves)` : ""}` : "";
+        return reply(`✅ Voted *${choice}* on #${id} with ${tok.fmt(own)} staked${extra}. Your stake stays locked until voting closes.`);
+      }
       const weight =
         model === "quadratic" ? `${votesText(BigInt(voter.amount.toString()) === 0n ? 0n : sqrt(BigInt(voter.amount.toString())), tok)} votes (√ of your ${tok.fmt(voter.amount)} staked)` : `${tok.fmt(voter.amount)} staked`;
       return reply(`✅ Voted *${choice}* on #${id} with ${weight}. Your stake stays locked until voting closes.`);
+    },
+  },
+
+  castapprovalvote: {
+    usage: "<id> for|against|abstain",
+    description: "Vote on opening a proposal for positions",
+    models: ["sowellian"],
+    async run(ctx) {
+      const id = parseId(ctx.args[0], `${ctx.cmd("castapprovalvote")} <id> for|against|abstain`);
+      const c = await loadDao(ctx);
+      requireModel(c.model, "sowellian", "The approval vote");
+      return castSowellian(ctx, c, "approval", id, (ctx.args[1] ?? "").toLowerCase());
+    },
+  },
+
+  castadjudicationvote: {
+    usage: "<id> success|failure",
+    description: "Vote on the true outcome of a challenged resolution",
+    models: ["sowellian"],
+    async run(ctx) {
+      const id = parseId(ctx.args[0], `${ctx.cmd("castadjudicationvote")} <id> success|failure`);
+      const c = await loadDao(ctx);
+      requireModel(c.model, "sowellian", "Adjudication");
+      return castSowellian(ctx, c, "adjudication", id, (ctx.args[1] ?? "").toLowerCase());
     },
   },
 
@@ -791,11 +1008,14 @@ const COMMANDS = {
   queue: {
     usage: "<id>",
     description: "Queue a passed proposal (optimistic: settle it)",
-    models: ["tokenWeighted", "quadratic", "optimistic", "conviction", "delegate"],
+    models: ["tokenWeighted", "quadratic", "optimistic", "conviction", "delegate", "liquid", "sortition", "sowellian", "decisionMarkets"],
     async run(ctx) {
       const id = parseId(ctx.args[0], `${ctx.cmd("queue")} <id>`);
-      const { network, d, model, governance: g, tok } = await loadDao(ctx);
+      const c = await loadDao(ctx);
+      const { network, d, model, governance: g, tok } = c;
       if (model === "board") fail("Board proposals queue themselves once enough signers confirm.");
+      if (model === "sowellian") return settleSowellian(ctx, c, id);
+      if (model === "decisionMarkets") return finalizeMarkets(ctx, c, id);
       const p = await v.readProposal(network, model, d.proposal(id));
       if (!p) fail(`There's no proposal #${id}.`);
       if (model === "conviction" && num(p.queuedAt) === 0 && !p.executed && !p.cancelled) {
@@ -836,7 +1056,12 @@ const COMMANDS = {
           return reply(`✅ Cancelled #${id}, and returned the challenger's bond.`);
         }
       }
-      return reply(`✅ Cancelled #${id}.${model === "conviction" ? " Its supporters can now withdraw their support." : ""}`);
+      const after =
+        model === "conviction" ? " Its supporters can now withdraw their support."
+        : model === "sowellian" ? ` Positions are refunded with \`${ctx.cmd("claimposition")} ${id}\`, and the proposer's bond too.`
+        : model === "decisionMarkets" ? ` It settles as failed: fail balances redeem 1:1 (\`${ctx.cmd("redeem")} ${id}\`), and the proposer can \`${ctx.cmd("reclaimliquidity")} ${id}\`.`
+        : "";
+      return reply(`✅ Cancelled #${id}.${after}`);
     },
   },
 
@@ -844,12 +1069,20 @@ const COMMANDS = {
 
   council: {
     usage: "",
-    description: "The council, its term, and any election",
-    models: ["delegate"],
+    description: "The council, its term, and any election or draw",
+    models: ["delegate", "sortition"],
     async run(ctx) {
-      const { network, d, model, governance: g, tok } = await loadDao(ctx);
-      requireModel(model, "delegate", "The council");
+      const c = await loadDao(ctx);
+      const { network, d, model, governance: g, tok } = c;
+      requireModel(model, COUNCIL, "The council");
       const now = await v.clusterNow(network);
+      if (model === "sortition") {
+        const lines = await rulesLines(ctx, c, now);
+        const pool = await v.readPool(network, d);
+        if (pool?.members.length) lines.push("", `Draw pool (${pool.members.length}):`, ...pool.members.slice(0, 30).map((m) => `• \`${m.toBase58()}\``));
+        else lines.push("", `The draw pool is empty - stake and \`${ctx.cmd("registereligible")}\`.`);
+        return reply(lines.join("\n"));
+      }
       const ends = num(g.termEndsAt);
       const lines = [`*Council* (${g.council.length} of ${g.config.councilSize} seats)`, ...g.council.map((m) => `• \`${m.toBase58()}\``), ""];
       lines.push(ends > now ? `Term ends in ${duration(ends - now)}.` : "The term is over.");
@@ -988,6 +1221,434 @@ const COMMANDS = {
     },
   },
 
+  // ---- liquid: delegation ----
+
+  delegate: {
+    usage: "<address>",
+    description: "Hand your stake's vote to another member",
+    models: ["liquid"],
+    async run(ctx) {
+      if (!ctx.args[0]) fail(`Usage: \`${ctx.cmd("delegate")} <address>\` - their votes then carry your stake; voting yourself overrides them.`);
+      const to = parseKey(ctx.args[0], "the delegate");
+      const { network, d, model, tok } = await loadDao(ctx);
+      requireModel(model, "liquid", "Delegating");
+      const kp = await member(ctx, network, 200);
+      if (to.equals(kp.publicKey)) fail("You can't delegate to yourself.");
+      const voter = await requireStake(ctx, network, d, model, kp);
+      if (!voter.delegate.equals(PublicKey.default)) fail(`You already delegate to \`${short(voter.delegate)}\`. \`${ctx.cmd("undelegate")}\` first.`);
+      if (voter.delegators > 0) fail("Members delegate to you, so you can't delegate yourself (one hop only).");
+      const now = await v.clusterNow(network);
+      if (num(voter.lockedUntil) > now) fail(`A vote you cast is still open, so you can delegate in ${duration(num(voter.lockedUntil) - now)}.`);
+      const target = await v.readVoter(network, model, d.voter(to));
+      if (target && !target.delegate.equals(PublicKey.default)) fail(`\`${short(to)}\` has delegated their own vote, so they can't take yours (one hop only).`);
+      await v.delegateTo(network, kp, d, to);
+      return reply(`✅ Your ${tok.fmt(voter.amount)} ${tok.symbol} now votes with \`${short(to)}\` on proposals they vote on from now. Vote yourself any time to override them; \`${ctx.cmd("undelegate")}\` takes it back.`);
+    },
+  },
+
+  undelegate: {
+    usage: "",
+    description: "Take your vote back from your delegate",
+    models: ["liquid"],
+    async run(ctx) {
+      const { network, d, model } = await loadDao(ctx);
+      requireModel(model, "liquid", "Delegating");
+      const kp = await member(ctx, network);
+      const voter = await v.readVoter(network, model, d.voter(kp.publicKey));
+      if (!voter || voter.delegate.equals(PublicKey.default)) fail("You haven't delegated.");
+      const now = await v.clusterNow(network);
+      if (num(voter.lockedUntil) > now) fail(`A vote you cast yourself is still open, so your delegation holds for ${duration(num(voter.lockedUntil) - now)} more.`);
+      const delegate = await v.readVoter(network, model, d.voter(voter.delegate));
+      const held = num(delegate?.powerLockedUntil ?? 0);
+      if (held > now) fail(`A vote your delegate cast with your stake is still open, so your delegation holds for ${duration(held - now)} more. You can still vote yourself to override it.`);
+      await v.undelegate(network, kp, d, voter.delegate);
+      return reply(`✅ You no longer delegate to \`${short(voter.delegate)}\`; your stake votes only when you do.`);
+    },
+  },
+
+  // ---- sortition: the pool and draws ----
+
+  registereligible: {
+    usage: "",
+    description: "Join the pool the next council is drawn from",
+    models: ["sortition"],
+    async run(ctx) {
+      const { network, d, model, governance: g, tok } = await loadDao(ctx);
+      requireModel(model, "sortition", "The draw pool");
+      const kp = await member(ctx, network);
+      const voter = await v.readVoter(network, model, d.voter(kp.publicKey));
+      const need = BigInt(g.config.eligibilityThreshold.toString());
+      if (!voter) fail(`Stake some tokens first: \`${ctx.cmd("stake")} <amount>\`${need > 0n ? ` (at least ${tok.fmt(need)})` : ""}.`);
+      if (voter.eligible) fail("You're already in the pool.");
+      if (BigInt(voter.amount.toString()) < need) fail(`Joining takes at least ${tok.fmt(need)} ${tok.symbol} staked; you have ${tok.fmt(voter.amount)}.`);
+      if (g.drawOpen) fail(`A draw is under way, so the pool is frozen until \`${ctx.cmd("finalizesortition")}\`.`);
+      await v.joinPool(network, kp, d);
+      const pool = await v.readPool(network, d);
+      return reply(`✅ You're in the pool for the next council draw (${pool.members.length} member(s)). Your stake stays locked while you're in it.`);
+    },
+  },
+
+  withdraweligibility: {
+    usage: "",
+    description: "Leave the draw pool",
+    models: ["sortition"],
+    async run(ctx) {
+      const { network, d, model, governance: g } = await loadDao(ctx);
+      requireModel(model, "sortition", "The draw pool");
+      const kp = await member(ctx, network);
+      const voter = await v.readVoter(network, model, d.voter(kp.publicKey));
+      if (!voter?.eligible) fail("You're not in the pool.");
+      if (g.drawOpen) fail(`A draw is under way, so the pool is frozen until \`${ctx.cmd("finalizesortition")}\`.`);
+      await v.leavePool(network, kp, d);
+      return reply("✅ You've left the draw pool. A council seat you already hold is kept until the term ends.");
+    },
+  },
+
+  startsortition: {
+    usage: "",
+    description: "Start the next council draw (once the term is over)",
+    models: ["sortition"],
+    async run(ctx) {
+      const { network, d, model, governance: g } = await loadDao(ctx);
+      requireModel(model, "sortition", "Draws");
+      const now = await v.clusterNow(network);
+      if (num(g.termEndsAt) > now) fail(`The council's term ends in ${duration(num(g.termEndsAt) - now)}; a draw can start then.`);
+      const pool = await v.readPool(network, d);
+      if (!pool?.members.length) fail(`Nobody is in the draw pool yet - members join with \`${ctx.cmd("registereligible")}\`.`);
+      if (g.drawOpen) {
+        const status = await v.drawStatus(network, g);
+        if (status === "fulfilled") fail(`The randomness for this draw has arrived: \`${ctx.cmd("finalizesortition")}\`.`);
+        const retry = num(g.drawStartedAt) + g.config.randomnessTimeout;
+        if (now < retry) fail(`A draw is waiting for its randomness. \`${ctx.cmd("finalizesortition")}\` once it arrives; if it never does, a new draw can start in ${duration(retry - now)}.`);
+      }
+      const { number, restart } = await v.startDraw(network, d);
+      return reply(`✅ Draw #${number}${restart ? " restarted with a new randomness request" : " started"}: ${Math.min(g.config.councilSize, pool.members.length)} seat(s) from ${pool.members.length} member(s). ORAO's randomness usually arrives within seconds - then \`${ctx.cmd("finalizesortition")}\` (anyone).`);
+    },
+  },
+
+  finalizesortition: {
+    usage: "",
+    description: "Seat the council once the draw's randomness arrives",
+    models: ["sortition"],
+    async run(ctx) {
+      const { network, d, model, governance: g } = await loadDao(ctx);
+      requireModel(model, "sortition", "Draws");
+      if (!g.drawOpen) fail(`No draw is under way. \`${ctx.cmd("startsortition")}\` starts one once the term is over.`);
+      const status = await v.drawStatus(network, g);
+      if (status !== "fulfilled") fail(`The randomness hasn't arrived yet - try again in a few seconds.${status === "missing" ? " (Its request account can't be found.)" : ""}`);
+      await v.finalizeDraw(network, d);
+      const after = await v.readGovernance(network, model, d.governance);
+      return reply([`✅ Draw #${after.drawCount.toString()} is done. The new council:`, ...after.council.map((m) => `• \`${m.toBase58()}\``), "", `Its term ends in ${duration(num(after.termEndsAt) - (await v.clusterNow(network)))}. Proposals from the previous council can no longer run.`].join("\n"));
+    },
+  },
+
+  // ---- sowellian: approval, positions, resolution ----
+
+  finalizeapproval: {
+    usage: "<id>",
+    description: "Close the approval vote (opens positions if it passed)",
+    models: ["sowellian"],
+    async run(ctx) {
+      const id = parseId(ctx.args[0], `${ctx.cmd("finalizeapproval")} <id>`);
+      const c = await loadDao(ctx);
+      requireModel(c.model, "sowellian", "The approval vote");
+      return settleSowellian(ctx, c, id, "approvalVoting");
+    },
+  },
+
+  takeposition: {
+    usage: "<id> yes|no <amount>",
+    description: "Back whether it will work, with tokens from your wallet",
+    models: ["sowellian"],
+    async run(ctx) {
+      const usage = `${ctx.cmd("takeposition")} <id> yes|no <amount>`;
+      const id = parseId(ctx.args[0], usage);
+      const side = (ctx.args[1] ?? "").toLowerCase();
+      if (!["yes", "no"].includes(side) || !ctx.args[2]) fail(`Usage: \`${usage}\` - yes: it will meet its goal; no: it won't. Winners split the whole pot.`);
+      const { network, d, model, governance: g, tok } = await loadDao(ctx);
+      requireModel(model, "sowellian", "Positions");
+      const raw = tok.parse(ctx.args[2]);
+      const p = await v.readProposal(network, model, d.proposal(id));
+      if (!p) fail(`There's no proposal #${id}.`);
+      if (v.variant(p.phase) !== "positionsOpen" || (await v.clusterNow(network)) >= num(p.positionsDeadline)) fail(`#${id} isn't taking positions. \`${ctx.cmd("proposal")} ${id}\` shows where it is.`);
+      const kp = await member(ctx, network, 120);
+      const held = await v.tokenBalance(network, g.mint, kp.publicKey);
+      if (held < raw) fail(`You hold ${tok.fmt(held)} ${tok.symbol} in your wallet (staked tokens don't count).`);
+      await v.takePosition(network, kp, d, g, id, side, raw);
+      const after = await v.readProposal(network, model, d.proposal(id));
+      return reply(`✅ Backed *${side.toUpperCase()}* on #${id} with ${tok.fmt(raw)} ${tok.symbol}. The pot: YES ${tok.fmt(after.yesPool)} · NO ${tok.fmt(after.noPool)}. Positions can grow but not shrink.`);
+    },
+  },
+
+  resolveviaoracle: {
+    usage: "<id> [priceAccount]",
+    description: "Settle an oracle-track proposal from Pyth",
+    models: ["sowellian"],
+    async run(ctx) {
+      const id = parseId(ctx.args[0], `${ctx.cmd("resolveviaoracle")} <id> [priceAccount]`);
+      const account = ctx.args[1] ? parseKey(ctx.args[1], "the Pyth price update account") : undefined;
+      const { network, d, model, governance: g } = await loadDao(ctx);
+      requireModel(model, "sowellian", "Oracle resolution");
+      const p = await v.readProposal(network, model, d.proposal(id));
+      if (!p) fail(`There's no proposal #${id}.`);
+      if (v.variant(p.criteria.method) !== "oracle") fail(`#${id} is resolved by people: \`${ctx.cmd("proposeresolution")} ${id} success|failure\`.`);
+      const now = await v.clusterNow(network);
+      if (v.variant(p.phase) !== "executed") fail(`#${id} isn't waiting for a result (${v.sowellianState(p, g.config, now)}).`);
+      if (now < num(p.measurementDeadline)) fail(`#${id} is measured in ${duration(num(p.measurementDeadline) - now)}.`);
+      const priceAccount = account ?? v.pythFeedAccount(p.criteria.feedId);
+      if (!(await network.connection.getAccountInfo(priceAccount))) fail(`There's no Pyth price account at \`${priceAccount.toBase58()}\` on ${network.name}. Pass a PriceUpdateV2 account for this feed: \`${ctx.cmd("resolveviaoracle")} ${id} <account>\`.`);
+      await v.resolveViaOracle(network, d, id, priceAccount);
+      const after = await v.readProposal(network, model, d.proposal(id));
+      return reply(`✅ #${id} is resolved from Pyth: *${v.variant(after.finalOutcome)}*. Collect what you're owed with \`${ctx.cmd("claimposition")} ${id}\`.`);
+    },
+  },
+
+  proposeresolution: {
+    usage: "<id> success|failure",
+    description: "State the outcome of a human-track proposal (posts a bond)",
+    models: ["sowellian"],
+    async run(ctx) {
+      const usage = `${ctx.cmd("proposeresolution")} <id> success|failure`;
+      const id = parseId(ctx.args[0], usage);
+      const outcome = (ctx.args[1] ?? "").toLowerCase();
+      if (!OUTCOMES.includes(outcome)) fail(`Usage: \`${usage}\``);
+      const { network, d, model, governance: g, tok } = await loadDao(ctx);
+      requireModel(model, "sowellian", "Resolution");
+      const p = await v.readProposal(network, model, d.proposal(id));
+      if (!p) fail(`There's no proposal #${id}.`);
+      if (v.variant(p.criteria.method) !== "human") fail(`#${id} is resolved by its oracle: \`${ctx.cmd("resolveviaoracle")} ${id}\`.`);
+      const now = await v.clusterNow(network);
+      if (v.variant(p.phase) !== "executed" || now < num(p.measurementDeadline)) fail(`#${id} isn't waiting for a result (${v.sowellianState(p, g.config, now)}).`);
+      const kp = await member(ctx, network);
+      const bond = BigInt(g.config.resolutionBond.toString());
+      const held = await v.tokenBalance(network, g.mint, kp.publicKey);
+      if (held < bond) fail(`Stating the outcome posts a ${tok.fmt(bond)} ${tok.symbol} bond from your wallet; you hold ${tok.fmt(held)}.`);
+      await v.proposeResolution(network, kp, d, g, id, outcome);
+      return reply(`✅ You said #${id} was a *${outcome}*, posting ${tok.fmt(bond)} ${tok.symbol}. Anyone can challenge it for ${duration(g.config.challengePeriod)} (\`${ctx.cmd("challengeresolution")} ${id}\`); if nobody does, \`${ctx.cmd("finalizeunchallenged")} ${id}\` and your bond comes back.`);
+    },
+  },
+
+  challengeresolution: {
+    usage: "<id>",
+    description: "Dispute a proposed resolution (posts a bond, opens a vote)",
+    models: ["sowellian"],
+    async run(ctx) {
+      const id = parseId(ctx.args[0], `${ctx.cmd("challengeresolution")} <id>`);
+      const { network, d, model, governance: g, tok } = await loadDao(ctx);
+      requireModel(model, "sowellian", "Challenging a resolution");
+      const p = await v.readProposal(network, model, d.proposal(id));
+      if (!p) fail(`There's no proposal #${id}.`);
+      if (v.variant(p.phase) !== "resolutionProposed") fail(`#${id} has no proposed resolution to challenge.`);
+      const kp = await member(ctx, network);
+      const bond = BigInt(g.config.challengeBond.toString());
+      const held = await v.tokenBalance(network, g.mint, kp.publicKey);
+      if (held < bond) fail(`A challenge posts a ${tok.fmt(bond)} ${tok.symbol} bond from your wallet; you hold ${tok.fmt(held)}.`);
+      await v.challengeResolution(network, kp, d, g, id);
+      return reply(`✅ Challenged the resolution of #${id}, posting ${tok.fmt(bond)} ${tok.symbol}. A ${duration(g.config.adjudicationVotingPeriod)} vote decides the true outcome: \`${ctx.cmd("vote")} ${id} success|failure\`. Whoever was wrong loses their bond to the treasury.`);
+    },
+  },
+
+  finalizeunchallenged: {
+    usage: "<id>",
+    description: "Lock in a resolution nobody challenged",
+    models: ["sowellian"],
+    async run(ctx) {
+      const id = parseId(ctx.args[0], `${ctx.cmd("finalizeunchallenged")} <id>`);
+      const c = await loadDao(ctx);
+      requireModel(c.model, "sowellian", "Resolution");
+      return settleSowellian(ctx, c, id, "resolutionProposed");
+    },
+  },
+
+  finalizeadjudication: {
+    usage: "<id>",
+    description: "Close the adjudication vote and settle the bonds",
+    models: ["sowellian"],
+    async run(ctx) {
+      const id = parseId(ctx.args[0], `${ctx.cmd("finalizeadjudication")} <id>`);
+      const c = await loadDao(ctx);
+      requireModel(c.model, "sowellian", "Adjudication");
+      return settleSowellian(ctx, c, id, "adjudicating");
+    },
+  },
+
+  claimposition: {
+    usage: "<id>",
+    description: "Collect your winnings, refund or bonds",
+    models: ["sowellian"],
+    async run(ctx) {
+      const id = parseId(ctx.args[0], `${ctx.cmd("claimposition")} <id>`);
+      const { network, d, model, governance: g, tok } = await loadDao(ctx);
+      requireModel(model, "sowellian", "Claiming");
+      const p = await v.readProposal(network, model, d.proposal(id));
+      if (!p) fail(`There's no proposal #${id}.`);
+      const kp = await member(ctx, network);
+      const me = kp.publicKey;
+      const done = [];
+      const phase = v.variant(p.phase);
+      const pos = await v.readPosition(network, model, d.position(d.proposal(id), me));
+      if (pos && !pos.claimed && (phase === "finalized" || phase === "cancelled")) {
+        const winning = phase === "cancelled" ? BigInt(pos.yes.toString()) + BigInt(pos.no.toString()) : BigInt((v.variant(p.finalOutcome) === "success" ? pos.yes : pos.no).toString());
+        if (winning > 0n) {
+          const before = await v.tokenBalance(network, g.mint, me);
+          await v.claimPosition(network, kp, d, g, id);
+          done.push(`${phase === "cancelled" ? "your refund" : "your winnings"}: ${tok.fmt((await v.tokenBalance(network, g.mint, me)) - before)} ${tok.symbol}`);
+        }
+      }
+      const owed = (who, amount) => who.equals(me) && BigInt(amount.toString()) > 0n;
+      if (owed(p.proposer, p.owedProposer) || owed(p.resolver, p.owedResolver) || owed(p.challenger, p.owedChallenger)) {
+        const before = await v.tokenBalance(network, g.mint, me);
+        await v.claimBond(network, kp, d, g, id);
+        done.push(`your bond: ${tok.fmt((await v.tokenBalance(network, g.mint, me)) - before)} ${tok.symbol}`);
+      }
+      if (!done.length) fail(phase === "finalized" || phase === "cancelled" ? `There's nothing for you to collect on #${id}.` : `#${id} isn't settled yet. \`${ctx.cmd("proposal")} ${id}\` shows what's next.`);
+      return reply(`✅ Collected ${done.join(" and ")}.`);
+    },
+  },
+
+  // ---- decision markets ----
+
+  split: {
+    usage: "<id> base|quote <amount>",
+    description: "Turn tokens (or SOL) into equal pass and fail balances to trade",
+    models: ["decisionMarkets"],
+    async run(ctx) {
+      const usage = `${ctx.cmd("split")} <id> base|quote <amount>`;
+      const id = parseId(ctx.args[0], usage);
+      const side = (ctx.args[1] ?? "").toLowerCase();
+      if (!["base", "quote"].includes(side) || !ctx.args[2]) fail(`Usage: \`${usage}\` - base: this DAO's token; quote: SOL (or the DAO's quote token).`);
+      const { network, d, model, governance: g, tok } = await loadDao(ctx);
+      requireModel(model, "decisionMarkets", "Splitting");
+      const q = await quoteToken(network, g);
+      const raw = side === "base" ? tok.parse(ctx.args[2]) : q.parse(ctx.args[2]);
+      const kp = await member(ctx, network, 165 + 200);
+      if (side === "base") {
+        const held = await v.tokenBalance(network, g.mint, kp.publicKey);
+        if (held < raw) fail(`You hold ${tok.fmt(held)} ${tok.symbol}.`);
+      } else await requireQuote(network, g, kp, raw, q.decimals);
+      await v.split(network, kp, d, g, id, side === "base" ? raw : 0n, side === "quote" ? raw : 0n);
+      const pos = await v.readPosition(network, model, d.position(d.proposal(id), kp.publicKey));
+      return reply([`✅ Split ${side === "base" ? `${tok.fmt(raw)} ${tok.symbol}` : q.fmt(raw)} into pass and fail balances.`, ...positionLines(pos, tok, q.fmt), `Trade: \`${ctx.cmd("trade")} ${id} pass|fail buy|sell <amount>\``].join("\n"));
+    },
+  },
+
+  merge: {
+    usage: "<id> base|quote <amount>",
+    description: "Turn pass+fail pairs back into tokens (or SOL), while trading lasts",
+    models: ["decisionMarkets"],
+    async run(ctx) {
+      const usage = `${ctx.cmd("merge")} <id> base|quote <amount>`;
+      const id = parseId(ctx.args[0], usage);
+      const side = (ctx.args[1] ?? "").toLowerCase();
+      if (!["base", "quote"].includes(side) || !ctx.args[2]) fail(`Usage: \`${usage}\``);
+      const { network, d, model, governance: g, tok } = await loadDao(ctx);
+      requireModel(model, "decisionMarkets", "Merging");
+      const q = await quoteToken(network, g);
+      const raw = side === "base" ? tok.parse(ctx.args[2]) : q.parse(ctx.args[2]);
+      const kp = await member(ctx, network, 165);
+      await v.merge(network, kp, d, g, id, side === "base" ? raw : 0n, side === "quote" ? raw : 0n);
+      return reply(`✅ Merged ${side === "base" ? `${tok.fmt(raw)} ${tok.symbol}` : q.fmt(raw)} of pass and fail back into your wallet.`);
+    },
+  },
+
+  trade: {
+    usage: "<id> pass|fail buy|sell <amount> [slippage%|minOut]",
+    description: "Buy or sell the DAO's token in the pass or fail market",
+    models: ["decisionMarkets"],
+    async run(ctx) {
+      const usage = `${ctx.cmd("trade")} <id> pass|fail buy|sell <amount> [slippage%|minOut]`;
+      const id = parseId(ctx.args[0], usage);
+      const market = (ctx.args[1] ?? "").toLowerCase();
+      // The EVM side's words work too: spending quote buys, spending base sells.
+      const dir = { base: "sell", quote: "buy" }[(ctx.args[2] ?? "").toLowerCase()] ?? (ctx.args[2] ?? "").toLowerCase();
+      if (!["pass", "fail"].includes(market) || !["buy", "sell"].includes(dir) || !ctx.args[3]) {
+        fail(`Usage: \`${usage}\`\nbuy spends that market's SOL balance on the DAO's token; sell sells that many tokens for SOL. The last word is a slippage limit like 2% (default 1%) or the least you'll accept back.`);
+      }
+      const limit = ctx.args[4] ?? "1%";
+      const slip = String(limit).endsWith("%") ? Number(String(limit).slice(0, -1)) : null;
+      if (slip !== null && !(slip >= 0 && slip <= 50)) fail("Slippage must be between 0% and 50%.");
+      const { network, d, model, governance: g, tok } = await loadDao(ctx);
+      requireModel(model, "decisionMarkets", "Trading");
+      const q = await quoteToken(network, g);
+      const raw = dir === "buy" ? q.parse(ctx.args[3]) : tok.parse(ctx.args[3]);
+      const p = await v.readProposal(network, model, d.proposal(id));
+      if (!p) fail(`There's no proposal #${id}.`);
+      if (p.finalized || (await v.clusterNow(network)) >= num(p.tradingDeadline)) fail(`Trading on #${id} is over.`);
+      const kp = await member(ctx, network);
+      const pos = await v.readPosition(network, model, d.position(d.proposal(id), kp.publicKey));
+      const balance = BigInt((pos ? (market === "pass" ? (dir === "buy" ? pos.passQuote : pos.passBase) : dir === "buy" ? pos.failQuote : pos.failBase) : 0).toString());
+      if (balance < raw) {
+        const what = dir === "buy" ? `${market} quote balance is ${q.fmt(balance)}` : `${market} ${tok.symbol} balance is ${tok.fmt(balance)}`;
+        fail(`Your ${what}. Split some first: \`${ctx.cmd("split")} ${id} ${dir === "buy" ? "quote" : "base"} <amount>\`.`);
+      }
+      const pool = market === "pass" ? p.passPool : p.failPool;
+      const [reserveIn, reserveOut] = dir === "buy" ? [pool.quote, pool.base] : [pool.base, pool.quote];
+      const expected = v.amountOut(raw, reserveIn, reserveOut);
+      if (expected === 0n) fail("That trade is too small to get anything back.");
+      const minOut = slip !== null ? (expected * BigInt(Math.round((100 - slip) * 100))) / 10_000n : /^0+(\.0+)?$/.test(limit) ? 1n : dir === "buy" ? tok.parse(limit) : q.parse(limit);
+      if (minOut > expected) fail(`That would return about ${dir === "buy" ? `${tok.fmt(expected)} ${tok.symbol}` : q.fmt(expected)}, less than the ${dir === "buy" ? `${tok.fmt(minOut)} ${tok.symbol}` : q.fmt(minOut)} you asked for.`);
+      await v.trade(network, kp, d, id, market, dir === "buy" ? "quote" : "base", raw, minOut > 0n ? minOut : 1n);
+      const after = await v.readProposal(network, model, d.proposal(id));
+      const got = dir === "buy" ? `${tok.fmt(expected)} ${tok.symbol}` : q.fmt(expected);
+      const price = v.poolPrice(market === "pass" ? after.passPool : after.failPool, tok.decimals, q.decimals).toPrecision(6);
+      return reply(`✅ ${dir === "buy" ? "Bought" : "Sold"} in the *${market}* market: ${dir === "buy" ? `${q.fmt(raw)} for about ${got}` : `${tok.fmt(raw)} ${tok.symbol} for about ${got}`}. Its price is now ${price} ${q.name} per ${tok.symbol}.`);
+    },
+  },
+
+  finalizeproposal: {
+    usage: "<id>",
+    description: "Settle a proposal's markets once trading closes",
+    models: ["decisionMarkets"],
+    async run(ctx) {
+      const id = parseId(ctx.args[0], `${ctx.cmd("finalizeproposal")} <id>`);
+      const c = await loadDao(ctx);
+      requireModel(c.model, "decisionMarkets", "Settling markets");
+      return finalizeMarkets(ctx, c, id);
+    },
+  },
+
+  redeem: {
+    usage: "<id>",
+    description: "Cash in your winning-side balances 1:1",
+    models: ["decisionMarkets"],
+    async run(ctx) {
+      const id = parseId(ctx.args[0], `${ctx.cmd("redeem")} <id>`);
+      const { network, d, model, governance: g, tok } = await loadDao(ctx);
+      requireModel(model, "decisionMarkets", "Redeeming");
+      const p = await v.readProposal(network, model, d.proposal(id));
+      if (!p) fail(`There's no proposal #${id}.`);
+      if (!p.finalized) fail(`#${id} isn't settled yet: \`${ctx.cmd("finalizeproposal")} ${id}\` once trading closes.`);
+      const kp = await member(ctx, network, 165);
+      const pos = await v.readPosition(network, model, d.position(d.proposal(id), kp.publicKey));
+      const [base, quote] = pos ? (p.passed ? [pos.passBase, pos.passQuote] : [pos.failBase, pos.failQuote]) : [0, 0];
+      if (BigInt(base.toString()) === 0n && BigInt(quote.toString()) === 0n) fail(`You hold nothing on #${id}'s ${p.passed ? "pass" : "fail"} side, which is the one that pays.`);
+      await v.redeem(network, kp, d, g, id);
+      const q = await quoteToken(network, g);
+      return reply(`✅ Redeemed ${tok.fmt(base)} ${tok.symbol} and ${q.fmt(quote)} from #${id}'s ${p.passed ? "pass" : "fail"} side.`);
+    },
+  },
+
+  reclaimliquidity: {
+    usage: "<id>",
+    description: "Proposer: take back the winning pool once settled",
+    models: ["decisionMarkets"],
+    async run(ctx) {
+      const id = parseId(ctx.args[0], `${ctx.cmd("reclaimliquidity")} <id>`);
+      const { network, d, model, governance: g, tok } = await loadDao(ctx);
+      requireModel(model, "decisionMarkets", "Reclaiming liquidity");
+      const p = await v.readProposal(network, model, d.proposal(id));
+      if (!p) fail(`There's no proposal #${id}.`);
+      const kp = await member(ctx, network, 165);
+      if (!p.proposer.equals(kp.publicKey)) fail("Only the proposer can reclaim its liquidity.");
+      if (!p.finalized) fail(`#${id} isn't settled yet.`);
+      if (p.liquidityReclaimed) fail("Already reclaimed.");
+      const pool = p.passed ? p.passPool : p.failPool;
+      await v.reclaimLiquidity(network, kp, d, g, id);
+      const q = await quoteToken(network, g);
+      return reply(`✅ Took back the ${p.passed ? "pass" : "fail"} pool: ${tok.fmt(pool.base)} ${tok.symbol} and ${q.fmt(pool.quote)}.`);
+    },
+  },
+
   // ---- actions ----
 
   listactions: {
@@ -1020,18 +1681,24 @@ const COMMANDS = {
       const c = await loadDao(ctx);
       if (!actionApplies(action, c.model)) fail(`\`${actionId}\` doesn't apply to this ${MODEL_LABEL[c.model]} DAO. See \`${ctx.cmd("listactions")}\`.`);
       // Discord passes the arguments and description as separate fields.
+      // Sowellian and decision markets settings (name=value) can be anywhere.
       const named = ctx.named;
       const count = action.args.length;
-      const args = named ? (named.args ?? "").split(/\s+/).filter(Boolean) : rest.slice(0, count);
-      const description = named ? (named.description ?? "").trim() : rest.slice(count).join(" ");
-      if (args.length !== count || !description) fail(`Usage: \`${ctx.cmd("proposeaction")} ${actionId}${count ? " " + action.args.map((a) => a.name).join(" ") : ""} <description>\``);
+      const withOptions = c.model === "sowellian" || c.model === "decisionMarkets";
+      const strip = (words) => (withOptions ? takeModelOptions(c.model, words).rest : words);
+      const allWords = named ? [...(named.args ?? "").split(/\s+/), ...(named.description ?? "").split(/\s+/)].filter(Boolean) : rest;
+      const plainRest = strip(rest);
+      const args = named ? strip((named.args ?? "").split(/\s+/).filter(Boolean)) : plainRest.slice(0, count);
+      const description = named ? strip((named.description ?? "").trim().split(/\s+/).filter(Boolean)).join(" ") : plainRest.slice(count).join(" ");
+      if (args.length !== count || !description) fail(`Usage: \`${ctx.cmd("proposeaction")} ${actionId}${count ? " " + action.args.map((a) => a.name).join(" ") : ""} <description>\`${optionsUsage(c.model)}`);
       if (Buffer.byteLength(description) > 200) fail("Keep the description to 200 characters.");
       const built = await action.build({ ...c, args });
       const kp = await member(ctx, c.network, proposalBytes(built.instructions, description));
-      if (c.model === "delegate") requireCouncil(c.governance, kp);
+      if (COUNCIL.includes(c.model)) requireCouncil(c.governance, kp);
       if (c.model === "board") requireSigner(c.governance, kp);
-      const { id } = await v.propose(c.network, kp, c.d, c.model, built.instructions, description, { budget: built.budget ?? [] });
-      return proposalMade(ctx, c, id, `✅ Proposal *#${id}*: ${built.summary}\n_${description}_\n\n${await nextStep(ctx, c, id)}`);
+      const { opts, notes } = await proposalOptions(ctx, c, allWords, kp);
+      const { id } = await v.propose(c.network, kp, c.d, c.model, built.instructions, description, { budget: built.budget ?? [], ...opts });
+      return proposalMade(ctx, c, id, [`✅ Proposal *#${id}*: ${built.summary}`, `_${description}_`, ...notes, "", await nextStep(ctx, c, id)].join("\n"));
     },
   },
 
@@ -1045,6 +1712,177 @@ const COMMANDS = {
     },
   },
 };
+
+/** What a Sowellian proposal is waiting for, and its pot, criteria and the member's position. */
+async function sowellianLines(ctx, network, d, g, p, id, state, now, tok, me) {
+  const c = g.config;
+  const cr = p.criteria;
+  const lines = [];
+  const goal = BigInt(cr.targetValue.toString());
+  if (v.variant(cr.method) === "oracle") {
+    const feed = `0x${Buffer.from(cr.feedId).toString("hex")}`;
+    const shown = Number(goal) / 1e18;
+    lines.push(`Success if Pyth feed \`${feed.slice(0, 6)}…${feed.slice(-4)}\` is ${cr.targetIsMinimum ? "at least" : "at most"} ${shown}, ${duration(cr.measurementPeriod)} after it runs.`);
+  } else {
+    lines.push(`Resolved by people, ${duration(cr.measurementPeriod)} after it runs${goal !== 0n ? ` (goal recorded: ${goal} ${cr.targetIsMinimum ? "or more" : "or less"})` : ""}.`);
+  }
+  const yes = BigInt(p.yesPool.toString());
+  const no = BigInt(p.noPool.toString());
+  if (yes + no > 0n) lines.push(`Positions: YES ${tok.fmt(yes)} · NO ${tok.fmt(no)} ${tok.symbol}`);
+  const vt = p.approval;
+  switch (state) {
+    case "Pending":
+    case "Active":
+      lines.push(`Approval: For ${tok.fmt(vt.forVotes)} · Against ${tok.fmt(vt.againstVotes)} · Abstain ${tok.fmt(vt.abstainVotes)} ${tok.symbol}`);
+      lines.push(state === "Active" ? `Vote: \`${ctx.cmd("vote")} ${id} for|against|abstain\`, closes in ${duration(num(p.approvalEndsAt) - now)}` : `The approval vote opens in ${duration(num(p.approvalStartsAt) - now)}.`);
+      break;
+    case "ApprovalClosed":
+      lines.push(`Approval: For ${tok.fmt(vt.forVotes)} · Against ${tok.fmt(vt.againstVotes)} · Abstain ${tok.fmt(vt.abstainVotes)} ${tok.symbol}`, `The approval vote is over - settle it: \`${ctx.cmd("finalizeapproval")} ${id}\``);
+      break;
+    case "PositionsOpen":
+      lines.push(`Back an outcome with tokens from your wallet: \`${ctx.cmd("takeposition")} ${id} yes|no <amount>\` - closes in ${duration(num(p.positionsDeadline) - now)}. Winners split the whole pot.`);
+      break;
+    case "Expired":
+      lines.push(`It wasn't run in time. \`${ctx.cmd("queue")} ${id}\` voids it, refunding every position.`);
+      break;
+    case "Measuring":
+      lines.push(`It ran; the result is measured in ${duration(num(p.measurementDeadline) - now)}.`);
+      break;
+    case "AwaitingResolution":
+      lines.push(
+        v.variant(cr.method) === "oracle"
+          ? `Measurement is over - settle it from Pyth: \`${ctx.cmd("resolveviaoracle")} ${id}\``
+          : `Measurement is over - anyone can state the outcome, posting a ${tok.fmt(c.resolutionBond)} ${tok.symbol} bond: \`${ctx.cmd("proposeresolution")} ${id} success|failure\``
+      );
+      break;
+    case "ResolutionProposed": {
+      const left = num(p.challengeDeadline) - now;
+      lines.push(`\`${short(p.resolver)}\` says *${v.variant(p.proposedOutcome)}*.`);
+      lines.push(left > 0 ? `Disagree? \`${ctx.cmd("challengeresolution")} ${id}\` (bond ${tok.fmt(c.challengeBond)} ${tok.symbol}) within ${duration(left)}.` : `Nobody challenged it - lock it in: \`${ctx.cmd("finalizeunchallenged")} ${id}\``);
+      break;
+    }
+    case "Adjudicating": {
+      const left = num(p.adjudicationEndsAt) - now;
+      lines.push(`\`${short(p.resolver)}\` said *${v.variant(p.proposedOutcome)}*; \`${short(p.challenger)}\` disputes it.`, `Adjudication: Success ${tok.fmt(p.successVotes)} · Failure ${tok.fmt(p.failureVotes)} ${tok.symbol}`);
+      lines.push(left > 0 ? `Vote: \`${ctx.cmd("vote")} ${id} success|failure\`, closes in ${duration(left)}` : `The vote is over - settle it: \`${ctx.cmd("finalizeadjudication")} ${id}\``);
+      break;
+    }
+    case "Resolved":
+      lines.push(`Outcome: *${v.variant(p.finalOutcome)}*. Collect your winnings and bonds: \`${ctx.cmd("claimposition")} ${id}\``);
+      break;
+    case "Cancelled":
+      if (yes + no > 0n) lines.push(`Positions are refunded: \`${ctx.cmd("claimposition")} ${id}\``);
+      break;
+  }
+  if (me) {
+    const pos = await v.readPosition(network, "sowellian", d.position(d.proposal(id), me));
+    if (pos && (BigInt(pos.yes.toString()) > 0n || BigInt(pos.no.toString()) > 0n)) lines.push(`Your position: YES ${tok.fmt(pos.yes)} · NO ${tok.fmt(pos.no)}${pos.claimed ? " (collected)" : ""}`);
+  }
+  return lines;
+}
+
+/** A decision market proposal's two markets, its outcome and the member's balances. */
+async function marketLines(ctx, network, d, g, p, id, state, now, tok, me) {
+  const q = await quoteToken(network, g);
+  const price = (pool) => v.poolPrice(pool, tok.decimals, q.decimals).toPrecision(6);
+  const lines = p.finalized ? [] : [`Pass market: ${price(p.passPool)} ${q.name} per ${tok.symbol} · Fail market: ${price(p.failPool)}`];
+  if (state === "Trading") {
+    lines.push(`Trading closes in ${duration(num(p.tradingDeadline) - now)}. \`${ctx.cmd("split")} ${id} base|quote <amount>\`, then \`${ctx.cmd("trade")} ${id} pass|fail buy|sell <amount>\`.`);
+  } else if (state === "TradingClosed") {
+    lines.push(`Trading is over - settle it: \`${ctx.cmd("finalizeproposal")} ${id}\``);
+  } else if (p.finalized) {
+    const twap = (x) => v.twapPrice(x, tok.decimals, q.decimals).toPrecision(6);
+    if (!p.cancelled) lines.push(`Settled: ${p.passed ? "passed" : "failed"} (average prices pass ${twap(p.passTwap)}, fail ${twap(p.failTwap)}).`);
+    lines.push(`${p.passed ? "Pass" : "Fail"} balances redeem 1:1: \`${ctx.cmd("redeem")} ${id}\`.`);
+    if (!p.liquidityReclaimed) lines.push(`The proposer can take back the winning pool: \`${ctx.cmd("reclaimliquidity")} ${id}\`.`);
+  }
+  if (me) lines.push(...positionLines(await v.readPosition(network, "decisionMarkets", d.position(d.proposal(id), me)), tok, q.fmt));
+  return lines;
+}
+
+/** Moves a Sowellian proposal on: closes its approval vote, an unchallenged resolution or an adjudication. */
+async function settleSowellian(ctx, c, id, only) {
+  const { network, d, model, governance: g, tok } = c;
+  const p = await v.readProposal(network, model, d.proposal(id));
+  if (!p) fail(`There's no proposal #${id}.`);
+  const now = await v.clusterNow(network);
+  const phase = v.variant(p.phase);
+  if (only && phase !== only) fail(`#${id} isn't waiting for that - it's ${v.sowellianState(p, g.config, now)}. \`${ctx.cmd("proposal")} ${id}\` shows what's next.`);
+  if (phase === "approvalVoting" && now < num(p.approvalEndsAt)) fail(`The approval vote on #${id} closes in ${duration(num(p.approvalEndsAt) - now)}.`);
+  if (phase === "resolutionProposed" && now < num(p.challengeDeadline)) fail(`The resolution of #${id} can be challenged for ${duration(num(p.challengeDeadline) - now)} more (\`${ctx.cmd("challengeresolution")} ${id}\`).`);
+  if (phase === "adjudicating" && now < num(p.adjudicationEndsAt)) fail(`The adjudication vote on #${id} closes in ${duration(num(p.adjudicationEndsAt) - now)}.`);
+  if (phase === "positionsOpen" && v.sowellianState(p, g.config, now) !== "Expired") {
+    const at = v.sowellianExecutableAt(p, g.config);
+    fail(at > now ? `#${id} can run in ${duration(at - now)}: \`${ctx.cmd("execute")} ${id}\`.` : `#${id} is ready to run: \`${ctx.cmd("execute")} ${id}\`.`);
+  }
+  const step = await v.sowellianSettle(network, d, id);
+  const after = await v.readProposal(network, model, d.proposal(id));
+  switch (step) {
+    case "finalizeApproval":
+      return v.variant(after.phase) === "positionsOpen"
+        ? reply(`✅ #${id} is approved. Back YES or NO for ${duration(g.config.positionsWindow)}: \`${ctx.cmd("takeposition")} ${id} yes|no <amount>\`. It can run ${duration(g.config.executionTimelock)} after that.`)
+        : reply(`#${id} wasn't approved; its ${tok.fmt(after.proposalBond)} ${tok.symbol} bond goes to the treasury.`);
+    case "finalizeUnchallenged":
+    case "finalizeAdjudication":
+      return reply(`✅ #${id} is resolved: *${v.variant(after.finalOutcome)}*. Collect what you're owed with \`${ctx.cmd("claimposition")} ${id}\`.`);
+    default:
+      return reply(`#${id} was never run in time, so it's void: everyone's position comes back with \`${ctx.cmd("claimposition")} ${id}\`.`);
+  }
+}
+
+/** Settles a decision market proposal by TWAP once trading closes. */
+async function finalizeMarkets(ctx, c, id) {
+  const { network, d, model, governance: g } = c;
+  const p = await v.readProposal(network, model, d.proposal(id));
+  if (!p) fail(`There's no proposal #${id}.`);
+  if (p.finalized) fail(`#${id} is already settled: it ${p.passed ? "passed" : "failed"}.`);
+  const now = await v.clusterNow(network);
+  if (now < num(p.tradingDeadline)) fail(`Trading on #${id} closes in ${duration(num(p.tradingDeadline) - now)}.`);
+  await v.queue(network, d, model, id);
+  const after = await v.readProposal(network, model, d.proposal(id));
+  const { decimals } = await v.mintInfo(network, g.mint);
+  const q = await quoteToken(network, g);
+  const twap = (x) => v.twapPrice(x, decimals, q.decimals).toPrecision(6);
+  const prices = `Average prices: pass ${twap(after.passTwap)}, fail ${twap(after.failTwap)} ${q.name} per token (pass needed ${pct(g.config.thresholdBps)} more).`;
+  return reply(
+    after.passed
+      ? `✅ #${id} passed. ${prices}\nIt can run in ${duration(g.config.timelock)}: \`${ctx.cmd("execute")} ${id}\`. Pass balances redeem 1:1: \`${ctx.cmd("redeem")} ${id}\`.`
+      : `#${id} failed. ${prices}\nFail balances redeem 1:1: \`${ctx.cmd("redeem")} ${id}\`.`
+  );
+}
+
+/** A Sowellian approval vote (for/against/abstain) or adjudication vote (success/failure), weighted by stake. */
+async function castSowellian(ctx, c, kind, id, word) {
+  const { network, d, model, tok } = c;
+  const approval = kind === "approval";
+  const usage = approval ? `${ctx.cmd("vote")} ${id} for|against|abstain` : `${ctx.cmd("vote")} ${id} success|failure`;
+  if (!(approval ? CHOICES : OUTCOMES).includes(word)) fail(`Usage: \`${usage}\``);
+  const p = await v.readProposal(network, model, d.proposal(id));
+  if (!p) fail(`There's no proposal #${id}.`);
+  const phase = v.variant(p.phase);
+  if (approval && phase !== "approvalVoting") fail(phase === "adjudicating" ? `#${id} is in its adjudication vote: \`${ctx.cmd("vote")} ${id} success|failure\`.` : `#${id}'s approval vote is over.`);
+  if (!approval && phase !== "adjudicating") fail(`#${id} has no adjudication vote open - one opens when someone challenges a proposed resolution.`);
+  const kp = await member(ctx, network);
+  const voter = await requireStake(ctx, network, d, model, kp);
+  const record = approval ? d.approvalVote(d.proposal(id), kp.publicKey) : d.adjudicationVote(d.proposal(id), kp.publicKey);
+  if (await network.connection.getAccountInfo(record)) fail(`You've already voted on #${id}${approval ? "" : "'s adjudication"}.`);
+  if (approval) await v.approvalVote(network, kp, d, id, word);
+  else await v.adjudicationVote(network, kp, d, id, word);
+  return reply(`✅ Voted *${word}* on #${id}${approval ? "'s approval" : "'s true outcome"} with ${tok.fmt(voter.amount)} staked. Your stake stays locked until the vote closes.`);
+}
+
+/** A decision market's balances for one member, in words. */
+function positionLines(pos, tok, quoteFmt) {
+  if (!pos) return [];
+  return [`Your balances: pass ${tok.fmt(pos.passBase)} ${tok.symbol} + ${quoteFmt(pos.passQuote)} · fail ${tok.fmt(pos.failBase)} ${tok.symbol} + ${quoteFmt(pos.failQuote)}`];
+}
+
+/** "1.5" of the decision market's quote token -> raw, and a formatter. */
+async function quoteToken(network, g) {
+  const { decimals } = await v.mintInfo(network, g.quoteMint);
+  const name = v.quoteIsSol(g) ? "SOL" : `quote`;
+  return { decimals, name, fmt: (raw) => `${v.formatUnits(raw, decimals)} ${name}`, parse: (text) => v.parseUnits(text, decimals) };
+}
 
 /** An election's phase, candidates and votes. */
 function electionLines(ctx, e, now, tok) {
@@ -1085,19 +1923,19 @@ const CREATE = {
   async createdao(ctx, networkId, args) {
     const usage = `${ctx.cmd("createdao")} <name> <symbol> <initialSupply> <maxSupply> [model] solana [council...]`;
     const [name, symbol, initial, , modelWord = "tokenWeighted", ...councilArgs] = args;
-    if (!initial) fail(`Usage: \`${usage}\`\nModels: ${SOLANA_MODELS.filter((m) => m !== "board").join(", ")}. Delegate also takes the first council's Solana addresses.`);
+    if (!initial) fail(`Usage: \`${usage}\`\nModels: ${SOLANA_MODELS.filter((m) => m !== "board").join(", ")}. Delegate and sortition also take the first council's Solana addresses.`);
     const model = MODEL_WORDS[modelWord.toLowerCase()];
     if (model === "board") fail(`Board has no token - use \`${ctx.cmd("createboarddao")} <name> <signer...> solana\`.`);
     if (!model || !SOLANA_MODELS.includes(model)) fail(`On Solana the bot can create ${SOLANA_MODELS.filter((m) => m !== "board").join(", ")} DAOs (and board, with \`${ctx.cmd("createboarddao")}\`).`);
     if (!name || Buffer.byteLength(name) > 32) fail("The DAO's name must be 1-32 characters on Solana.");
     if (!/^\d+$/.test(initial) || Number(initial) <= 0) fail("The initial supply must be a whole number of tokens above zero.");
     let council;
-    if (model === "delegate") {
+    if (COUNCIL.includes(model)) {
       council = councilArgs.map((a) => parseKey(a, "a council member"));
-      if (council.length === 0) fail(`A delegate DAO needs its first council: \`${usage}\` - council members are Solana addresses (each member's \`${ctx.cmd("wallet")}\` shows theirs).`);
+      if (council.length === 0) fail(`A ${MODEL_LABEL[model]} DAO needs its first council: \`${usage}\` - council members are Solana addresses (each member's \`${ctx.cmd("wallet")}\` shows theirs).${model === "sortition" ? " Later councils, the same size, are drawn by lot from members who opt in." : ""}`);
       if (council.length > 15) fail("A council can have at most 15 members.");
       if (new Set(council.map((c) => c.toBase58())).size !== council.length) fail("The same council member is listed twice.");
-    } else if (councilArgs.length) fail(`Only delegate DAOs take council members. Usage: \`${usage}\``);
+    } else if (councilArgs.length) fail(`Only delegate and sortition DAOs take council members. Usage: \`${usage}\``);
     const network = getSolanaNetwork(networkId);
     const r = await v.createTokenDao(network, { name, initialSupply: initial, model, council });
     registerSolanaChat(ctx.chatId, { network: networkId, dao: r.dao.toBase58(), model, mint: r.mint.toBase58(), symbol, creatorPlatformUserId: String(ctx.userId) }, ctx.platform);
@@ -1107,6 +1945,10 @@ const CREATE = {
       optimistic: "Proposals pass unless someone challenges them with a bond; only then is there a vote.",
       conviction: "Members stake and back proposals; support builds conviction over time, and spending more of the treasury needs more of it.",
       delegate: `The council (${council?.length} members) proposes and votes; members stake to elect it and to recall members.`,
+      liquid: "Members stake to vote, or hand their vote to another member with `delegate`; voting yourself always overrides your delegate.",
+      sortition: `The council (${council?.length} seats) proposes and votes. When its term ends, the next council is drawn by lot (ORAO VRF) from members who stake and opt in.`,
+      sowellian: "Proposals name how success is measured. An approval vote opens them for YES/NO positions; after they run and are measured, Pyth or a challengeable human answer settles who was right.",
+      decisionMarkets: "No votes: each proposal opens a pass and a fail market (DAO token vs SOL), and it passes if the pass market prices the token higher.",
     }[model];
     return reply(
       [

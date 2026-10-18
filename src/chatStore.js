@@ -2,6 +2,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { createClient } from "@supabase/supabase-js";
 import { readJson, updateJson, writeJsonAtomic } from "./jsonFile.js";
+import { supabaseMessage } from "./supabaseError.js";
 
 /**
  * Where chat links live (db.js reads and writes through here).
@@ -41,6 +42,7 @@ let links = {};               // Supabase mode: every chat's entry, by key
 const pending = new Map();    // key -> entry (null = delete) not yet written
 let flushing = null;
 let failing = false;
+let refreshFailing = false;
 
 function client() {
   const url = process.env.SUPABASE_URL;
@@ -64,7 +66,7 @@ function tableError(error) {
   if (error.code === "PGRST205" || error.code === "42P01") {
     return Object.assign(new Error(`Supabase has no "${TABLE}" table yet - run the chat_links part of supabase/schema.sql in the SQL editor, or unset CHAT_LINKS_STORE.`), { fatal: true });
   }
-  return new Error(`Supabase ${TABLE}: ${error.message}`);
+  return new Error(`Supabase ${TABLE}: ${supabaseMessage(error)}`);
 }
 
 const saveCache = () => {
@@ -121,8 +123,12 @@ async function refresh() {
     }
     links = remote;
     saveCache();
+    if (refreshFailing) console.log("Chat links: Supabase reads are going through again.");
+    refreshFailing = false;
   } catch (err) {
-    if (!failing) console.warn(`Chat links: refresh failed (${err.message}); using the copy in memory.`);
+    // Once per outage, not once a minute.
+    if (!failing && !refreshFailing) console.warn(`Chat links: refresh failed (${err.message}); using the copy in memory until Supabase is back.`);
+    refreshFailing = true;
   }
 }
 

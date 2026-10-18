@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { supabaseMessage } from "./supabaseError.js";
 import { createEncryptedWallet, decryptWallet, isKmsWalletConfigured } from "./kmsWallet.js";
 
 /**
@@ -52,7 +53,7 @@ export async function findWalletRecord(platform, platformUserId) {
     .eq("platform_user_id", String(platformUserId))
     .maybeSingle();
 
-  if (error) throw new Error(`Supabase lookup failed: ${error.message}`);
+  if (error) throw new Error(`Supabase lookup failed: ${supabaseMessage(error)}`);
   return data; // null if no row found
 }
 
@@ -85,7 +86,7 @@ export async function createWalletRecord(platform, platformUserId) {
     .select()
     .single();
 
-  if (error) throw new Error(`Supabase insert failed: ${error.message}`);
+  if (error) throw new Error(`Supabase insert failed: ${supabaseMessage(error)}`);
   return data;
 }
 
@@ -137,7 +138,7 @@ export async function recordGasTopup(address) {
     .eq("address", address)
     .maybeSingle();
 
-  if (selectError) throw new Error(`Supabase lookup failed: ${selectError.message}`);
+  if (selectError) throw new Error(`Supabase lookup failed: ${supabaseMessage(selectError)}`);
   if (!existing) return null;
 
   const newCount = existing.gas_topups_count + 1;
@@ -146,7 +147,7 @@ export async function recordGasTopup(address) {
     .update({ gas_topups_count: newCount })
     .eq("address", address);
 
-  if (updateError) throw new Error(`Supabase update failed: ${updateError.message}`);
+  if (updateError) throw new Error(`Supabase update failed: ${supabaseMessage(updateError)}`);
   return newCount;
 }
 
@@ -178,7 +179,7 @@ export async function storeSolanaWallet(platform, platformUserId, solana) {
     .eq("platform", platform)
     .eq("platform_user_id", String(platformUserId))
     .is("solana", null);
-  if (error) throw new Error(`Supabase update failed: ${error.message}`);
+  if (error) throw new Error(`Supabase update failed: ${supabaseMessage(error)}`);
   const stored = await findSolanaWallet(platform, platformUserId);
   if (!stored) throw new Error(`No wallet row for ${platform}:${platformUserId} to add a Solana wallet to`);
   return stored;
@@ -194,6 +195,6 @@ export async function recordSolanaTopup(platform, platformUserId) {
     .update({ solana: { ...solana, topups } })
     .eq("platform", platform)
     .eq("platform_user_id", String(platformUserId));
-  if (error) throw new Error(`Supabase update failed: ${error.message}`);
+  if (error) throw new Error(`Supabase update failed: ${supabaseMessage(error)}`);
   return topups;
 }

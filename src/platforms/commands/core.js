@@ -22,6 +22,7 @@ import { proposalPageUrl, pendingSubmitLink } from "../../proposalPages.js";
 import { proposalImage } from "../../charts.js";
 import { getUserAddress } from "../../walletResolver.js";
 import { parsePerps, perpsUsage, perpsView, perpsProposalWords, PerpsError } from "../../perps.js";
+import { deskUsage, deskStatus, applyForDesk, deskProposalWords, resignFromDesk, linkDesk, trade, DeskError } from "../../desk.js";
 
 /** The everyday governance loop - linking, DAO info, wallet, staking, proposing, deciding. */
 export const CORE_COMMANDS = {
@@ -353,6 +354,55 @@ export const CORE_COMMANDS = {
     },
   },
 
+  desk: {
+    description: "Trading desk: a trader appointed by proposal trades the DAO's perps collateral, never withdraws",
+    options: [{ name: "request", description: "blank, long|short|close … (trader), apply <markets> max=<size>, fund|withdraw <amt>, remove, resign", required: false, rest: true }],
+    async run(ctx) {
+      const address = requireDao(ctx);
+      const [sub = "", ...args] = ctx.args;
+      const chat = { chatId: ctx.chatId, platform: ctx.platform, userId: ctx.userId };
+      try {
+        switch (sub.toLowerCase()) {
+          case "":
+          case "status":
+            return reply(await deskStatus(chat, ctx.cmd));
+          case "help":
+            return reply(deskUsage(ctx.cmd));
+          case "apply": {
+            const { account } = await userClient(ctx);
+            const plan = await applyForDesk(chat, account, args);
+            return await proposeIntegration({ ...ctx, named: undefined }, address, plan.actionId, plan.words, { onProposed: plan.record, note: plan.note });
+          }
+          case "fund":
+          case "withdraw":
+          case "remove": {
+            const { actionId, words } = deskProposalWords(chat, sub.toLowerCase(), args);
+            return await proposeIntegration({ ...ctx, named: undefined }, address, actionId, words);
+          }
+          case "resign": {
+            const { client } = await userClient(ctx);
+            return reply(await resignFromDesk(chat, client));
+          }
+          case "link":
+            return reply(await linkDesk(chat, args[0]));
+          case "long":
+          case "short":
+          case "buy":
+          case "sell":
+          case "close": {
+            const { client } = await userClient(ctx);
+            return reply(await trade(chat, client, ctx.args));
+          }
+          default:
+            throw new DeskError(`Unknown \`desk ${sub}\`.`);
+        }
+      } catch (err) {
+        if (err instanceof DeskError) throw new UserError(`${err.message}\n\n${deskUsage(ctx.cmd)}`);
+        throw err;
+      }
+    },
+  },
+
   feeds: {
     description: "Search Pyth's price feeds, for a Sowellian oracle proposal's feed=",
     ephemeralByDefault: true,
@@ -475,7 +525,7 @@ export const CORE_COMMANDS = {
 };
 
 /** proposeaction for an external-protocol action: several Treasury calls in one proposal. */
-async function proposeIntegration(ctx, address, actionId, rest) {
+async function proposeIntegration(ctx, address, actionId, rest, { onProposed, note } = {}) {
   const model = getChatModel(ctx.chatId, ctx.platform);
   // Discord passes args and description as separate fields; join them so
   // name=value options and the description parse the same way as Slack.
@@ -504,7 +554,8 @@ async function proposeIntegration(ctx, address, actionId, rest) {
   }
   const { client } = await userClient(ctx, { forceFullTopup: true });
   const { proposalId, oracleFeed } = await proposeForModel({ model, client, governanceAddress: address, actions: built.actions, description: built.description, options: modelOptions });
+  onProposed?.(proposalId);
   const steps = built.actions.length;
   const feed = oracleFeedLine(oracleFeed);
-  return proposalReply(ctx, address, model, proposalId, `✅ Proposal #${proposalId} created via \`${actionId}\` (${steps} step${steps === 1 ? "" : "s"}).\n\n${built.summary}${feed ? `\n${feed}` : ""}\n\n${proposalNextStep(model, proposalId, ctx.cmd)}`);
+  return proposalReply(ctx, address, model, proposalId, `✅ Proposal #${proposalId} created via \`${actionId}\` (${steps} step${steps === 1 ? "" : "s"}).\n\n${built.summary}${note ? `\n${note}` : ""}${feed ? `\n${feed}` : ""}\n\n${proposalNextStep(model, proposalId, ctx.cmd)}`);
 }

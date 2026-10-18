@@ -24,6 +24,10 @@ export const IDLS = {
   board: require("./idl/vortex_board.json"),
   conviction: require("./idl/vortex_conviction.json"),
   delegate: require("./idl/vortex_delegate.json"),
+  liquid: require("./idl/vortex_liquid.json"),
+  sortition: require("./idl/vortex_sortition.json"),
+  sowellian: require("./idl/vortex_sowellian.json"),
+  decisionMarkets: require("./idl/vortex_decision_markets.json"),
 };
 /** vortex-core's GovError, by code: { "6000": { name, msg } }. */
 export const GOV_ERRORS = require("./idl/gov_errors.json");
@@ -50,8 +54,8 @@ export function resolveSolanaNetwork(word) {
   return ALIASES[w] ?? null;
 }
 
-/** Models Solana DAOs can be created with from the bot (all six Vortexes programs). */
-export const SOLANA_MODELS = ["tokenWeighted", "quadratic", "optimistic", "conviction", "delegate", "board"];
+/** Models Solana DAOs can be created with from the bot (all ten Vortexes programs). */
+export const SOLANA_MODELS = ["tokenWeighted", "quadratic", "optimistic", "conviction", "delegate", "board", "liquid", "sortition", "sowellian", "decisionMarkets"];
 
 const env = (id, name) => process.env[`${DEFINITIONS[id].envPrefix}_${name}`] || undefined;
 
@@ -79,6 +83,10 @@ export function getSolanaNetwork(id) {
       board: pid("BOARD", IDLS.board.address),
       conviction: pid("CONVICTION", IDLS.conviction.address),
       delegate: pid("DELEGATE", IDLS.delegate.address),
+      liquid: pid("LIQUID", IDLS.liquid.address),
+      sortition: pid("SORTITION", IDLS.sortition.address),
+      sowellian: pid("SOWELLIAN", IDLS.sowellian.address),
+      decisionMarkets: pid("DECISION_MARKETS", IDLS.decisionMarkets.address),
     },
     /** SOL top-ups for user wallets, in lamports. */
     topup: {

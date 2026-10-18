@@ -6,8 +6,10 @@ import {
   Transaction,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
+import { createHash, randomBytes } from "crypto";
 import {
   MINT_SIZE,
+  NATIVE_MINT,
   TOKEN_PROGRAM_ID,
   AuthorityType,
   createInitializeMint2Instruction,
@@ -16,17 +18,20 @@ import {
   createMintToCheckedInstruction,
   createSetAuthorityInstruction,
   createTransferCheckedInstruction,
+  createSyncNativeInstruction,
+  createCloseAccountInstruction,
   getAssociatedTokenAddressSync,
   getMint,
 } from "@solana/spl-token";
 import anchor from "@coral-xyz/anchor";
 
 const { AnchorProvider, Program, BN } = anchor;
+export { BN };
 import { IDLS, GOV_ERRORS, getSolanaOperator } from "./config.js";
 
 /**
  * Talks to the Vortexes programs: the hub (DAO records, treasuries,
- * execution, model switches) and the six governance programs that decide.
+ * execution, model switches) and the ten governance programs that decide.
  * Instructions are built from the programs' own IDLs (src/solana/idl,
  * copied from the Vortexes repo), so no byte layout is written by hand
  * here.
@@ -42,11 +47,15 @@ export const TOKEN_DECIMALS = 6;
 const TEN_POW = 10n ** BigInt(TOKEN_DECIMALS);
 
 /** The governance models, by the key the bot uses everywhere ("tokenWeighted", ...). */
-export const MODELS = ["tokenWeighted", "quadratic", "optimistic", "board", "conviction", "delegate"];
-/** Models whose members deposit the DAO's token. */
-export const TOKEN_MODELS = ["tokenWeighted", "quadratic", "optimistic", "conviction", "delegate"];
+export const MODELS = ["tokenWeighted", "quadratic", "optimistic", "board", "conviction", "delegate", "liquid", "sortition", "sowellian", "decisionMarkets"];
+/** Models with a token of their own (decision markets' is its base token; members trade it rather than deposit it). */
+export const TOKEN_MODELS = ["tokenWeighted", "quadratic", "optimistic", "conviction", "delegate", "liquid", "sortition", "sowellian", "decisionMarkets"];
+/** Models whose members deposit the DAO's token to vote or stand. */
+export const STAKE_MODELS = ["tokenWeighted", "quadratic", "optimistic", "conviction", "delegate", "liquid", "sortition", "sowellian"];
 /** Models with for/against/abstain votes on proposals, weighted by deposit. */
-const VOTING_MODELS = ["tokenWeighted", "quadratic", "optimistic"];
+const VOTING_MODELS = ["tokenWeighted", "quadratic", "optimistic", "liquid"];
+/** Models whose council (seated by election or by lot) proposes and votes. */
+export const COUNCIL_MODELS = ["delegate", "sortition"];
 /** The list entry conviction uses for SOL (the treasury's own balance). */
 export const SOL_ASSET = PublicKey.default;
 
@@ -105,6 +114,19 @@ export function addresses(network, dao, gp) {
     ballot: (election, owner) => pda([seed("ballot"), election.toBuffer(), owner.toBuffer()], gp),
     recall: (id) => pda([seed("recall"), governance.toBuffer(), u64le(id)], gp),
     recallVote: (recall, owner) => pda([seed("recall_vote"), recall.toBuffer(), owner.toBuffer()], gp),
+    // liquid
+    override: (proposal, delegate) => pda([seed("override"), proposal.toBuffer(), delegate.toBuffer()], gp),
+    // sortition
+    pool: pda([seed("pool"), governance.toBuffer()], gp),
+    // sowellian
+    escrow: pda([seed("escrow"), governance.toBuffer()], gp),
+    approvalVote: (proposal, owner) => pda([seed("approval_vote"), proposal.toBuffer(), owner.toBuffer()], gp),
+    adjudicationVote: (proposal, owner) => pda([seed("adjudication_vote"), proposal.toBuffer(), owner.toBuffer()], gp),
+    // sowellian and decision markets
+    position: (proposal, owner) => pda([seed("position"), proposal.toBuffer(), owner.toBuffer()], gp),
+    // decision markets
+    baseVault: pda([seed("base_vault"), governance.toBuffer()], gp),
+    quoteVault: pda([seed("quote_vault"), governance.toBuffer()], gp),
   };
 }
 
@@ -292,6 +314,69 @@ export function delegateConfig(network, size) {
   };
 }
 
+/** Sortition: a council of `size` drawn by lot, a majority of it to pass a proposal (60% approval), 2-day terms. */
+export function sortitionConfig(network, size) {
+  const fast = network.fastTimings;
+  return {
+    councilSize: size,
+    termLength: fast ? 600 : 2 * DAY,
+    eligibilityThreshold: new BN(0),
+    councilQuorum: Math.floor(size / 2) + 1,
+    councilApprovalBps: 6_000,
+    votingDelay: 0,
+    votingPeriod: fast ? 120 : 20_160,
+    timelock: fast ? 30 : HOUR,
+    executionPeriod: fast ? DAY : 7 * DAY,
+    // ORAO usually answers within seconds; a draw it never answers can restart after this.
+    randomnessTimeout: fast ? 120 : HOUR,
+  };
+}
+
+/**
+ * Sowellian, as the EVM bot's defaults: 100-token bonds; a ~5.6h approval
+ * vote (10% quorum, 60%); a week of positions; a 1-day timelock; 3 days
+ * to challenge a resolution, then a ~5.6h adjudication vote (10%, 60%).
+ */
+export function sowellianConfig(network, decimals) {
+  const fast = network.fastTimings;
+  const bond = bn(100n * 10n ** BigInt(decimals));
+  return {
+    proposalBond: bond,
+    approvalVotingDelay: 0,
+    approvalVotingPeriod: fast ? 120 : 20_160,
+    approvalQuorumBps: 1_000,
+    approvalThresholdBps: 6_000,
+    positionsWindow: fast ? 120 : 7 * DAY,
+    executionTimelock: fast ? 30 : DAY,
+    executionPeriod: fast ? DAY : 7 * DAY,
+    resolutionBond: bond,
+    challengePeriod: fast ? 120 : 3 * DAY,
+    challengeBond: bond,
+    adjudicationVotingPeriod: fast ? 120 : 20_160,
+    adjudicationQuorumBps: 1_000,
+    adjudicationThresholdBps: 6_000,
+    maxOracleStaleness: HOUR,
+  };
+}
+
+/**
+ * Decision markets, as the EVM bot's defaults: 3 days of trading (fast: 5
+ * minutes), pass must beat fail by 3%, 1-day timelock, 7 days to run.
+ * Proposers seed each market with at least 1 DAO token and 0.01 of the
+ * quote token.
+ */
+export function marketsConfig(network, baseDecimals, quoteDecimals) {
+  const fast = network.fastTimings;
+  return {
+    tradingPeriod: fast ? 300 : 3 * DAY,
+    thresholdBps: 300,
+    timelock: fast ? 60 : DAY,
+    executionPeriod: fast ? DAY : 7 * DAY,
+    minBaseSeed: bn(10n ** BigInt(baseDecimals)),
+    minQuoteSeed: bn(10n ** BigInt(quoteDecimals) / 100n || 1n),
+  };
+}
+
 /** Board: a majority of signers, 1-day timelock, 7 days to run (as on EVM). */
 export function boardConfig(network, signerCount) {
   const fast = network.fastTimings;
@@ -321,7 +406,8 @@ async function createDaoIx(network, creator, createKey, name, gp) {
  * after create_dao, or by the treasury (authority and payer) inside a
  * proposal that switches the DAO to this model.
  * `opts`: { mint } for token models, { signers } for board, { council }
- * for delegate.
+ * for delegate and sortition, and { quoteMint } for decision markets
+ * (wrapped SOL if left out).
  */
 export async function initGovernanceIx(network, model, dao, authority, payer, opts = {}) {
   const gp = network.programs[model];
@@ -334,11 +420,36 @@ export async function initGovernanceIx(network, model, dao, authority, payer, op
       .instruction();
   }
   const { decimals, programId: tokenProgram } = await mintInfo(network, opts.mint);
+  if (model === "decisionMarkets") {
+    const quoteMint = opts.quoteMint ?? NATIVE_MINT;
+    const quote = await mintInfo(network, quoteMint);
+    return program.methods
+      .initGovernance(marketsConfig(network, decimals, quote.decimals))
+      .accountsStrict({
+        authority,
+        payer,
+        hubDao: dao,
+        governance: a.governance,
+        baseMint: opts.mint,
+        quoteMint,
+        baseVault: a.baseVault,
+        quoteVault: a.quoteVault,
+        baseTokenProgram: tokenProgram,
+        quoteTokenProgram: quote.programId,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+  }
   const accounts = { authority, payer, hubDao: dao, governance: a.governance, mint: opts.mint, vault: a.vault, tokenProgram, systemProgram: SystemProgram.programId };
   switch (model) {
     case "tokenWeighted":
     case "quadratic":
+    case "liquid":
       return program.methods.initGovernance(votingConfig(network)).accountsStrict(accounts).instruction();
+    case "sortition":
+      return program.methods.initGovernance(opts.council, sortitionConfig(network, opts.council.length)).accountsStrict({ ...accounts, pool: a.pool }).instruction();
+    case "sowellian":
+      return program.methods.initGovernance(sowellianConfig(network, decimals)).accountsStrict({ ...accounts, escrow: a.escrow }).instruction();
     case "optimistic":
       return program.methods.initGovernance(optimisticConfig(network, decimals)).accountsStrict({ ...accounts, bondVault: a.bondVault }).instruction();
     case "conviction": {
@@ -357,8 +468,8 @@ export async function initGovernanceIx(network, model, dao, authority, payer, op
  * A DAO with a new token, on any token model: mints `initialSupply` to the
  * operator (handed out with /tip, as on EVM), creates the DAO in the hub
  * with its rules, then makes the treasury the token's mint authority, so
- * new tokens can only ever be minted by a passed proposal. Delegate also
- * takes its first `council`.
+ * new tokens can only ever be minted by a passed proposal. Delegate and
+ * sortition also take their first `council`.
  */
 export async function createTokenDao(network, { name, initialSupply, model = "tokenWeighted", council }) {
   if (!TOKEN_MODELS.includes(model)) throw new Error(`${model} has no token`);
@@ -415,7 +526,10 @@ export async function readDao(network, dao) {
 }
 
 export async function readGovernance(network, model, governance) {
-  return clients(network)[model].account.governance.fetch(governance);
+  const g = await clients(network)[model].account.governance.fetch(governance);
+  // Decision markets' token is its base mint; `mint` is what the rest of the bot reads.
+  if (model === "decisionMarkets") g.mint = g.baseMint;
+  return g;
 }
 
 export async function readProposal(network, model, proposal) {
@@ -542,12 +656,111 @@ export function delegateState(p, g, now) {
   return coreState(p, { startsAt: toNum(p.votingStartsAt), endsAt: toNum(p.votingEndsAt), timelock: c.timelock, executionPeriod: c.executionPeriod }, councilPassed(g, p), now);
 }
 
+/** Sortition's council tally: every vote counts (members can't be removed mid-term). */
+export function sortitionTally(p) {
+  const t = { for: 0, against: 0, abstain: 0 };
+  for (const v of p.votes) t[variant(v.choice)] += 1;
+  return t;
+}
+
+/** The quorum in force: the configured one, or the whole council if it's smaller (as the program). */
+export function sortitionQuorum(g) {
+  return Math.max(1, Math.min(g.config.councilQuorum, g.council.length));
+}
+
+export function sortitionPassed(g, p) {
+  const t = sortitionTally(p);
+  const counted = t.for + t.against;
+  const approval = counted === 0 ? 0 : Math.floor((t.for * 10_000) / counted);
+  return t.for + t.against + t.abstain >= sortitionQuorum(g) && approval >= g.config.councilApprovalBps;
+}
+
+/** Sortition proposal state; one from an earlier council that never ran is Expired. */
+export function sortitionState(p, g, now) {
+  if (!p.executed && !p.cancelled && p.councilTerm !== g.councilTerm) return "Expired";
+  const c = g.config;
+  return coreState(p, { startsAt: toNum(p.votingStartsAt), endsAt: toNum(p.votingEndsAt), timelock: c.timelock, executionPeriod: c.executionPeriod }, sortitionPassed(g, p), now);
+}
+
+/**
+ * Sowellian proposal state, from its phase: Pending/Active (approval
+ * vote), ApprovalClosed (to finalize), Defeated, PositionsOpen, Queued
+ * (positions closed, timelock running or over), Expired, Measuring,
+ * AwaitingResolution, ResolutionProposed, Adjudicating, Resolved, Cancelled.
+ */
+export function sowellianState(p, config, now) {
+  const c = config;
+  switch (variant(p.phase)) {
+    case "approvalVoting":
+      if (now < toNum(p.approvalStartsAt)) return "Pending";
+      return now < toNum(p.approvalEndsAt) ? "Active" : "ApprovalClosed";
+    case "rejected":
+      return "Defeated";
+    case "positionsOpen": {
+      const deadline = toNum(p.positionsDeadline);
+      if (now < deadline) return "PositionsOpen";
+      return now < deadline + c.executionTimelock + c.executionPeriod ? "Queued" : "Expired";
+    }
+    case "executed":
+      return now < toNum(p.measurementDeadline) ? "Measuring" : "AwaitingResolution";
+    case "resolutionProposed":
+      return "ResolutionProposed";
+    case "adjudicating":
+      return "Adjudicating";
+    case "finalized":
+      return "Resolved";
+    case "cancelled":
+      return "Cancelled";
+    default:
+      return "Unknown";
+  }
+}
+
+/** When a sowellian proposal can run (positions closed plus the timelock). */
+export function sowellianExecutableAt(p, config) {
+  return toNum(p.positionsDeadline) + config.executionTimelock;
+}
+
+/** Decision markets proposal state: Trading, TradingClosed (to finalize), Defeated, Queued, Executed, Expired, Cancelled. */
+export function marketsState(p, config, now) {
+  if (p.cancelled) return "Cancelled";
+  if (p.executed) return "Executed";
+  if (!p.finalized) return now < toNum(p.tradingDeadline) ? "Trading" : "TradingClosed";
+  if (!p.passed) return "Defeated";
+  return now > toNum(p.queuedAt) + config.timelock + config.executionPeriod ? "Expired" : "Queued";
+}
+
+/** A pool's price: quote per base, as a float for display (the program keeps it ×1e12). */
+export function poolPrice(pool, baseDecimals, quoteDecimals) {
+  const base = Number(big(pool.base)) / 10 ** baseDecimals;
+  const quote = Number(big(pool.quote)) / 10 ** quoteDecimals;
+  return base === 0 ? 0 : quote / base;
+}
+
+/** A TWAP (quote per base in raw units, ×1e12) as quote per whole token, for display. */
+export function twapPrice(twap, baseDecimals, quoteDecimals) {
+  return (Number(big(twap)) / 1e12) * 10 ** (baseDecimals - quoteDecimals);
+}
+
+/** The program's constant-product quote: what `amountIn` buys from a pool, after its 0.3% fee. */
+export function amountOut(amountIn, reserveIn, reserveOut) {
+  const inFee = BigInt(amountIn) * 997n;
+  return (inFee * big(reserveOut)) / (big(reserveIn) * 1000n + inFee);
+}
+
 /** Any model's proposal state. */
 export function proposalState(model, p, g, now) {
   switch (model) {
     case "tokenWeighted":
     case "quadratic":
+    case "liquid":
       return votingState(p, g.config, now);
+    case "sortition":
+      return sortitionState(p, g, now);
+    case "sowellian":
+      return sowellianState(p, g.config, now);
+    case "decisionMarkets":
+      return marketsState(p, g.config, now);
     case "optimistic":
       return optimisticState(p, g.config, now);
     case "board":
@@ -605,15 +818,23 @@ async function depositAccounts(network, member, d, governance) {
   };
 }
 
-/** Deposits `raw` DAO tokens from the member's wallet into the DAO's vault (any token model). */
+/** Liquid: the member's delegate's record, which their deposits and withdrawals keep in step (null if they haven't delegated). */
+async function delegateVoterOf(network, d, owner) {
+  const voter = await readVoter(network, "liquid", d.voter(owner));
+  return voter && !voter.delegate.equals(PublicKey.default) ? d.voter(voter.delegate) : null;
+}
+
+/** Deposits `raw` DAO tokens from the member's wallet into the DAO's vault (any staking model). */
 export async function deposit(network, model, member, d, governance, raw) {
   const accounts = await depositAccounts(network, member, d, governance);
+  if (model === "liquid") accounts.delegateVoter = await delegateVoterOf(network, d, member.publicKey);
   const ix = await clients(network)[model].methods.deposit(bn(raw)).accountsStrict({ ...accounts, systemProgram: SystemProgram.programId }).instruction();
   return send(network, [ix], [member]);
 }
 
 export async function withdraw(network, model, member, d, governance, raw) {
   const accounts = await depositAccounts(network, member, d, governance);
+  if (model === "liquid") accounts.delegateVoter = await delegateVoterOf(network, d, member.publicKey);
   const ix = await clients(network)[model].methods.withdraw(bn(raw)).accountsStrict(accounts).instruction();
   return send(network, [ix], [member]);
 }
@@ -672,13 +893,56 @@ export async function mintInstructions(network, d, { mint, recipient, raw }) {
   };
 }
 
+/** Instructions turning `lamports` of the owner's SOL into wrapped SOL in their token account (created if needed). */
+function wrapSolIxs(owner, lamports) {
+  const ata = tokenAccount(NATIVE_MINT, owner);
+  return [
+    createAssociatedTokenAccountIdempotentInstruction(owner, ata, owner, NATIVE_MINT),
+    SystemProgram.transfer({ fromPubkey: owner, toPubkey: ata, lamports: BigInt(lamports) }),
+    createSyncNativeInstruction(ata),
+  ];
+}
+
+/** Closes the owner's wrapped SOL account, turning it back into SOL. */
+function unwrapSolIx(owner) {
+  return createCloseAccountInstruction(tokenAccount(NATIVE_MINT, owner), owner, owner);
+}
+
+/** Decision markets' token accounts for `owner`, and the shared `tokens` accounts its instructions take. */
+async function marketAccounts(network, d, g, owner) {
+  const [base, quote] = await Promise.all([mintInfo(network, g.baseMint), mintInfo(network, g.quoteMint)]);
+  return {
+    ownerBase: tokenAccount(g.baseMint, owner, base.programId),
+    ownerQuote: tokenAccount(g.quoteMint, owner, quote.programId),
+    base,
+    quote,
+    tokens: {
+      governance: d.governance,
+      baseVault: g.baseVault,
+      quoteVault: g.quoteVault,
+      baseMint: g.baseMint,
+      quoteMint: g.quoteMint,
+      baseTokenProgram: base.programId,
+      quoteTokenProgram: quote.programId,
+    },
+  };
+}
+
+/** Whether a decision markets DAO's quote token is wrapped SOL (the bot wraps and unwraps it for members). */
+export function quoteIsSol(g) {
+  return g.quoteMint.equals(NATIVE_MINT);
+}
+
 /**
  * Makes the next proposal; returns { id, proposal, signature }. A
  * conviction DAO also takes the `budget` ([{ mint, amount }], SOL as
  * SOL_ASSET): lines for assets it doesn't list are dropped, as only listed
- * assets are watched; amounts for the same asset are added up.
+ * assets are watched; amounts for the same asset are added up. Sowellian
+ * takes its `criteria` (and the bond comes from the proposer's wallet);
+ * decision markets take both markets' `seeds` ({ base, quote }, raw), from
+ * the proposer's wallet - wrapped SOL is wrapped here first.
  */
-export async function propose(network, member, d, model, instructions, description, { budget = [] } = {}) {
+export async function propose(network, member, d, model, instructions, description, { budget = [], criteria, seeds } = {}) {
   const g = await readGovernance(network, model, d.governance);
   const id = toNum(g.proposalCount) + 1;
   const proposal = d.proposal(id);
@@ -704,6 +968,21 @@ export async function propose(network, member, d, model, instructions, descripti
     } else {
       ix = await program.methods.propose(new BN(id), description, instructions).accountsStrict(accounts).instruction();
     }
+  } else if (model === "sowellian") {
+    const { programId: tokenProgram } = await mintInfo(network, g.mint);
+    ix = await program.methods
+      .propose(new BN(id), description, instructions, criteria)
+      .accountsStrict({ ...base, proposerTokenAccount: tokenAccount(g.mint, member.publicKey, tokenProgram), escrow: g.escrow, mint: g.mint, tokenProgram })
+      .instruction();
+  } else if (model === "decisionMarkets") {
+    const m = await marketAccounts(network, d, g, member.publicKey);
+    ix = await program.methods
+      .propose(new BN(id), description, instructions, bn(seeds.base), bn(seeds.quote))
+      .accountsStrict({ ...base, proposerBase: m.ownerBase, proposerQuote: m.ownerQuote, tokens: m.tokens })
+      .instruction();
+    const pre = quoteIsSol(g) ? wrapSolIxs(member.publicKey, seeds.quote) : [];
+    const signature = await send(network, [...pre, ix], [member]);
+    return { id, proposal, signature };
   } else {
     ix = await program.methods.propose(new BN(id), description, instructions).accountsStrict(base).instruction();
   }
@@ -711,12 +990,42 @@ export async function propose(network, member, d, model, instructions, descripti
   return { id, proposal, signature };
 }
 
-/** A for/against/abstain vote: a deposit-weighted vote (token-weighted, quadratic, a challenged optimistic proposal) or a council vote (delegate). */
+/**
+ * A for/against/abstain vote: a deposit-weighted vote (token-weighted,
+ * quadratic, liquid, a challenged optimistic proposal) or a council vote
+ * (delegate, sortition). A liquid member who has delegated overrides
+ * their delegate instead - their own weight, their own choice.
+ */
 export async function vote(network, member, d, model, id, choice) {
   const proposal = d.proposal(id);
   const program = clients(network)[model];
+  if (model === "liquid") {
+    const owner = member.publicKey;
+    const voter = await readVoter(network, model, d.voter(owner));
+    const delegated = voter && !voter.delegate.equals(PublicKey.default) ? voter.delegate : null;
+    const ix = delegated
+      ? await program.methods
+          .overrideVote({ [choice]: {} })
+          .accountsStrict({
+            owner,
+            governance: d.governance,
+            proposal,
+            voter: d.voter(owner),
+            delegateVoter: d.voter(delegated),
+            delegateRecord: d.vote(proposal, delegated),
+            overrides: d.override(proposal, delegated),
+            voteRecord: d.vote(proposal, owner),
+            systemProgram: SystemProgram.programId,
+          })
+          .instruction()
+      : await program.methods
+          .castVote({ [choice]: {} })
+          .accountsStrict({ owner, governance: d.governance, proposal, voter: d.voter(owner), overrides: d.override(proposal, owner), voteRecord: d.vote(proposal, owner), systemProgram: SystemProgram.programId })
+          .instruction();
+    return send(network, [ix], [member]);
+  }
   const ix =
-    model === "delegate"
+    COUNCIL_MODELS.includes(model)
       ? await program.methods.castVote({ [choice]: {} }).accountsStrict({ member: member.publicKey, governance: d.governance, proposal }).instruction()
       : await program.methods
           .castVote({ [choice]: {} })
@@ -758,15 +1067,22 @@ export async function cancel(network, who, d, model, id) {
 
 /**
  * Moves a proposal on once its vote (or wait) is over. Anyone may; the
- * operator pays. Token-weighted, quadratic, conviction and delegate:
- * `queue`. Optimistic: finalizes it - unchallenged, it's queued; challenged,
- * the vote settles it and the bond (to the treasury if it passed, back to
- * the challenger if not).
+ * operator pays. Token-weighted, quadratic, liquid, conviction, delegate
+ * and sortition: `queue`. Optimistic: finalizes it - unchallenged, it's
+ * queued; challenged, the vote settles it and the bond (to the treasury if
+ * it passed, back to the challenger if not). Sowellian: the step its phase
+ * is waiting for (sowellianSettle). Decision markets: settles the markets
+ * by TWAP, queueing it if it passed.
  */
 export async function queue(network, d, model, id) {
   const operator = requireOperator();
   const proposal = d.proposal(id);
   const program = clients(network)[model];
+  if (model === "sowellian") return sowellianSettle(network, d, id);
+  if (model === "decisionMarkets") {
+    const ix = await program.methods.finalize().accountsStrict({ governance: d.governance, proposal }).instruction();
+    return send(network, [ix], [operator]);
+  }
   if (model !== "optimistic") {
     const ix = await program.methods.queue().accountsStrict({ governance: d.governance, proposal }).instruction();
     return send(network, [ix], [operator]);
@@ -959,6 +1275,337 @@ export async function finalizeRecall(network, d, recallId) {
   const operator = requireOperator();
   const ix = await clients(network).delegate.methods.finalizeRecall().accountsStrict({ governance: d.governance, recall: d.recall(recallId) }).instruction();
   return send(network, [ix], [operator]);
+}
+
+// ---------------------------------------------------------------
+// liquid: delegation
+// ---------------------------------------------------------------
+
+/** Delegates the member's whole deposit to `to` (one hop: `to` can't have delegated themselves). */
+export async function delegateTo(network, member, d, to) {
+  const ix = await clients(network)
+    .liquid.methods.delegate(to)
+    .accountsStrict({ owner: member.publicKey, governance: d.governance, voter: d.voter(member.publicKey), delegateVoter: d.voter(to), systemProgram: SystemProgram.programId })
+    .instruction();
+  return send(network, [ix], [member]);
+}
+
+export async function undelegate(network, member, d, delegate) {
+  const ix = await clients(network)
+    .liquid.methods.undelegate()
+    .accountsStrict({ owner: member.publicKey, governance: d.governance, voter: d.voter(member.publicKey), delegateVoter: d.voter(delegate) })
+    .instruction();
+  return send(network, [ix], [member]);
+}
+
+// ---------------------------------------------------------------
+// sortition: the pool and draws (randomness from ORAO VRF)
+// ---------------------------------------------------------------
+
+/**
+ * ORAO VRF, as vortex-sortition reads it. The request instruction is
+ * built here from ORAO's own IDL (@orao-network/solana-vrf 0.8.0,
+ * dist/types/orao_vrf.json): `request_v2(seed: [u8; 32])` with accounts
+ * payer, network_state, treasury, request, system_program. The fee
+ * treasury is read from the network state account (8-byte discriminator,
+ * then config.authority and config.treasury).
+ */
+export const ORAO_VRF = new PublicKey("VRFzZoJdhFWL8rkvu87LpKM3RbcVezpMEc6X5GVDr7y");
+const ORAO_REQUEST_V2 = Buffer.from([38, 151, 209, 6, 195, 102, 28, 217]);
+const ORAO_NETWORK_STATE = Buffer.from([212, 237, 148, 56, 97, 245, 51, 169]);
+const ORAO_RANDOMNESS_V2 = Buffer.from([139, 239, 184, 215, 227, 86, 191, 226]);
+const oraoRequest = (drawSeed) => pda([seed("orao-vrf-randomness-request"), Buffer.from(drawSeed)], ORAO_VRF);
+
+/** vortex-sortition's draw seed: sha256("vortex-sortition", governance, number, nonce). */
+export function drawSeed(governance, number, nonce) {
+  return createHash("sha256").update("vortex-sortition").update(governance.toBuffer()).update(u64le(number)).update(Buffer.from(nonce)).digest();
+}
+
+export async function readPool(network, d) {
+  return clients(network).sortition.account.pool.fetchNullable(d.pool);
+}
+
+/** The open draw's randomness request: "missing", "pending" or "fulfilled". */
+export async function drawStatus(network, g) {
+  const info = await network.connection.getAccountInfo(oraoRequest(g.drawSeed));
+  if (!info || !info.owner.equals(ORAO_VRF) || info.data.length < 9 || !info.data.subarray(0, 8).equals(ORAO_RANDOMNESS_V2)) return "missing";
+  return info.data[8] === 1 ? "fulfilled" : "pending";
+}
+
+export async function joinPool(network, member, d) {
+  const ix = await clients(network)
+    .sortition.methods.joinPool()
+    .accountsStrict({ owner: member.publicKey, governance: d.governance, pool: d.pool, voter: d.voter(member.publicKey) })
+    .instruction();
+  return send(network, [ix], [member]);
+}
+
+export async function leavePool(network, member, d) {
+  const ix = await clients(network)
+    .sortition.methods.leavePool()
+    .accountsStrict({ owner: member.publicKey, governance: d.governance, pool: d.pool, voter: d.voter(member.publicKey) })
+    .instruction();
+  return send(network, [ix], [member]);
+}
+
+/**
+ * Starts a draw (or restarts one ORAO never answered): asks ORAO for
+ * randomness at this draw's seed, then freezes the pool, in one
+ * transaction. The operator pays ORAO's fee. Returns { number, restart }.
+ */
+export async function startDraw(network, d) {
+  const operator = requireOperator();
+  const g = await readGovernance(network, "sortition", d.governance);
+  const restart = g.drawOpen;
+  const number = restart ? toNum(g.drawCount) : toNum(g.drawCount) + 1;
+  const nonce = randomBytes(32);
+  const drawSeedBytes = drawSeed(d.governance, number, nonce);
+  const networkState = pda([seed("orao-vrf-network-configuration")], ORAO_VRF);
+  const state = await network.connection.getAccountInfo(networkState);
+  if (!state || !state.data.subarray(0, 8).equals(ORAO_NETWORK_STATE)) throw userError(`ORAO VRF isn't set up on ${network.name}, so there's no randomness to draw with.`);
+  const oraoTreasury = new PublicKey(state.data.subarray(40, 72));
+  const request = oraoRequest(drawSeedBytes);
+  const ask = {
+    programId: ORAO_VRF,
+    keys: [
+      { pubkey: operator.publicKey, isSigner: true, isWritable: true },
+      { pubkey: networkState, isSigner: false, isWritable: true },
+      { pubkey: oraoTreasury, isSigner: false, isWritable: true },
+      { pubkey: request, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.concat([ORAO_REQUEST_V2, drawSeedBytes]),
+  };
+  const start = await clients(network)
+    .sortition.methods.startDraw([...nonce])
+    .accountsStrict({ governance: d.governance, pool: d.pool, randomness: request, previousRandomness: restart ? oraoRequest(g.drawSeed) : request })
+    .instruction();
+  await send(network, [ask, start], [operator]);
+  return { number, restart };
+}
+
+/** Seats the council from ORAO's answer. Anyone; the operator pays. */
+export async function finalizeDraw(network, d) {
+  const operator = requireOperator();
+  const g = await readGovernance(network, "sortition", d.governance);
+  const ix = await clients(network)
+    .sortition.methods.finalizeDraw()
+    .accountsStrict({ governance: d.governance, pool: d.pool, randomness: oraoRequest(g.drawSeed) })
+    .instruction();
+  return send(network, [ix], [operator]);
+}
+
+// ---------------------------------------------------------------
+// sowellian: approval, positions, resolution
+// ---------------------------------------------------------------
+
+/** Pyth's push oracle, which keeps sponsored price feeds' PriceUpdateV2 accounts up to date. */
+export const PYTH_PUSH_ORACLE = new PublicKey("pythWSnswVUd12oZpeFP8e9CVaEqJg25g1Vtc2biRsT");
+
+/** The sponsored price account for a Pyth feed (shard 0), as @pythnetwork/pyth-solana-receiver derives it. */
+export function pythFeedAccount(feedId, shard = 0) {
+  const shardBytes = Buffer.alloc(2);
+  shardBytes.writeUInt16LE(shard);
+  return pda([shardBytes, Buffer.from(feedId)], PYTH_PUSH_ORACLE);
+}
+
+export async function readPosition(network, model, position) {
+  return clients(network)[model].account.position.fetchNullable(position);
+}
+
+/** The approval vote ("for" | "against" | "abstain"), weighted by the member's deposit. */
+export async function approvalVote(network, member, d, id, choice) {
+  const proposal = d.proposal(id);
+  const ix = await clients(network)
+    .sowellian.methods.castApprovalVote({ [choice]: {} })
+    .accountsStrict({ owner: member.publicKey, governance: d.governance, proposal, voter: d.voter(member.publicKey), voteRecord: d.approvalVote(proposal, member.publicKey), systemProgram: SystemProgram.programId })
+    .instruction();
+  return send(network, [ix], [member]);
+}
+
+/** The adjudication vote on a challenged resolution ("success" | "failure"). */
+export async function adjudicationVote(network, member, d, id, outcome) {
+  const proposal = d.proposal(id);
+  const ix = await clients(network)
+    .sowellian.methods.castAdjudicationVote({ [outcome]: {} })
+    .accountsStrict({ owner: member.publicKey, governance: d.governance, proposal, voter: d.voter(member.publicKey), voteRecord: d.adjudicationVote(proposal, member.publicKey), systemProgram: SystemProgram.programId })
+    .instruction();
+  return send(network, [ix], [member]);
+}
+
+/**
+ * Moves a sowellian proposal on when its window is over: closes the
+ * approval vote, an unchallenged resolution, an adjudication, or voids an
+ * approved proposal nobody ran in time. Anyone; the operator pays.
+ * Returns the step taken.
+ */
+export async function sowellianSettle(network, d, id) {
+  const operator = requireOperator();
+  const proposal = d.proposal(id);
+  const p = await readProposal(network, "sowellian", proposal);
+  if (!p) throw userError(`There's no proposal #${id}.`);
+  const step = { approvalVoting: "finalizeApproval", resolutionProposed: "finalizeUnchallenged", adjudicating: "finalizeAdjudication", positionsOpen: "voidExpired" }[variant(p.phase)];
+  if (!step) throw userError(`Proposal #${id} has nothing to settle right now.`);
+  const ix = await clients(network).sowellian.methods[step]().accountsStrict({ governance: d.governance, proposal }).instruction();
+  await send(network, [ix], [operator]);
+  return step;
+}
+
+async function sowellianTokenAccounts(network, g, owner) {
+  const { programId: tokenProgram } = await mintInfo(network, g.mint);
+  return { ownerTokenAccount: tokenAccount(g.mint, owner, tokenProgram), escrow: g.escrow, mint: g.mint, tokenProgram };
+}
+
+/** Backs YES or NO ("yes" | "no") with `raw` DAO tokens from the member's wallet. */
+export async function takePosition(network, member, d, g, id, side, raw) {
+  const proposal = d.proposal(id);
+  const ix = await clients(network)
+    .sowellian.methods.takePosition({ [side]: {} }, bn(raw))
+    .accountsStrict({
+      owner: member.publicKey,
+      governance: d.governance,
+      proposal,
+      position: d.position(proposal, member.publicKey),
+      ...(await sowellianTokenAccounts(network, g, member.publicKey)),
+      systemProgram: SystemProgram.programId,
+    })
+    .instruction();
+  return send(network, [ix], [member]);
+}
+
+/** Human track: states the outcome ("success" | "failure"), posting the resolution bond. */
+export async function proposeResolution(network, member, d, g, id, outcome) {
+  const ix = await clients(network)
+    .sowellian.methods.proposeResolution({ [outcome]: {} })
+    .accountsStrict({ owner: member.publicKey, governance: d.governance, proposal: d.proposal(id), ...(await sowellianTokenAccounts(network, g, member.publicKey)) })
+    .instruction();
+  return send(network, [ix], [member]);
+}
+
+/** Disputes a proposed resolution, posting the challenge bond; opens the adjudication vote. */
+export async function challengeResolution(network, member, d, g, id) {
+  const ix = await clients(network)
+    .sowellian.methods.challengeResolution()
+    .accountsStrict({ owner: member.publicKey, governance: d.governance, proposal: d.proposal(id), ...(await sowellianTokenAccounts(network, g, member.publicKey)) })
+    .instruction();
+  return send(network, [ix], [member]);
+}
+
+/** Oracle track: settles the outcome from a Pyth PriceUpdateV2 account (the feed's sponsored one unless given). Anyone; the operator pays. */
+export async function resolveViaOracle(network, d, id, priceUpdate) {
+  const operator = requireOperator();
+  const proposal = d.proposal(id);
+  const p = await readProposal(network, "sowellian", proposal);
+  if (!p) throw userError(`There's no proposal #${id}.`);
+  const ix = await clients(network)
+    .sowellian.methods.resolveViaOracle()
+    .accountsStrict({ governance: d.governance, proposal, priceUpdate: priceUpdate ?? pythFeedAccount(p.criteria.feedId) })
+    .instruction();
+  return send(network, [ix], [operator]);
+}
+
+/** Collects the member's position payout (or refund, if the proposal was cancelled or voided). */
+export async function claimPosition(network, member, d, g, id) {
+  const proposal = d.proposal(id);
+  const t = await sowellianTokenAccounts(network, g, member.publicKey);
+  const ix = await clients(network)
+    .sowellian.methods.claimPosition()
+    .accountsStrict({ owner: member.publicKey, governance: d.governance, proposal, position: d.position(proposal, member.publicKey), ...t })
+    .instruction();
+  return send(network, [createAssociatedTokenAccountIdempotentInstruction(member.publicKey, t.ownerTokenAccount, member.publicKey, g.mint, t.tokenProgram), ix], [member]);
+}
+
+/** Takes back the bonds owed to the member on this proposal (as proposer, resolver or challenger). */
+export async function claimBond(network, member, d, g, id) {
+  const t = await sowellianTokenAccounts(network, g, member.publicKey);
+  const ix = await clients(network)
+    .sowellian.methods.claimBond()
+    .accountsStrict({ owner: member.publicKey, governance: d.governance, proposal: d.proposal(id), ...t })
+    .instruction();
+  return send(network, [createAssociatedTokenAccountIdempotentInstruction(member.publicKey, t.ownerTokenAccount, member.publicKey, g.mint, t.tokenProgram), ix], [member]);
+}
+
+/** Sends forfeited bonds to the treasury's token account. Anyone; the operator pays. */
+export async function sweepToTreasury(network, d, g) {
+  const operator = requireOperator();
+  const { programId: tokenProgram } = await mintInfo(network, g.mint);
+  const to = tokenAccount(g.mint, d.treasury, tokenProgram);
+  const ix = await clients(network)
+    .sowellian.methods.sweepToTreasury()
+    .accountsStrict({ governance: d.governance, treasuryTokenAccount: to, escrow: g.escrow, mint: g.mint, tokenProgram })
+    .instruction();
+  return send(network, [createAssociatedTokenAccountIdempotentInstruction(operator.publicKey, to, d.treasury, g.mint, tokenProgram), ix], [operator]);
+}
+
+// ---------------------------------------------------------------
+// decision markets: conditional tokens and the two pools
+// ---------------------------------------------------------------
+
+/**
+ * One member transaction on a market: opens their token accounts if
+ * needed (wrapping `wrap` lamports when the quote token is wrapped SOL),
+ * runs `ix`, then unwraps whatever wrapped SOL they hold.
+ */
+async function sendMarketIx(network, member, g, m, ix, wrap = 0n) {
+  const owner = member.publicKey;
+  const sol = quoteIsSol(g);
+  const pre = [createAssociatedTokenAccountIdempotentInstruction(owner, m.ownerBase, owner, g.baseMint, m.base.programId)];
+  if (sol) pre.push(...(wrap > 0n ? wrapSolIxs(owner, wrap) : [createAssociatedTokenAccountIdempotentInstruction(owner, m.ownerQuote, owner, NATIVE_MINT)]));
+  else pre.push(createAssociatedTokenAccountIdempotentInstruction(owner, m.ownerQuote, owner, g.quoteMint, m.quote.programId));
+  return send(network, [...pre, ix, ...(sol ? [unwrapSolIx(owner)] : [])], [member]);
+}
+
+/** Splits `base` DAO tokens and `quote` quote tokens (raw; SOL is wrapped for it) into equal pass and fail balances. */
+export async function split(network, member, d, g, id, base, quote) {
+  const proposal = d.proposal(id);
+  const m = await marketAccounts(network, d, g, member.publicKey);
+  const ix = await clients(network)
+    .decisionMarkets.methods.split(bn(base), bn(quote))
+    .accountsStrict({ owner: member.publicKey, proposal, position: d.position(proposal, member.publicKey), ownerBase: m.ownerBase, ownerQuote: m.ownerQuote, tokens: m.tokens, systemProgram: SystemProgram.programId })
+    .instruction();
+  return sendMarketIx(network, member, g, m, ix, BigInt(quote));
+}
+
+/** Merges pairs of pass and fail balances back into the underlying, while trading lasts. */
+export async function merge(network, member, d, g, id, base, quote) {
+  const proposal = d.proposal(id);
+  const m = await marketAccounts(network, d, g, member.publicKey);
+  const ix = await clients(network)
+    .decisionMarkets.methods.merge(bn(base), bn(quote))
+    .accountsStrict({ owner: member.publicKey, governance: d.governance, proposal, position: d.position(proposal, member.publicKey), ownerBase: m.ownerBase, ownerQuote: m.ownerQuote, tokens: m.tokens })
+    .instruction();
+  return sendMarketIx(network, member, g, m, ix);
+}
+
+/** Trades in one market ("pass" | "fail"): `sideIn` "base" sells conditional DAO tokens, "quote" buys them. */
+export async function trade(network, member, d, id, market, sideIn, amountIn, minOut) {
+  const proposal = d.proposal(id);
+  const ix = await clients(network)
+    .decisionMarkets.methods.trade({ [market]: {} }, { [sideIn]: {} }, bn(amountIn), bn(minOut))
+    .accountsStrict({ owner: member.publicKey, proposal, position: d.position(proposal, member.publicKey) })
+    .instruction();
+  return send(network, [ix], [member]);
+}
+
+/** Pays out the member's winning-side balances 1:1, once the proposal is settled. */
+export async function redeem(network, member, d, g, id) {
+  const proposal = d.proposal(id);
+  const m = await marketAccounts(network, d, g, member.publicKey);
+  const ix = await clients(network)
+    .decisionMarkets.methods.redeem()
+    .accountsStrict({ owner: member.publicKey, governance: d.governance, proposal, position: d.position(proposal, member.publicKey), ownerBase: m.ownerBase, ownerQuote: m.ownerQuote, tokens: m.tokens })
+    .instruction();
+  return sendMarketIx(network, member, g, m, ix);
+}
+
+/** The proposer takes back what's left in the winning pool (their seed plus fees, after trades). */
+export async function reclaimLiquidity(network, member, d, g, id) {
+  const m = await marketAccounts(network, d, g, member.publicKey);
+  const ix = await clients(network)
+    .decisionMarkets.methods.reclaimLiquidity()
+    .accountsStrict({ proposer: member.publicKey, governance: d.governance, proposal: d.proposal(id), proposerBase: m.ownerBase, proposerQuote: m.ownerQuote, tokens: m.tokens })
+    .instruction();
+  return sendMarketIx(network, member, g, m, ix);
 }
 
 // ---------------------------------------------------------------

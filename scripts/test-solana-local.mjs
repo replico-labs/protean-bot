@@ -26,6 +26,10 @@ const keyOf = (p, u) => `${p}:${u}`;
 mock.module(new URL("../src/walletStore.js", import.meta.url).href, {
   namedExports: {
     isWalletStoreConfigured: () => true,
+    // The EVM side's, loaded alongside but never used here.
+    createWalletRecord: async () => null,
+    getWalletAccount: async () => null,
+    recordGasTopup: async () => 0,
     findWalletRecord: async (p, u) => rows.get(keyOf(p, u)) ?? null,
     findSolanaWallet: async (p, u) => rows.get(keyOf(p, u))?.solana ?? null,
     storeSolanaWallet: async (p, u, solana) => {
@@ -42,12 +46,15 @@ mock.module(new URL("../src/walletStore.js", import.meta.url).href, {
 });
 mock.module(new URL("../src/kmsWallet.js", import.meta.url).href, {
   namedExports: {
+    isKmsWalletConfigured: () => true,
+    createEncryptedWallet: async () => null,
+    decryptWallet: async () => null,
     encryptSecret: async (plain) => ({ ciphertext: plain, encryptedDataKey: "x", iv: "x", authTag: "x" }),
     decryptSecret: async (rec) => rec.ciphertext,
   },
 });
 mock.module(new URL("../src/walletResolver.js", import.meta.url).href, {
-  namedExports: { getOrCreateUserAccount: async (u, p) => rows.set(keyOf(p, u), { address: "0xevm" }) },
+  namedExports: { getOrCreateUserAccount: async (u, p) => rows.set(keyOf(p, u), { address: "0xevm" }), getUserAddress: async () => null },
 });
 
 const anchor = (await import("@coral-xyz/anchor")).default;
@@ -135,7 +142,8 @@ test("Solana commands and notifications end to end, all six models", { timeout: 
       assert.match(out, /Switching to board in (48\.0h|2\.0d)/);
       assert.match(await run(T, 1, "proposals"), /#1\* — Executed/);
       assert.match(await run(T, 1, "listactions"), /switchconviction/);
-      assert.match(await run(T, 1, "delegate"), /isn't available for Solana DAOs/);
+      assert.match(await run(T, 1, "deploynftwrapper"), /isn't available for Solana DAOs/);
+      assert.match(await run(T, 1, `delegate ${B}`), /only applies to liquid DAOs/);
       assert.strictEqual(await run(T, 1, "mybet"), null, "Opportunity Market commands pass through");
       assert.match(await run(T, 1, "confirm 1"), /only applies to board DAOs/);
     })()

@@ -310,5 +310,129 @@
  "6077": {
   "name": "CantRemoveSol",
   "msg": "SOL can't be removed from the asset list"
+ },
+ "6078": {
+  "name": "AlreadyDelegated",
+  "msg": "You've already delegated: undelegate first"
+ },
+ "6079": {
+  "name": "NotDelegated",
+  "msg": "You haven't delegated"
+ },
+ "6080": {
+  "name": "SelfDelegation",
+  "msg": "You can't delegate to yourself"
+ },
+ "6081": {
+  "name": "DelegateHasDelegated",
+  "msg": "That member has delegated their own votes, so they can't take delegations"
+ },
+ "6082": {
+  "name": "HasDelegators",
+  "msg": "Members others delegate to can't delegate themselves"
+ },
+ "6083": {
+  "name": "DelegationLocked",
+  "msg": "Your delegate has voted with your tokens on a proposal that's still open"
+ },
+ "6084": {
+  "name": "WrongDelegate",
+  "msg": "That isn't your delegate's account"
+ },
+ "6085": {
+  "name": "AlreadyEligible",
+  "msg": "Already in the draw pool"
+ },
+ "6086": {
+  "name": "NotEligible",
+  "msg": "Not in the draw pool"
+ },
+ "6087": {
+  "name": "PoolFull",
+  "msg": "The draw pool is full"
+ },
+ "6088": {
+  "name": "PoolEmpty",
+  "msg": "Nobody is in the draw pool"
+ },
+ "6089": {
+  "name": "DrawInProgress",
+  "msg": "A draw is under way: the pool is frozen until it's finalized"
+ },
+ "6090": {
+  "name": "NoDrawInProgress",
+  "msg": "No draw is under way"
+ },
+ "6091": {
+  "name": "RandomnessNotReady",
+  "msg": "The randomness hasn't arrived yet"
+ },
+ "6092": {
+  "name": "WrongRandomnessAccount",
+  "msg": "That isn't this draw's randomness account"
+ },
+ "6093": {
+  "name": "RandomnessAlreadyFulfilled",
+  "msg": "The randomness has already arrived: finalize the draw instead"
+ },
+ "6094": {
+  "name": "LeavePoolFirst",
+  "msg": "Leave the draw pool before withdrawing"
+ },
+ "6095": {
+  "name": "WrongPhase",
+  "msg": "The proposal isn't in the right phase for that"
+ },
+ "6096": {
+  "name": "PositionsClosed",
+  "msg": "The positions window has closed"
+ },
+ "6097": {
+  "name": "WrongResolutionMethod",
+  "msg": "This proposal resolves another way"
+ },
+ "6098": {
+  "name": "MeasurementNotOver",
+  "msg": "The measurement period isn't over yet"
+ },
+ "6099": {
+  "name": "WrongOracleAccount",
+  "msg": "That isn't a fully verified Pyth price for this proposal's feed"
+ },
+ "6100": {
+  "name": "StaleOracleData",
+  "msg": "The price is too old, or from before the measurement period ended"
+ },
+ "6101": {
+  "name": "NothingToClaim",
+  "msg": "Nothing to claim"
+ },
+ "6102": {
+  "name": "AlreadyClaimed",
+  "msg": "Already claimed"
+ },
+ "6103": {
+  "name": "TradingClosed",
+  "msg": "Trading has closed"
+ },
+ "6104": {
+  "name": "TradingOpen",
+  "msg": "Trading is still open"
+ },
+ "6105": {
+  "name": "NotFinalized",
+  "msg": "Not finalized yet"
+ },
+ "6106": {
+  "name": "SlippageExceeded",
+  "msg": "The trade would give less than your minimum"
+ },
+ "6107": {
+  "name": "InsufficientConditionalBalance",
+  "msg": "Not enough of that conditional token"
+ },
+ "6108": {
+  "name": "ProposalDidNotPass",
+  "msg": "The proposal didn't pass"
  }
 }

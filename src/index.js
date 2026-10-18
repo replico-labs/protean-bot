@@ -92,6 +92,7 @@ import { withTxTracking, trackedChatId, takeTxLinks, trackTx } from "./txLinks.j
 import { proposalButtons, telegramKeyboard, decodeButton, BUTTON_COMMANDS } from "./buttons.js";
 import { whatsappLinkConfigured, whatsappLinkRoutes } from "./platforms/whatsappLink.js";
 import { proposalImage } from "./charts.js";
+import { runCommand } from "./platforms/commands.js";
 import { proposalPagesConfigured, startProposalApi, proposalPageUrl, proposalCreated, pendingSubmitLink, proposalStartPayload, parseProposalStartPayload, knownDaoModel, isSolanaNetwork } from "./proposalPages.js";
 import { getSolanaAddress } from "./solana/wallets.js";
 import { back as opportunityBack } from "./opportunityMarket/encryptedBet.js";
@@ -2256,6 +2257,34 @@ bot.command("perps", async (ctx) => {
   }
   await proposeIntegrationTelegram(ctx, address, mapped.actionId, mapped.words);
 });
+
+/*//////////////////////////////////////////////////////////////
+                              /desk
+//////////////////////////////////////////////////////////////*/
+
+/**
+ * Runs a command from the shared platform core (src/platforms/commands) for
+ * a Telegram message, so newer commands live in one place for every
+ * platform. Private parts (a proposer's edit link) go by DM.
+ */
+async function runSharedCommand(ctx, name) {
+  const result = await runCommand(name, {
+    platform: "telegram",
+    chatId: ctx.chat.id,
+    userId: ctx.from.id,
+    args: splitArgs(ctx.match ?? ""),
+    isDirect: ctx.chat.type === "private",
+    cmd: TG_CMD,
+  });
+  const extra = { link_preview_options: { is_disabled: true }, ...(result.buttons?.length ? { reply_markup: telegramKeyboard(result.buttons) } : {}) };
+  await ctx.reply(result.text, { parse_mode: "Markdown", ...extra }).catch(() => ctx.reply(result.text, extra));
+  if (result.privateFollowUp) {
+    const delivered = await ctx.api.sendMessage(ctx.from.id, result.privateFollowUp, { link_preview_options: { is_disabled: true } }).then(() => true, () => false);
+    if (!delivered && ctx.chat.type !== "private") await ctx.reply(`I couldn't message you privately - start a chat with @${ctx.me.username}, then run \`/proposal <id>\` to get your link.`).catch(() => {});
+  }
+}
+
+bot.command("desk", (ctx) => runSharedCommand(ctx, "desk"));
 
 /*//////////////////////////////////////////////////////////////
                             /proposeaction

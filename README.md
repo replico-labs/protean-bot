@@ -71,35 +71,45 @@ Naming a Solana network creates or links a Solana DAO:
 /createdao ArkDAO ARK 1000000 10000000 solana
 /createdao ArkDAO ARK 1000000 10000000 conviction solana
 /createdao ArkDAO ARK 1000000 10000000 delegate solana <council address> <council address>
+/createdao ArkDAO ARK 1000000 10000000 sortition solana <council address> <council address>
+/createdao ArkDAO ARK 1000000 10000000 decisionmarkets solana
 /createboarddao ArkBoard <solana address> <solana address> solana
 /register <dao address> solana
 ```
 
-All six Vortexes models work: **token-weighted**, **quadratic**, **optimistic**, **conviction**, **delegate** and **board**, on **Solana devnet** (`solana` and `solana-devnet` both mean devnet until mainnet is deployed). In a chat linked to a Solana DAO:
+All ten Vortexes models work: **token-weighted**, **quadratic**, **optimistic**, **conviction**, **delegate**, **board**, **liquid**, **sortition**, **Sowellian** and **decision markets**, on **Solana devnet** (`solana` and `solana-devnet` both mean devnet until mainnet is deployed). In a chat linked to a Solana DAO:
 
 | Command | Does |
 |---|---|
 | `/dao`, `/treasury` | the DAO's treasury (SOL and tokens), rules, council or signers |
 | `/wallet`, `/balance` | your Solana wallet, its SOL, tokens and stake |
-| `/stake`, `/unstake <amount>` | stake the DAO's token (every model but board) |
+| `/stake`, `/unstake <amount>` | stake the DAO's token (every model but board and decision markets) |
 | `/tip <amount> <address\|treasury>` | hand out the starting tokens (the DAO's creator) |
 | `/propose <recipient> <amount> <SOL\|token> <description>` | a payment from the treasury, in SOL, the DAO's token or any token by mint |
 | `/listactions`, `/actioninfo`, `/proposeaction` | transfer SOL or tokens, mint tokens, board signers, conviction assets, switch to another model |
-| `/vote <id> for\|against\|abstain`, `/queue <id>` | token-weighted, quadratic, delegate (council), and optimistic once challenged |
+| `/vote <id> for\|against\|abstain`, `/queue <id>` | token-weighted, quadratic, liquid, delegate and sortition (councils), optimistic once challenged, Sowellian's approval vote (`success\|failure` in its adjudication) |
+| `/delegate <address>`, `/undelegate` | liquid: hand your stake's vote to another member (one hop); voting yourself overrides them |
 | `/challenge <id>` | optimistic: dispute a proposal with a bond, forcing a vote |
 | `/support <id>`, `/withdrawsupport`, `/mysupport`, `/assets` | conviction |
 | `/council`, `/startelection`, `/declarecandidacy`, `/voteinelection`, `/finalizeelection`, `/initiaterecall`, `/voterecall`, `/finalizerecall` | delegate |
+| `/council`, `/registereligible`, `/withdraweligibility`, `/startsortition`, `/finalizesortition` | sortition: opt into the draw pool; draw the next council by lot once the term ends |
+| `/castapprovalvote`, `/finalizeapproval`, `/takeposition <id> yes\|no <amount>`, `/resolveviaoracle`, `/proposeresolution`, `/challengeresolution`, `/finalizeunchallenged`, `/castadjudicationvote`, `/finalizeadjudication`, `/claimposition` | Sowellian |
+| `/split`, `/trade <id> pass\|fail buy\|sell <amount>`, `/merge`, `/finalizeproposal`, `/redeem`, `/reclaimliquidity` | decision markets |
 | `/confirm`, `/revoke <id>` | board signers |
 | `/execute <id>`, `/cancel <id>`, `/proposals`, `/proposal <id>` | as on EVM |
 
 - **Wallets.** Each user gets a Solana wallet next to their EVM one, encrypted with the same KMS key and stored on the same Supabase row (`wallets.solana`). `/wallet` shows both. The bot tops it up with a little SOL when it needs fees or rent.
 - **Tokens.** The DAO's token has 6 decimals; its whole initial supply goes to the bot's Solana wallet, handed out with `/tip`. There's no fixed maximum: the treasury is the mint authority, so new tokens can only be minted by a passed proposal (the `mint` action).
 - **Defaults** match the EVM ones: 10% quorum, 60% approval, ~5.6 h votes, 1-day timelock, 7 days to run; optimistic challenges post a 100-token bond; delegate councils serve 2-day terms and a majority of seats passes a proposal; boards need a majority of signers. Conviction bars scale with the token's supply: the larger of 1% of supply and 20% of all staked tokens, plus a proposal's spending budget (SOL and the DAO's token each weigh a quarter of supply). `SOLANA_DEVNET_FAST_TIMINGS=true` shortens every period to minutes for testing.
+- **Liquid** delegation is one hop with running totals, so there's no keeper: a delegate's vote carries their delegators' stake at once, and a delegator who votes themselves overrides it (before or after the delegate votes). While a vote that counted someone's stake is open, they can't undelegate or move tokens.
+- **Sortition** councils are drawn with [ORAO VRF](https://github.com/orao-network/solana-vrf): `/startsortition` asks ORAO for randomness (the bot's wallet pays ORAO's small fee) and freezes the pool; `/finalizesortition` seats the council once ORAO answers, usually within seconds. A draw ORAO never answers can be restarted after an hour (fast timings: 2 minutes). The first council is the one named at creation, and later councils have the same size.
+- **Sowellian** proposals take the EVM side's settings as `name=value` words with `/propose` or `/proposeaction`: `track=human|oracle`, `feed=SOL/USD` (or a Pyth feed ID), `goal=<price>`, `when=min|max`, `measure=7d`. Proposing, resolving and challenging each post a 100-token bond. The oracle is always Pyth: resolving reads the feed's sponsored price account (or a `PriceUpdateV2` account given to `/resolveviaoracle`), so no Pyth fee is paid. `/claimposition` collects winnings, refunds and bonds together.
+- **Decision markets** trade the DAO's token against SOL (wrapped and unwrapped by the bot). Proposals need `seed=<tokens> quote=<SOL>` - both markets' starting liquidity, from the proposer's own wallet; members need their own SOL to split. The bot never puts the treasury's money into a market.
 - **Switching models.** The `switch...` actions move a DAO to another model with the same treasury and token. The switch applies 2 days after its proposal runs; the bot applies it then (the next time anyone uses the DAO, or from the notifier) and updates the chat.
-- **Notifications.** Each platform's event listener also watches its Solana chats: new proposals, challenges, queued and executed proposals, cancellations, elections and recalls.
-- **Not on Solana:** the EVM-only extras (wrappers, distributors, integrations, liquid delegation, sortition). Those commands say so in a Solana chat; Opportunity Market commands work as usual. On Discord, `/propose`'s fields read target/value/data for EVM and recipient/amount/asset for Solana.
+- **Notifications.** Each platform's event listener also watches its Solana chats: new proposals, challenges, queued and executed proposals, cancellations, elections and recalls, council draws, Sowellian approvals and resolutions, and decision markets' outcomes.
+- **Not on Solana:** the EVM-only extras (wrappers, distributors, integrations). Those commands say so in a Solana chat; Opportunity Market commands work as usual. On Discord, `/propose`'s fields read target/value/data for EVM and recipient/amount/asset for Solana.
 
-`scripts/test-solana-local.mjs` runs these commands end to end against a local validator running the Vortexes programs.
+`scripts/test-solana-local.mjs` runs these commands end to end against a local validator running the Vortexes programs, and `scripts/test-solana-new-models.mjs` does the same for liquid, sortition, Sowellian and decision markets (with a stand-in for ORAO and a Pyth price account loaded into the validator; its header says how).
 
 ## Commands
 
@@ -262,6 +272,51 @@ Reading answers straight away. Everything else becomes a normal proposal through
 - **Perpl:** positions and prices come from the exchange contract. The Treasury has to be whitelisted by Perpl while whitelisting is on; `/perps` warns when it isn't.
 - **HyperCore:** positions and prices come from Hyperliquid's public info API. A market name is resolved there and then checked against HyperCore's own precompile before anything is proposed. Leverage can't be set from a contract (CoreWriter has no leverage action), so orders use the account's current setting for that market, and `3x` is refused with that explanation.
 
+## Trading desk (`/desk`)
+
+`/perps` trades only by vote. A **trading desk** lets the group appoint a trader by proposal; the trader then trades from the chat with no vote per trade, inside limits the group agreed to, and can never take the money. Perpl (Monad) for now.
+
+| Command | Who | What it does |
+|---|---|---|
+| `/desk` | anyone | The desk: trader and mandate, collateral, open positions with PnL, pending appointments |
+| `/desk apply <markets\|all> max=<size> [lev=2] [days=30]` | the would-be trader | Proposes appointing themselves, e.g. `/desk apply BTC,ETH max=500 lev=3 days=30` (max = the largest position, in the collateral token) |
+| `/desk fund <amount>` / `/desk withdraw <amount>` | anyone | Proposes moving collateral from the Treasury into the desk, or back |
+| `/desk remove` | anyone | Proposes removing the trader |
+| `/desk long\|short <market> <size> at <limitPrice> [3x]` | the trader | Opens or adds to a position, straight away |
+| `/desk close <market> <size\|all> at <limitPrice>` | the trader | Closes or reduces one, straight away |
+| `/desk resign` | the trader | Steps down (on-chain) |
+
+**How it's built.** The desk is a Perpl [DelegatedAccount](https://github.com/PerplFoundation/delegated-account), made by Perpl's own factory: an exchange account **owned by the Treasury**, with the trader's bot wallet as its **operator**.
+- **The operator can only trade.** It can call only the exchange's trading functions through the desk: orders, margin top-ups, deposits, liquidation buys. Withdrawing and rescuing tokens are the owner's alone, and both always pay the owner, i.e. the Treasury.
+- **The trader consents.** `/desk apply` has the trader's wallet sign Perpl's EIP-712 `AssignOperator` consent. The proposal then creates the desk with them as operator (`perpl-desk-create`), or adds them to the existing desk, replacing the current trader (`perpl-desk-appoint`).
+- **The new desk is picked up automatically.** When the proposal executes, the listener reads the new desk's address from the receipt, using the factory's `DelegatedAccountCreated` event with this Treasury as owner. It then announces the trader. `/desk link <address>` links a desk by hand: only a Perpl-factory desk on this exchange owned by this Treasury is accepted.
+- **Funding, withdrawing and removing** are ordinary proposals (`perpl-desk-fund`, `-withdraw`, `-remove`). The bot checks every desk address it puts into a proposal: Perpl's beacon, this exchange, and this Treasury as owner.
+
+**The mandate** (markets, largest position, leverage, days) is written into the appointment proposal, so voters see what they agree to. Its clock starts when the proposal executes. On every trade the bot checks:
+- the trader is still the operator on-chain;
+- the mandate hasn't ended (closing stays allowed after it ends);
+- the market is in the mandate;
+- the leverage is within it;
+- the whole position, at the limit price, is within `max`.
+
+Orders are immediate-or-cancel at the limit price, signed by the trader's own wallet. Every trade is posted in the chat with what filled.
+
+**What is enforced where.** The mandate is enforced by the bot, not by Perpl's contract, which has no such limits. It holds because the trader's key lives in the bot's KMS wallet store and is never handed out, so every trade goes through these checks. What holds on-chain no matter what:
+- The trader can never withdraw.
+- The DAO can only lose what it moved into the desk.
+- Only a proposal can fund the desk, withdraw from it, or appoint and remove its trader.
+
+Perpl's whitelist applies to the desk's address while whitelisting is on (`/desk fund` warns).
+
+This is the base the trading agent will build on.
+
+**HyperCore desk: on hold until one check is run.**
+- **The plan:** the Treasury registers the trader's wallet as an API wallet (CoreWriter action 9), and the bot signs the trader's orders. An API wallet can even set leverage, which a contract can't.
+- **The catch:** Hyperliquid's API also has `agentSendAsset`, "transfer tokens on behalf of the principal via an agent wallet". If an API wallet can send the principal's funds to anyone, a HyperCore desk can't promise the trader never withdraws.
+- **The check:** `HL_TESTNET_KEY=0x... node scripts/hl-agent-check.mjs`, using a throwaway Hyperliquid testnet wallet with a few testnet USDC, settles it in a minute. It tries all three transfer routes from an API wallet. It also checks that revoking an API wallet (`approveAgent` to the zero address with the same name) actually stops it.
+
+Phoenix (Solana) desks aren't built yet: Phoenix needs an access code and runs on mainnet only.
+
 ## NFTs
 
 The Treasury can't receive NFTs (it has no ERC721/ERC1155 receiver hooks), so **a DAO's NFTs live in its NFT wrapper** (`/deploynftwrapper`):
@@ -411,6 +466,7 @@ src/
 ├── wrapper.js            GuardWrapper reads/writes
 ├── eventListener.js      chat notifications, per platform and per network
 ├── charts.js             vote charts (PNG) for /proposal and vote-close posts
+├── desk.js               trading desk: appointed trader, mandate checks, trades through Perpl's DelegatedAccount
 ├── db.js                 chat ↔ DAO / model / network / wrapper / market links (flat JSON)
 ├── walletResolver.js     KMS-first wallet resolution, legacy migration guard
 ├── kmsWallet.js          KMS envelope encryption

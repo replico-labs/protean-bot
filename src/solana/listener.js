@@ -22,7 +22,18 @@ import * as v from "./vortex.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const statePathFor = (platform) => path.join(__dirname, "..", "..", "data", `solanaListenerState.${platform}.json`);
 
-const LABEL = { tokenWeighted: "token-weighted", quadratic: "quadratic", optimistic: "optimistic", board: "board", conviction: "conviction", delegate: "delegate" };
+const LABEL = {
+  tokenWeighted: "token-weighted",
+  quadratic: "quadratic",
+  optimistic: "optimistic",
+  board: "board",
+  conviction: "conviction",
+  delegate: "delegate",
+  liquid: "liquid",
+  sortition: "sortition",
+  sowellian: "Sowellian",
+  decisionMarkets: "decision markets",
+};
 const short = (k) => {
   const s = k.toBase58 ? k.toBase58() : String(k);
   return `${s.slice(0, 4)}…${s.slice(-4)}`;
@@ -38,6 +49,8 @@ function duration(seconds) {
 }
 
 const num = (x) => Number(x.toString());
+/** An Anchor enum value ({ success: {} }) as its name. */
+const variantName = (e) => Object.keys(e ?? {})[0] ?? "?";
 /** User text without Markdown's control characters (Telegram's notify has no plain-text fallback). */
 const plain = (text) => String(text).replace(/[_*`[\]]/g, "");
 
@@ -52,6 +65,9 @@ export function formatSolanaEvent(name, e, { model, now, name: daoName }) {
         board: " Signers can confirm it.",
         conviction: " Members can back it with their stake.",
         delegate: " The council can vote on it.",
+        sortition: " The council can vote on it.",
+        sowellian: e.approvalEndsAt ? ` Its approval vote closes in ${duration(num(e.approvalEndsAt) - now)}.` : "",
+        decisionMarkets: e.tradingDeadline ? ` Its pass and fail markets trade for ${duration(num(e.tradingDeadline) - now)}.` : "",
       }[model] ?? (e.votingEndsAt ? ` Voting closes in ${duration(num(e.votingEndsAt) - now)}.` : "");
       return `📝 New proposal #${e.id}${dao}: "${plain(e.metadataUri)}" (by \`${short(e.proposer)}\`).${tail}`;
     }
@@ -73,6 +89,26 @@ export function formatSolanaEvent(name, e, { model, now, name: daoName }) {
       return `⚠️ A recall of council member \`${short(e.member)}\`${dao} is open for ${duration(num(e.endsAt) - now)}.`;
     case "RecallFinalized":
       return e.removed ? `Council member \`${short(e.member)}\` was recalled${dao}.` : `The recall of \`${short(e.member)}\`${dao} failed.`;
+    // sortition
+    case "DrawStarted":
+      return `🎲 Council draw #${e.number}${dao} ${e.restart ? "restarted" : "started"} from ${e.poolSize} member(s) - the council is seated once the randomness arrives.`;
+    case "DrawFinalized":
+      return `🏛 Council draw #${e.number}${dao} is done. The new council: ${e.council.map((m) => `\`${short(m)}\``).join(", ")}.`;
+    // sowellian
+    case "ApprovalFinalized":
+      return e.approved ? `✅ Proposal #${e.id}${dao} is approved - YES/NO positions are open for ${duration(num(e.positionsDeadline) - now)}.` : `❌ Proposal #${e.id}${dao} wasn't approved.`;
+    case "ResolutionProposed":
+      return `⚖️ \`${short(e.resolver)}\` says proposal #${e.id}${dao} was a *${variantName(e.outcome)}* - it can be challenged for ${duration(num(e.challengeDeadline) - now)}.`;
+    case "ResolutionChallenged":
+      return `⚔️ The resolution of proposal #${e.id}${dao} was challenged - an adjudication vote is open for ${duration(num(e.adjudicationEndsAt) - now)}.`;
+    case "OutcomeFinalized":
+    case "ResolvedViaOracle":
+      return `🏁 Proposal #${e.id}${dao} is resolved: *${variantName(e.outcome)}*${name === "resolvedViaOracle" ? " (from Pyth)" : ""}. Winners can collect.`;
+    case "ProposalVoided":
+      return `Proposal #${e.id}${dao} wasn't run in time and is void - positions are refunded.`;
+    // decision markets
+    case "ProposalFinalized":
+      return e.passed ? `✅ Proposal #${e.id}${dao} passed its markets - it can run after the timelock.` : `❌ Proposal #${e.id}${dao} failed its markets.`;
     default:
       return null;
   }

@@ -13,6 +13,7 @@ import { getAdapter } from "./governance/index.js";
 import { PROPOSAL_STATE_LABELS } from "./governance/common.js";
 import { proposalImage } from "./charts.js";
 import { proposalPageUrl } from "./proposalPages.js";
+import { deskExecuted } from "./desk.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // One state file per platform process: Telegram keeps the original file
@@ -240,6 +241,14 @@ async function checkNetwork(notify, daos, currentBlock, state, save) {
           await notify(w.dao.chatId, message);
         } catch (sendErr) {
           console.error(`Event listener: couldn't notify chat ${w.dao.chatId}:`, sendErr.message);
+        }
+        // A trading-desk appointment taking effect (src/desk.js).
+        if (log.eventName === "ProposalExecuted") {
+          const news = await deskExecuted(w.dao, log.args?.proposalId, log.transactionHash).catch((err) => {
+            console.error(`Event listener: desk update for ${w.dao.governanceAddress} failed:`, err.shortMessage ?? err.message);
+            return [];
+          });
+          if (news.length) await notify(w.dao.chatId, news.join("\n")).catch(() => {});
         }
       }
       state[w.stateKey] = { ...state[w.stateKey], lastProcessedBlock: chunkEnd.toString() };

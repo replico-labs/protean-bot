@@ -43,7 +43,7 @@ async function tokenFormat(network, model, g) {
   if (!v.TOKEN_MODELS.includes(model)) return null;
   const { decimals } = await v.mintInfo(network, g.mint);
   const fmt = (raw) => v.formatUnits(big(raw), decimals);
-  return { fmt, votes: model === "quadratic" && decimals % 2 === 0 ? (raw) => v.formatUnits(big(raw), decimals / 2) : fmt };
+  return { decimals, fmt, votes: model === "quadratic" && decimals % 2 === 0 ? (raw) => v.formatUnits(big(raw), decimals / 2) : fmt };
 }
 
 /** Everything /proposal shows for a Solana proposal, as the page's live data. Null if there's no such proposal. */
@@ -67,6 +67,7 @@ export async function solanaLiveProposal(networkId, governanceText, proposalId) 
   switch (model) {
     case "tokenWeighted":
     case "quadratic":
+    case "liquid":
       started = tally(p.tally);
       times.push({ label: "Voting closes", at: num(p.votingEndsAt) });
       break;
@@ -101,6 +102,45 @@ export async function solanaLiveProposal(networkId, governanceText, proposalId) 
       started = p.votes.length > 0;
       break;
     }
+    case "sortition": {
+      const t = v.sortitionTally(p);
+      facts.push({ label: "Council for", value: String(t.for) }, { label: "Council against", value: String(t.against) }, { label: "Council abstain", value: String(t.abstain) }, { label: "Votes needed", value: String(v.sortitionQuorum(g)) });
+      times.push({ label: "Voting closes", at: num(p.votingEndsAt) });
+      started = p.votes.length > 0;
+      break;
+    }
+    case "sowellian": {
+      const phase = v.variant(p.phase);
+      if (phase === "approvalVoting") {
+        tally(p.approval);
+        times.push({ label: "Approval vote closes", at: num(p.approvalEndsAt) });
+      }
+      facts.push({ label: "Resolved by", value: v.variant(p.criteria.method) === "oracle" ? `Pyth feed 0x${Buffer.from(p.criteria.feedId).toString("hex")}` : "people (challengeable)" });
+      facts.push({ label: "YES pool", value: tok.fmt(p.yesPool) }, { label: "NO pool", value: tok.fmt(p.noPool) });
+      if (phase === "positionsOpen") times.push({ label: "Positions close", at: num(p.positionsDeadline) });
+      if (phase === "executed") times.push({ label: "Measured at", at: num(p.measurementDeadline) });
+      if (phase === "resolutionProposed") times.push({ label: "Challenge window closes", at: num(p.challengeDeadline) });
+      if (phase === "adjudicating") {
+        facts.push({ label: "Adjudication: success", value: tok.fmt(p.successVotes) }, { label: "Adjudication: failure", value: tok.fmt(p.failureVotes) });
+        times.push({ label: "Adjudication closes", at: num(p.adjudicationEndsAt) });
+      }
+      if (phase === "finalized") facts.push({ label: "Outcome", value: v.variant(p.finalOutcome) });
+      started = phase !== "approvalVoting" || big(p.approval.forVotes) + big(p.approval.againstVotes) + big(p.approval.abstainVotes) > 0n;
+      break;
+    }
+    case "decisionMarkets": {
+      const quote = await v.mintInfo(network, g.quoteMint);
+      const price = (pool) => v.poolPrice(pool, tok.decimals, quote.decimals).toPrecision(6);
+      // Once settled, the averages that decided it (the pools may be emptied by then).
+      const twap = (x) => v.twapPrice(x, tok.decimals, quote.decimals).toPrecision(6);
+      if (p.finalized && !p.cancelled) {
+        facts.push({ label: "Pass market average", value: twap(p.passTwap) }, { label: "Fail market average", value: twap(p.failTwap) }, { label: "Outcome", value: p.passed ? "passed" : "failed" });
+      } else {
+        facts.push({ label: "Pass market price", value: price(p.passPool) }, { label: "Fail market price", value: price(p.failPool) });
+      }
+      started = true;
+      break;
+    }
     case "board":
       facts.push({ label: "Confirmations", value: `${p.confirmations.length} of ${g.signers.length}` }, { label: "Needed", value: String(g.config.requiredApprovals) });
       // The proposer's own confirmation comes with proposing.
@@ -108,7 +148,9 @@ export async function solanaLiveProposal(networkId, governanceText, proposalId) 
       break;
   }
   if (p.core.epoch !== dao.record.epoch) facts.push({ label: "Note", value: "Made under an earlier governance setup - it can no longer run" });
-  const queuedAt = num(p.queuedAt);
+  // Sowellian has no queue step: it can run once positions close and the timelock passes.
+  const queuedAt = model === "sowellian" ? (v.variant(p.phase) === "positionsOpen" && now >= num(p.positionsDeadline) ? num(p.positionsDeadline) : 0) : num(p.queuedAt ?? 0);
+  const timelock = model === "sowellian" ? g.config.executionTimelock : num(g.config.timelock ?? 0);
 
   return {
     network: networkId,
@@ -125,9 +167,9 @@ export async function solanaLiveProposal(networkId, governanceText, proposalId) 
     facts,
     times,
     voting: null,
-    tradingDeadline: null,
+    tradingDeadline: model === "decisionMarkets" ? num(p.tradingDeadline) : null,
     queuedAt: queuedAt || null,
-    executableAfter: queuedAt ? queuedAt + num(g.config.timelock) : null,
+    executableAfter: queuedAt ? queuedAt + timelock : null,
     actions: p.core.instructions
       .map((ix) => ({ ix, label: describeInstruction(network, ix) }))
       .filter((x) => x.label)

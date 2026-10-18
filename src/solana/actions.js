@@ -19,8 +19,24 @@ const MODEL_WORDS = {
   conviction: "conviction",
   board: "board",
   delegate: "delegate",
+  liquid: "liquid",
+  sortition: "sortition",
+  sowellian: "sowellian",
+  decisionmarkets: "decisionMarkets",
+  futarchy: "decisionMarkets",
 };
-const LABEL = { tokenWeighted: "token-weighted", quadratic: "quadratic", optimistic: "optimistic", board: "board", conviction: "conviction", delegate: "delegate" };
+const LABEL = {
+  tokenWeighted: "token-weighted",
+  quadratic: "quadratic",
+  optimistic: "optimistic",
+  board: "board",
+  conviction: "conviction",
+  delegate: "delegate",
+  liquid: "liquid",
+  sortition: "sortition",
+  sowellian: "Sowellian",
+  decisionMarkets: "decision markets",
+};
 
 const fail = (msg) => {
   throw Object.assign(new Error(msg), { userFacing: true });
@@ -194,6 +210,15 @@ export const ACTIONS = {
     about: "Switch to an elected council, starting with these members, keeping the treasury and token.",
     build: switchTo("delegate", (c) => ({ council: keyList(c.args[0], "council member") })),
   },
+  switchliquid: { models: "all", args: [], about: "Switch to liquid voting (members can delegate their vote), keeping the treasury and token.", build: switchTo("liquid") },
+  switchsortition: {
+    models: "all",
+    args: [{ name: "<member,member,...>", about: "the first council's Solana addresses, comma-separated (later councils of the same size are drawn by lot)" }],
+    about: "Switch to a council drawn by lot, starting with these members, keeping the treasury and token.",
+    build: switchTo("sortition", (c) => ({ council: keyList(c.args[0], "council member") })),
+  },
+  switchsowellian: { models: "all", args: [], about: "Switch to Sowellian governance (approval vote, YES/NO positions, measured outcomes), keeping the treasury and token.", build: switchTo("sowellian") },
+  switchdecisionmarkets: { models: "all", args: [], about: "Switch to decision markets (pass/fail markets against SOL decide), keeping the treasury and token.", build: switchTo("decisionMarkets") },
   cancelswitch: {
     models: "all",
     args: [],

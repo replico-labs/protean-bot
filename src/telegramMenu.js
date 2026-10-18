@@ -17,6 +17,7 @@ const GROUP = [
   ["proposeaction", "Propose any listed action"],
   ["listactions", "Actions a proposal can take"],
   ["perps", "Perps: positions, prices, trade proposals"],
+  ["desk", "Trading desk: appointed trader, limits, trades"],
   ["proposals", "Recent proposals"],
   ["proposal", "One proposal: /proposal <id>"],
   ["vote", "Vote: /vote <id> for|against|abstain"],

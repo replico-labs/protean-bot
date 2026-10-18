@@ -53,20 +53,31 @@ mock.module(new URL("../src/walletResolver.js", import.meta.url).href, {
   namedExports: { getOrCreateUserAccount: async (u, p) => rows.set(keyOf(p, u), { address: "0xevm" }) },
 });
 
-// proposal_details in memory: just the query shapes proposalPages.js uses.
-const details = [];
+// proposal_details and proposal_detail_versions in memory: just the query shapes proposalPages.js uses.
+const tables = { proposal_details: [], proposal_detail_versions: [] };
+const details = tables.proposal_details;
 const matches = (row, k) => Object.entries(k).every(([f, val]) => row[f] === val);
-function query() {
-  const q = { filters: {}, nullField: null, op: null, payload: null };
+function query(table) {
+  const rows = tables[table];
+  const q = { filters: {}, nullField: null, op: null, payload: null, order: null };
   const run = () => {
-    const hit = details.filter((r) => matches(r, q.filters) && (q.nullField === null || r[q.nullField] == null));
+    const hit = rows.filter((r) => matches(r, q.filters) && (q.nullField === null || r[q.nullField] == null));
     if (q.op === "update") {
       hit.forEach((r) => Object.assign(r, q.payload));
       return { data: hit.map((r) => ({ proposal_id: r.proposal_id })), error: null };
     }
+    if (q.order) hit.sort((a, b) => a[q.order] - b[q.order]);
     return { data: hit, error: null };
   };
   const builder = {
+    insert(row) {
+      rows.push({ ...row, saved_at: new Date().toISOString() });
+      return Promise.resolve({ error: null });
+    },
+    order(field) {
+      q.order = field;
+      return builder;
+    },
     upsert(row) {
       if (!details.some((r) => matches(r, { network: row.network, dao: row.dao, proposal_id: row.proposal_id }))) details.push({ ...row, title: null, created_at: new Date().toISOString() });
       return Promise.resolve({ error: null });
@@ -92,7 +103,7 @@ function query() {
   };
   return builder;
 }
-mock.module("@supabase/supabase-js", { namedExports: { createClient: () => ({ from: () => query() }) } });
+mock.module("@supabase/supabase-js", { namedExports: { createClient: () => ({ from: (table) => query(table) }) } });
 
 const anchor = (await import("@coral-xyz/anchor")).default;
 const { runSolanaCommand } = await import("../src/solana/commands.js");
@@ -174,10 +185,11 @@ test("Solana proposal pages", { timeout: 300_000 }, async () => {
   assert.strictEqual((await pages.saveProposalPage("solana-devnet", link.dao, "1", { token: "x.y", title: "Hi" })).status, 403);
   const lowercase = link.dao.toLowerCase();
   assert.notStrictEqual((await pages.saveProposalPage("solana-devnet", lowercase, "1", { token: link.token, title: "Hi" })).status, 200, "Solana addresses are case-sensitive");
-  let saved = await pages.saveProposalPage("solana-devnet", link.dao, "1", { token: link.token, title: "Pay the designer", summary: "For the logo", body: "Two rounds.", links: [{ label: "Brief", url: "https://example.com/brief" }] });
+  let saved = await pages.saveProposalPage("solana-devnet", link.dao, "1", { token: link.token, password: "correct horse", title: "Pay the designer", summary: "For the logo", body: "Two rounds.", links: [{ label: "Brief", url: "https://example.com/brief" }] });
   assert.strictEqual(saved.status, 200, JSON.stringify(saved.body));
+  // A later edit needs the link and the edit password chosen with the first upload.
   saved = await pages.saveProposalPage("solana-devnet", link.dao, "1", { token: link.token, title: "Changed" });
-  assert.strictEqual(saved.status, 409);
+  assert.strictEqual(saved.status, 403);
   page = await pages.getProposalPage("solana-devnet", link.dao, "1");
   assert.strictEqual(page.body.details.title, "Pay the designer");
   assert.strictEqual(page.body.submittable, false);
@@ -196,14 +208,14 @@ test("Solana proposal pages", { timeout: 300_000 }, async () => {
   assert.strictEqual(page.body.live.started, true);
   assert.strictEqual(page.body.submittable, true, "voting has started, but the grace period hasn't ended");
   assert.strictEqual(page.body.live.facts.find((f) => f.label === "For").value, "600");
-  saved = await pages.saveProposalPage("solana-devnet", second.dao, "2", { token: second.token, title: "Within the grace period" });
+  saved = await pages.saveProposalPage("solana-devnet", second.dao, "2", { token: second.token, password: "correct horse", title: "Within the grace period" });
   assert.strictEqual(saved.status, 200, JSON.stringify(saved.body));
   process.env.PROPOSAL_DETAILS_GRACE_HOURS = "0";
   page = await pages.getProposalPage("solana-devnet", third.dao, "3");
   assert.strictEqual(page.body.submittable, false);
-  saved = await pages.saveProposalPage("solana-devnet", third.dao, "3", { token: third.token, title: "Late" });
+  saved = await pages.saveProposalPage("solana-devnet", third.dao, "3", { token: third.token, password: "correct horse", title: "Late" });
   assert.strictEqual(saved.status, 409);
-  assert.match(saved.body.error, /too late to add details: the first 0 hours are over/);
+  assert.match(saved.body.error, /too late: the first 0 hours are over/);
 
   // Board (no grace period still): the proposer's own confirmation doesn't close the window.
   const B = -501;

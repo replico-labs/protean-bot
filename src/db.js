@@ -236,6 +236,23 @@ export function getChatGuardWrapper(chatId, platform = "telegram") {
   return db[key(chatId, platform)]?.guardWrapperAddress ?? null;
 }
 
+/**
+ * The chat's Perpl trading desk (src/desk.js): { address, trader, mandate,
+ * pending: { [proposalId]: appointment } }, or null.
+ */
+export function getChatDesk(chatId, platform = "telegram") {
+  return readDb()[key(chatId, platform)]?.desk ?? null;
+}
+
+/** Replaces the chat's desk record with what `change(current)` returns. */
+export function updateChatDesk(chatId, change, platform = "telegram") {
+  updateDb((db) => {
+    const k = key(chatId, platform);
+    if (!db[k]) return false;
+    db[k] = { ...db[k], desk: change(structuredClone(db[k].desk ?? null)) };
+  });
+}
+
 export function unregisterChat(chatId, platform = "telegram") {
   updateDb((db) => {
     delete db[key(chatId, platform)];
