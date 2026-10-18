@@ -17,12 +17,17 @@ import { SOLANA_NETWORK_IDS, resolveSolanaNetwork } from "./solana/config.js";
  * the live state (read through the same model adapters as /proposal),
  * and POSTs the form back. Only the proposer can write: right after
  * proposing, the bot sends them privately an edit link carrying a token
- * signed with PROPOSAL_LINK_SECRET. The details are submitted ONCE and never
- * change afterwards - so what people back is what they read. The proposer
- * has a grace period after proposing (PROPOSAL_DETAILS_GRACE_HOURS,
- * default 6) to submit them even if people have already voted; after
- * that, only while nobody has voted or backed it, up to EDIT_WINDOW_HOURS.
- * Until then, /proposal re-sends the proposer their link.
+ * signed with PROPOSAL_LINK_SECRET. With the first upload the proposer sets
+ * an edit password; any later edit needs the link AND that password, so a
+ * forwarded or leaked link alone can't change anything. Every saved
+ * version is kept (proposal_detail_versions) and shown on the page, so
+ * readers see exactly what changed and when.
+ *
+ * Details can be uploaded or edited during a grace period after proposing
+ * (PROPOSAL_DETAILS_GRACE_HOURS, default 6) even if people have already
+ * voted; after that, only while nobody has voted or backed it, up to
+ * EDIT_WINDOW_HOURS. Until then, /proposal re-sends the proposer their link.
+ * Pages uploaded before passwords existed have none and stay as they are.
  *
  * Details live in Supabase (proposal_details, see supabase/schema.sql).
  *
@@ -43,6 +48,8 @@ function graceHours() {
 const windowText = () =>
   `Do it within ${graceHours()} hours, or later as long as nobody has voted on or backed it yet (up to ${EDIT_WINDOW_HOURS} hours).`;
 const LIMITS = { title: 140, summary: 600, body: 20_000, links: 10, link: 500 };
+const MAX_VERSIONS = 20;
+const PASSWORD = { min: 8, max: 200, failuresBeforeLock: 5, lockMinutes: 15 };
 
 export function proposalPagesConfigured() {
   return Boolean(siteUrl() && process.env.PROPOSAL_LINK_SECRET && process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
@@ -137,8 +144,64 @@ async function readDetails(network, dao, proposalId) {
   return data;
 }
 
+/** The title the proposer gave on the page, or null (none yet, pages not set up, or unreachable). */
+export async function proposalTitle(network, dao, proposalId) {
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) return null;
+  try {
+    const { data } = await db().from("proposal_details").select("title").match(key(network, dao, proposalId)).maybeSingle();
+    return data?.title ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function contentHash({ title, summary, body, links }) {
   return crypto.createHash("sha256").update(JSON.stringify([title, summary, body, links])).digest("hex");
+}
+
+/*//////////////////////////////////////////////////////////////
+                        EDIT PASSWORD
+//////////////////////////////////////////////////////////////*/
+
+const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 32 };
+const scrypt = (password, salt, { N, r, p, keylen }) =>
+  new Promise((resolve, reject) => crypto.scrypt(password, salt, keylen, { N, r, p, maxmem: 64 * 1024 * 1024 }, (err, key) => (err ? reject(err) : resolve(key))));
+
+/** "scrypt$N$r$p$salt$hash" - only this is stored, never the password. */
+export async function hashPassword(password) {
+  const salt = crypto.randomBytes(16);
+  const key = await scrypt(password, salt, SCRYPT);
+  return ["scrypt", SCRYPT.N, SCRYPT.r, SCRYPT.p, salt.toString("base64url"), key.toString("base64url")].join("$");
+}
+
+export async function checkPassword(password, stored) {
+  const [kind, N, r, p, salt, hash] = String(stored ?? "").split("$");
+  if (kind !== "scrypt" || !hash) return false;
+  const expected = Buffer.from(hash, "base64url");
+  const key = await scrypt(String(password ?? ""), Buffer.from(salt, "base64url"), { N: Number(N), r: Number(r), p: Number(p), keylen: expected.length });
+  return crypto.timingSafeEqual(key, expected);
+}
+
+function cleanPassword(v) {
+  const s = typeof v === "string" ? v : "";
+  if (s.length < PASSWORD.min) throw new Error(`Choose an edit password of at least ${PASSWORD.min} characters - you'll need it to change the details later.`);
+  if (s.length > PASSWORD.max) throw new Error(`The password is too long (max ${PASSWORD.max} characters).`);
+  return s;
+}
+
+/*//////////////////////////////////////////////////////////////
+                          VERSIONS
+//////////////////////////////////////////////////////////////*/
+
+async function readVersions(network, dao, proposalId) {
+  const { data, error } = await db().from("proposal_detail_versions").select("version, title, summary, body, links, content_hash, saved_at").match(key(network, dao, proposalId)).order("version");
+  if (error) throw new Error(error.message);
+  return data ?? [];
+}
+
+async function addVersion(network, dao, proposalId, version, details, hash) {
+  const { error } = await db().from("proposal_detail_versions").insert({ ...key(network, dao, proposalId), version, ...details, content_hash: hash });
+  if (error) throw new Error(`Couldn't record version ${version}: ${error.message}`);
 }
 
 /** Validates and cleans what the form sent; throws a message fit to show. */
@@ -175,8 +238,11 @@ export function cleanDetails(input) {
 
 const editMessage = (proposalId, edit, page, cmd) =>
   `📝 Add the details for proposal #${proposalId} - a title, summary and links - here (only you have this link):\n${edit}\n\n` +
-  `You submit them once; they can't be changed afterwards. ${windowText()} ` +
+  `With the first upload you choose an edit password: any later change needs this link and that password, and every version stays visible on the page. ${windowText()} ` +
   `Everyone sees them at ${page} and through ${cmd("proposal")} ${proposalId}. Lost this link? ${cmd("proposal")} ${proposalId} sends it again.`;
+
+const reEditMessage = (proposalId, edit, page) =>
+  `📝 Your edit link for proposal #${proposalId} (only you have it):\n${edit}\n\nChanges need the edit password you chose. Every version stays visible at ${page}. ${windowText()}`;
 
 /**
  * Called right after a proposal is created: records its page and returns
@@ -209,9 +275,11 @@ export async function pendingSubmitLink({ network, dao, model, proposalId, platf
   if (!live?.proposer || !sameAccount(network, live.proposer, walletAddress)) return null;
   await recordProposal({ network, dao, proposalId, model, platform });
   const row = await readDetails(network, dao, proposalId);
-  if (!submittable(row, live)) return null;
   const page = proposalPageUrl(network, dao, proposalId);
-  return editMessage(proposalId, proposalEditUrl({ network, dao, proposalId, platform, userId }), page, cmd);
+  const edit = proposalEditUrl({ network, dao, proposalId, platform, userId });
+  if (submittable(row, live)) return editMessage(proposalId, edit, page, cmd);
+  if (editable(row, live)) return reEditMessage(proposalId, edit, page);
+  return null;
 }
 
 /**
@@ -311,16 +379,22 @@ async function liveProposal(network, dao, model, proposalId) {
 }
 
 /**
- * Details can be submitted once: not yet submitted, and either still in
- * the grace period after proposing, or nobody has voted or backed it yet
- * (up to EDIT_WINDOW_HOURS).
+ * Details can be uploaded or edited while in the grace period after
+ * proposing, or while nobody has voted or backed it yet (up to
+ * EDIT_WINDOW_HOURS).
  */
-function submittable(row, live) {
-  if (!row || row.title) return false;
+function windowOpen(row, live) {
+  if (!row) return false;
   const age = Date.now() - new Date(row.created_at).getTime();
   if (age >= EDIT_WINDOW_HOURS * 3_600_000) return false;
   return age < graceHours() * 3_600_000 || !live.started;
 }
+
+/** First upload: nothing submitted yet and the window is open. */
+const submittable = (row, live) => Boolean(row && !row.title && windowOpen(row, live));
+
+/** Edits: uploaded with a password, the window still open, versions left. */
+const editable = (row, live) => Boolean(row?.title && row.edit_password_hash && windowOpen(row, live) && (row.version_count ?? 1) < MAX_VERSIONS);
 
 /** The window the website explains on the form. */
 const detailsWindow = () => ({ graceHours: graceHours(), windowHours: EDIT_WINDOW_HOURS });
@@ -342,7 +416,11 @@ export async function getProposalPage(networkRaw, daoRaw, idRaw) {
   const details = row?.title
     ? { title: row.title, summary: row.summary, body: row.body, links: row.links ?? [], updatedAt: row.updated_at, contentHash: row.content_hash }
     : null;
-  return { status: 200, body: { live, details, submittable: submittable(row, live), detailsWindow: detailsWindow() } };
+  const history = row?.title ? (await readVersions(network, reg.governanceAddress, idRaw)).map(versionView) : [];
+  return {
+    status: 200,
+    body: { live, details, history, submittable: submittable(row, live), editable: editable(row, live), passwordMinLength: PASSWORD.min, detailsWindow: detailsWindow() },
+  };
 }
 
 /** POST: the proposer saves the form. */
@@ -357,29 +435,72 @@ export async function saveProposalPage(networkRaw, daoRaw, idRaw, input) {
   const row = await readDetails(network, reg.governanceAddress, idRaw);
   const live = await liveProposal(network, reg.governanceAddress, reg.model, idRaw);
   if (!live) return { status: 404, body: { error: `There's no proposal #${idRaw}.` } };
-  if (row?.title) return { status: 409, body: { error: "The details were already submitted - they can't be changed." } };
-  if (!submittable(row, live)) {
-    return { status: 409, body: { error: `It's too late to add details: the first ${graceHours()} hours are over and people have started voting on or backing this proposal, or the ${EDIT_WINDOW_HOURS}-hour window has closed.` } };
-  }
   let details;
   try {
     details = cleanDetails(input);
   } catch (err) {
     return { status: 400, body: { error: err.message } };
   }
+  return row?.title ? editDetails(network, reg, idRaw, row, live, details, input) : firstUpload(network, reg, idRaw, row, live, details, input);
+}
+
+const tooLate = () => `It's too late: the first ${graceHours()} hours are over and people have started voting on or backing this proposal, or the ${EDIT_WINDOW_HOURS}-hour window has closed.`;
+
+async function firstUpload(network, reg, idRaw, row, live, details, input) {
+  if (!submittable(row, live)) return { status: 409, body: { error: `${tooLate()} Details can't be added now.` } };
+  let password;
+  try {
+    password = cleanPassword(input?.password);
+  } catch (err) {
+    return { status: 400, body: { error: err.message } };
+  }
   const hash = contentHash(details);
-  // `title is null` makes the write itself once-only, even for two
-  // submissions racing each other.
+  // `title is null` makes the first upload once-only, even for two racing.
   const { data: written, error } = await db()
     .from("proposal_details")
-    .update({ ...details, content_hash: hash, updated_at: new Date().toISOString() })
+    .update({ ...details, content_hash: hash, edit_password_hash: await hashPassword(password), version_count: 1, updated_at: new Date().toISOString() })
     .match(key(network, reg.governanceAddress, idRaw))
     .is("title", null)
     .select("proposal_id");
   if (error) return { status: 500, body: { error: error.message } };
-  if (!written?.length) return { status: 409, body: { error: "The details were already submitted - they can't be changed." } };
-  return { status: 200, body: { ok: true, contentHash: hash } };
+  if (!written?.length) return { status: 409, body: { error: "The details were just uploaded from somewhere else - reload the page." } };
+  await addVersion(network, reg.governanceAddress, idRaw, 1, details, hash);
+  return { status: 200, body: { ok: true, version: 1, contentHash: hash } };
 }
+
+async function editDetails(network, reg, idRaw, row, live, details, input) {
+  if (!row.edit_password_hash) return { status: 409, body: { error: "These details were uploaded before edit passwords existed, so they can't be changed." } };
+  if (!windowOpen(row, live)) return { status: 409, body: { error: `${tooLate()} The details are final.` } };
+  if ((row.version_count ?? 1) >= MAX_VERSIONS) return { status: 409, body: { error: `This proposal already has ${MAX_VERSIONS} versions - the most allowed.` } };
+  const k = key(network, reg.governanceAddress, idRaw);
+  if (row.password_locked_until && new Date(row.password_locked_until) > new Date()) {
+    return { status: 429, body: { error: `Too many wrong passwords - try again after ${new Date(row.password_locked_until).toISOString().slice(11, 16)} UTC.` } };
+  }
+  if (!(await checkPassword(input?.password, row.edit_password_hash))) {
+    const failures = (row.password_failures ?? 0) + 1;
+    const lock = failures >= PASSWORD.failuresBeforeLock;
+    await db()
+      .from("proposal_details")
+      .update({ password_failures: lock ? 0 : failures, password_locked_until: lock ? new Date(Date.now() + PASSWORD.lockMinutes * 60_000).toISOString() : row.password_locked_until })
+      .match(k);
+    return { status: 403, body: { error: lock ? `Wrong password. Editing is locked for ${PASSWORD.lockMinutes} minutes.` : `Wrong password (${PASSWORD.failuresBeforeLock - failures} tries left before a ${PASSWORD.lockMinutes}-minute lock).` } };
+  }
+  const hash = contentHash(details);
+  if (hash === row.content_hash) return { status: 409, body: { error: "Nothing changed." } };
+  const version = (row.version_count ?? 1) + 1;
+  // Only over the version this edit was based on, so two edits can't overwrite each other.
+  const { data: written, error } = await db()
+    .from("proposal_details")
+    .update({ ...details, content_hash: hash, version_count: version, password_failures: 0, updated_at: new Date().toISOString() })
+    .match({ ...k, content_hash: row.content_hash })
+    .select("proposal_id");
+  if (error) return { status: 500, body: { error: error.message } };
+  if (!written?.length) return { status: 409, body: { error: "The details changed while you were editing - reload the page and try again." } };
+  await addVersion(network, reg.governanceAddress, idRaw, version, details, hash);
+  return { status: 200, body: { ok: true, version, contentHash: hash } };
+}
+
+const versionView = (v) => ({ version: v.version, savedAt: v.saved_at, contentHash: v.content_hash, title: v.title, summary: v.summary, body: v.body, links: v.links ?? [] });
 
 /*//////////////////////////////////////////////////////////////
                             HTTP

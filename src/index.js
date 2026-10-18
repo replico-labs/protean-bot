@@ -1,6 +1,6 @@
 // First: blanks tokens and RPC keys in everything logged after this.
 import "./logRedaction.js";
-import { Bot } from "grammy";
+import { Bot, InputFile } from "grammy";
 import { SOLANA_ENABLED } from "./solana/config.js";
 import { requireNetworkArg, networkCodesText, exampleNetwork } from "./networkChoice.js";
 import { runSolanaCommand, solanaWalletLine, isSlowSolanaCommand } from "./solana/commands.js";
@@ -85,11 +85,13 @@ import { getIntegrationAction, integrationUsage } from "./integrations/index.js"
 import { integrationListLines, actionInfoText } from "./integrations/describe.js";
 import { actionAppliesTo, actionArgSpec, buildActionProposal, buildIntegrationProposal, computeHandoverProposals } from "./proposalBuilder.js";
 import { startEventListener } from "./eventListener.js";
+import { parsePerps, perpsUsage, perpsView, perpsProposalWords, PerpsError } from "./perps.js";
 import { registerTelegramMenu } from "./telegramMenu.js";
 import { helpReply } from "./helpMenu.js";
 import { withTxTracking, trackedChatId, takeTxLinks, trackTx } from "./txLinks.js";
 import { proposalButtons, telegramKeyboard, decodeButton, BUTTON_COMMANDS } from "./buttons.js";
 import { whatsappLinkConfigured, whatsappLinkRoutes } from "./platforms/whatsappLink.js";
+import { proposalImage } from "./charts.js";
 import { proposalPagesConfigured, startProposalApi, proposalPageUrl, proposalCreated, pendingSubmitLink, proposalStartPayload, parseProposalStartPayload, knownDaoModel, isSolanaNetwork } from "./proposalPages.js";
 import { getSolanaAddress } from "./solana/wallets.js";
 import { back as opportunityBack } from "./opportunityMarket/encryptedBet.js";
@@ -2044,6 +2046,8 @@ bot.command("proposal", async (ctx) => {
     if (page) lines.push("", `📄 Details and live status: ${page}`);
 
     await ctx.reply(lines.join("\n"), { parse_mode: "Markdown", reply_markup: telegramKeyboard(proposalButtons({ model, id, state: stateLabel, page })) });
+    const image = await proposalImage({ network: currentNetwork().id, chainName: currentNetwork().chain.name, model, dao: address, p, state: stateLabel });
+    if (image) await ctx.replyWithPhoto(new InputFile(image.png, image.name)).catch((err) => console.warn(`Couldn't send a chart: ${err.message}`));
     await resendSubmitLink(ctx, address, id);
   } catch (err) {
     console.error(err);
@@ -2207,6 +2211,50 @@ bot.command("listactions", async (ctx) => {
   lines.push("", "Use `/proposeaction <actionId> <arg1> <arg2> ... <description>` to propose one, and `/actioninfo <actionId>` to see what any of them does and what its arguments mean.");
   if (modelOptionsUsage(model)) lines.push(`This ${model} DAO also needs, anywhere after the action ID: \`${modelOptionsUsage(model)}\`.`);
   await ctx.reply(lines.join("\n"), { parse_mode: "Markdown" });
+});
+
+/*//////////////////////////////////////////////////////////////
+                            /perps
+//////////////////////////////////////////////////////////////*/
+
+bot.command("perps", async (ctx) => {
+  const address = await requireDAO(ctx);
+  if (!address) return;
+  const model = getChatModel(ctx.chat.id);
+  let request;
+  try {
+    request = parsePerps((ctx.match?.trim() ?? "").split(/\s+/));
+  } catch (err) {
+    if (!(err instanceof PerpsError)) throw err;
+    await ctx.reply(`${err.message}\n\n${perpsUsage(TG_CMD)}`, { parse_mode: "Markdown" });
+    return;
+  }
+  if (request.kind === "help") {
+    await ctx.reply(perpsUsage(TG_CMD), { parse_mode: "Markdown" });
+    return;
+  }
+  if (request.kind === "overview" || request.kind === "markets") {
+    try {
+      await ctx.reply(await perpsView({ kind: request.kind, model, governanceAddress: address }), { parse_mode: "Markdown" });
+    } catch (err) {
+      if (!(err instanceof PerpsError)) console.error(err);
+      await ctx.reply(err instanceof PerpsError ? err.message : `Couldn't read the exchange: ${err.shortMessage || err.message}`);
+    }
+    return;
+  }
+  if (!isWalletStoreConfigured()) {
+    await ctx.reply("Wallets aren't set up on this bot yet - ask an admin to configure the KMS/Supabase wallet system.");
+    return;
+  }
+  let mapped;
+  try {
+    mapped = await perpsProposalWords({ request, model, governanceAddress: address });
+  } catch (err) {
+    if (!(err instanceof PerpsError)) console.error(err);
+    await ctx.reply(err instanceof PerpsError ? err.message : `Couldn't read the exchange: ${err.shortMessage || err.message}`);
+    return;
+  }
+  await proposeIntegrationTelegram(ctx, address, mapped.actionId, mapped.words);
 });
 
 /*//////////////////////////////////////////////////////////////

@@ -72,3 +72,39 @@ create table if not exists proposal_details (
 -- Same as the tables above: only the bot's service_role key reads or
 -- writes it. The website reads through the bot's API, never directly.
 alter table proposal_details enable row level security;
+
+-- Proposal pages: edit password and version history (src/proposalPages.js).
+-- The password is set with the first upload; only its scrypt hash is kept.
+alter table proposal_details add column if not exists edit_password_hash text;
+alter table proposal_details add column if not exists version_count int not null default 1;
+alter table proposal_details add column if not exists password_failures int not null default 0;
+alter table proposal_details add column if not exists password_locked_until timestamptz;
+
+-- Every saved version of a proposal's details, shown on its page.
+create table if not exists proposal_detail_versions (
+  network text not null,
+  dao text not null,
+  proposal_id text not null,
+  version int not null,                -- 1 = the first upload
+  title text,
+  summary text,
+  body text,
+  links jsonb not null default '[]',
+  content_hash text not null,
+  saved_at timestamptz not null default now(),
+  primary key (network, dao, proposal_id, version)
+);
+alter table proposal_detail_versions enable row level security;
+
+-- Chat links: which DAO, network, tokens, wrappers and market each chat
+-- is linked to (src/chatStore.js). Used when CHAT_LINKS_STORE=supabase;
+-- the first service to start with it imports data/chats.json.
+create table if not exists chat_links (
+  chat_key text primary key,           -- "<platform>:<chat id>", e.g. "telegram:-1001234"
+  data jsonb not null,
+  updated_at timestamptz not null default now()
+);
+
+-- Same as wallets: RLS on with no policies, so only the backend's
+-- service_role key can read or write it.
+alter table chat_links enable row level security;

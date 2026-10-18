@@ -3,11 +3,16 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { getAllRegisteredDaos } from "./db.js";
 import { formatEther, parseEventLogs, toEventSelector, toHex } from "viem";
+import { InputFile } from "grammy";
 import { publicClient, walletClient } from "./config.js";
 import { resolveDelegationsBehind, activeProposalIds, queueSweep } from "./governance/liquid.js";
 import { runOnNetwork, explorerTxUrl, currentNetwork, networkEnv } from "./networks.js";
 import { readJson, writeJsonAtomic } from "./jsonFile.js";
 import { startSolanaListener } from "./solana/listener.js";
+import { getAdapter } from "./governance/index.js";
+import { PROPOSAL_STATE_LABELS } from "./governance/common.js";
+import { proposalImage } from "./charts.js";
+import { proposalPageUrl } from "./proposalPages.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // One state file per platform process: Telegram keeps the original file
@@ -139,6 +144,17 @@ function learnRange(err) {
 const MAX_CATCHUP_BLOCKS = BigInt(Number(process.env.EVENT_LISTENER_MAX_CATCHUP_BLOCKS) || 600);
 
 /**
+ * Where one DAO's progress is kept. Block numbers only mean something on
+ * one chain, so the key includes the network - except Monad testnet, which
+ * keeps the key it had before networks existed so existing progress isn't
+ * thrown away.
+ */
+function stateKeyFor(dao) {
+  const baseKey = `${dao.platform}:${dao.chatId}:${dao.governanceAddress}`;
+  return dao.network === "monad-testnet" ? baseKey : `${dao.network}:${baseKey}`;
+}
+
+/**
  * What one DAO wants from the logs: its events, where its progress is kept,
  * and the first block still to read. Null when there's nothing to watch.
  */
@@ -153,11 +169,7 @@ function watchFor(dao, currentBlock, state) {
   const events = abi.filter((item) => item.type === "event" && (INTERESTING_EVENT_NAMES.includes(item.name) || sweepEvents.includes(item.name)));
   if (events.length === 0) return null;
 
-  // Block numbers only mean something on one chain, so the key includes
-  // the network - except Monad testnet, which keeps the key it had before
-  // networks existed so existing progress isn't thrown away.
-  const baseKey = `${dao.platform}:${dao.chatId}:${dao.governanceAddress}`;
-  const stateKey = dao.network === "monad-testnet" ? baseKey : `${dao.network}:${baseKey}`;
+  const stateKey = stateKeyFor(dao);
   const lastProcessed = state[stateKey]?.lastProcessedBlock;
 
   // First time seeing this DAO: start from a recent window rather than
@@ -168,7 +180,7 @@ function watchFor(dao, currentBlock, state) {
   if (currentBlock - from > MAX_CATCHUP_BLOCKS) {
     console.log(`Event listener: DAO ${dao.governanceAddress} is ${currentBlock - from} blocks behind - skipping to the last ${MAX_CATCHUP_BLOCKS}.`);
     from = currentBlock - MAX_CATCHUP_BLOCKS;
-    state[stateKey] = { lastProcessedBlock: (from - 1n).toString() };
+    state[stateKey] = { ...state[stateKey], lastProcessedBlock: (from - 1n).toString() };
   }
   return { dao, stateKey, events, sweepEvents, from, address: dao.governanceAddress.toLowerCase() };
 }
@@ -221,6 +233,7 @@ async function checkNetwork(notify, daos, currentBlock, state, save) {
           scheduleLiquidSweep(notify, w.dao, log.eventName, log.args ?? {});
           continue;
         }
+        if (log.eventName === "ProposalCreated" && log.args?.proposalId !== undefined) trackVote(state, w, log.args.proposalId);
         const url = log.transactionHash ? explorerTxUrl(log.transactionHash) : null;
         const message = formatEvent(log.eventName, log.args ?? {}) + (url ? `\n🔗 ${url}` : "");
         try {
@@ -229,12 +242,83 @@ async function checkNetwork(notify, daos, currentBlock, state, save) {
           console.error(`Event listener: couldn't notify chat ${w.dao.chatId}:`, sendErr.message);
         }
       }
-      state[w.stateKey] = { lastProcessedBlock: chunkEnd.toString() };
+      state[w.stateKey] = { ...state[w.stateKey], lastProcessedBlock: chunkEnd.toString() };
     }
     save();
     chunkStart = chunkEnd + 1n;
   }
 }
+
+/*//////////////////////////////////////////////////////////////
+                   VOTE CLOSE: RESULT CHARTS
+//////////////////////////////////////////////////////////////*/
+
+// Models with a vote that ends (Conviction and Board have none: their
+// Queued/Executed events say it all).
+const VOTE_CLOSE_MODELS = new Set(["tokenWeighted", "quadratic", "liquid", "delegate", "sortition", "optimistic", "sowellian", "decisionMarkets"]);
+// States in which the vote (or challenge window, approval vote, trading) is still going.
+const STILL_OPEN = new Set(["Pending", "Active", "ChallengeWindow", "ApprovalVoting", "Seeded", "Open"]);
+const MAX_TRACKED = 50; // per DAO
+const TRACK_DAYS = 30;
+const RECHECK_MS = 60_000; // for votes whose end isn't a known block
+
+const stateLabelOf = (p) => p.stateLabel ?? p.statusLabel ?? p.phaseLabel ?? PROPOSAL_STATE_LABELS[p.stateIndex] ?? "Unknown";
+
+function trackVote(state, w, proposalId) {
+  if (!VOTE_CLOSE_MODELS.has(w.dao.model)) return;
+  const entry = (state[w.stateKey] ??= {});
+  const open = (entry.openVotes ??= {});
+  const id = String(proposalId);
+  if (open[id] || Object.keys(open).length >= MAX_TRACKED) return;
+  open[id] = { since: Date.now() };
+}
+
+/**
+ * Posts each tracked proposal's result, with its chart, once its vote is
+ * over - then stops tracking it. Reads a proposal only after its end block
+ * (once known) or at most once a minute, so open votes cost little RPC.
+ */
+async function checkVoteCloses(notify, daos, currentBlock, state) {
+  for (const dao of daos) {
+    const open = state[stateKeyFor(dao)]?.openVotes;
+    if (!open) continue;
+    for (const [id, t] of Object.entries(open)) {
+      if (Date.now() - t.since > TRACK_DAYS * 86_400_000) {
+        delete open[id];
+        continue;
+      }
+      if (t.endBlock !== undefined ? currentBlock <= BigInt(t.endBlock) : Date.now() < (t.next ?? 0)) continue;
+      let p;
+      try {
+        p = await getAdapter(dao.model).getProposal(dao.governanceAddress, id);
+      } catch (err) {
+        console.error(`Event listener: couldn't read proposal #${id} of ${dao.governanceAddress}:`, err.shortMessage ?? err.message);
+        t.next = Date.now() + RECHECK_MS;
+        continue;
+      }
+      const label = stateLabelOf(p);
+      if (STILL_OPEN.has(label)) {
+        // Block-based votes: sleep until the end block; others: recheck later.
+        if ((label === "Active" || label === "Pending") && p.endBlock > 0n) t.endBlock = String(p.endBlock);
+        else delete t.endBlock;
+        t.next = Date.now() + RECHECK_MS;
+        continue;
+      }
+      delete open[id];
+      if (label === "Cancelled") continue; // already announced by ProposalCancelled
+      const image = await proposalImage({ network: dao.network, chainName: currentNetwork().chain.name, model: dao.model, dao: dao.governanceAddress, p, state: label, skipEmpty: true }).catch(() => null);
+      const page = proposalPageUrl(dao.network, dao.governanceAddress, id);
+      const text = `🗳️ Voting on proposal #${id} has closed: *${label}*.${image ? "" : unchallengedNote(dao.model, label)}${page ? `\n📄 ${page}` : ""}`;
+      try {
+        await notify(dao.chatId, text, { image });
+      } catch (err) {
+        console.error(`Event listener: couldn't notify chat ${dao.chatId}:`, err.message);
+      }
+    }
+  }
+}
+
+const unchallengedNote = (model, label) => (model === "optimistic" && label !== "Defeated" ? " Nobody challenged it." : "");
 
 /*//////////////////////////////////////////////////////////////
               LIQUID: RESOLVING DELEGATED VOTES
@@ -287,7 +371,13 @@ function trimAmount(wei) {
 export function startEventListener(target, pollIntervalMs = 20_000) {
   const { platform, notify } =
     target && target.api && typeof target.api.sendMessage === "function"
-      ? { platform: "telegram", notify: (chatId, text) => target.api.sendMessage(chatId, text, { parse_mode: "Markdown" }) }
+      ? {
+          platform: "telegram",
+          notify: async (chatId, text, { image } = {}) => {
+            await target.api.sendMessage(chatId, text, { parse_mode: "Markdown" });
+            if (image) await target.api.sendPhoto(chatId, new InputFile(image.png, image.name)).catch((err) => console.warn(`Event listener: couldn't send a chart to ${chatId}: ${err.message}`));
+          },
+        }
       : target;
   const statePath = statePathFor(platform);
 
@@ -312,6 +402,7 @@ export function startEventListener(target, pollIntervalMs = 20_000) {
             const currentBlock = await publicClient.getBlockNumber();
             // Progress is saved after every range, so it survives a restart mid-pass.
             await checkNetwork(notify, networkDaos, currentBlock, state, () => writeState(statePath, state));
+            await checkVoteCloses(notify, networkDaos, currentBlock, state);
           });
         } catch (err) {
           // One unreachable network must not stop notifications for the others.

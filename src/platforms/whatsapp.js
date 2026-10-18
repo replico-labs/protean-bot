@@ -274,6 +274,13 @@ export function createWhatsAppBot({
       });
     }
     for (const text of toChat) await send(chatId, { text }, { quoted: m });
+    // A chart goes with the public answer, never with one sent privately.
+    if (result.image && toChat.includes(result.text)) await sendImage(chatId, result.image);
+  }
+
+  /** An image (a chart); failing to send it never fails the command. */
+  function sendImage(jid, image) {
+    return send(jid, { image: image.png, mimetype: "image/png" }).catch((err) => log.warn({ err: err.message }, "couldn't send a chart"));
   }
 
   /**
@@ -445,7 +452,13 @@ export async function startWhatsAppBot({ phoneNumber = process.env.WHATSAPP_PHON
   await bot.start();
   // Listener notifications wait for the connection, so a brief reconnect
   // doesn't drop them.
-  startEventListener({ platform: "whatsapp", notify: (chatId, text) => bot.send(chatId, { text }) });
+  startEventListener({
+    platform: "whatsapp",
+    notify: async (chatId, text, { image } = {}) => {
+      await bot.send(chatId, { text });
+      if (image) await bot.send(chatId, { image: image.png, mimetype: "image/png" }).catch((err) => console.warn(`[whatsapp] Couldn't send a chart: ${err.message}`));
+    },
+  });
   console.log("[whatsapp] Started; listening for /commands in groups and DMs");
   return bot;
 }

@@ -1,24 +1,19 @@
-import path from "path";
-import { fileURLToPath } from "url";
 import { resolveNetworkId, currentNetwork, DEFAULT_NETWORK } from "./networks.js";
-import { readJson, updateJson } from "./jsonFile.js";
+import { readLinks, updateLinks } from "./chatStore.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DB_PATH = path.join(__dirname, "..", "data", "chats.json");
-
+/** All chat links (data/chats.json, or Supabase - see chatStore.js). */
 function readDb() {
-  return readJson(DB_PATH, {});
+  return readLinks();
 }
 
 /**
- * Every change goes through here: the Telegram, Discord and Slack bots
- * (and the keepers) are separate processes sharing this one file, so a
- * change re-reads the file under a lock and writes it back atomically -
- * otherwise two bots saving at the same moment would lose one's change.
- * `mutate` edits `db` in place; returning false skips the write.
+ * Every change goes through here: the Telegram, Discord, Slack and
+ * WhatsApp bots (and the keepers) are separate processes sharing these
+ * links, and chatStore.js keeps their changes from overwriting each
+ * other. `mutate` edits `db` in place; returning false skips the write.
  */
 function updateDb(mutate) {
-  updateJson(DB_PATH, {}, mutate);
+  updateLinks(mutate);
 }
 
 /**

@@ -17,6 +17,7 @@
     "@coral-xyz/anchor": "0.32.1",
     "@flaunch/sdk": "0.17.1",
     "@grammyjs/runner": "^2.0.3",
+    "@resvg/resvg-js": "^2.6.2",
     "@slack/bolt": "^5.1.0",
     "@solana/spl-token": "0.4.14",
     "@solana/web3.js": "1.98.4",

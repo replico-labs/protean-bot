@@ -18,6 +18,11 @@ function daoInfoFor(model, governanceAddress) {
   return hasToken(model) ? getDaoInfo(model, governanceAddress) : getAdapter(model).getDaoInfo(governanceAddress);
 }
 
+/** The DAO's Treasury address (read from the chain, never stored). */
+export async function daoTreasury(model, governanceAddress) {
+  return getAddress((await daoInfoFor(model, governanceAddress)).treasuryAddress);
+}
+
 const PROPOSE_INSTRUCTION_ABI = [
   {
     type: "function",

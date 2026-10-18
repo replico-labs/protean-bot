@@ -60,6 +60,7 @@ const CORE_META = {
   listactions: ["Proposing", ""],
   proposeaction: ["Proposing", "<actionId> <args...> <description>"],
   actioninfo: ["Proposing", "<actionId>"],
+  perps: ["Proposing", "[markets | long|short <market> <size> at <price> [3x] | close <market> <size|all> at <price> | deposit|withdraw <amount>]"],
   propose: ["Proposing", "<target> <valueWei> <data> <description>"],
   vote: ["Deciding", "<id> for|against|abstain [reason]"],
   queue: ["Deciding", "<id>"],

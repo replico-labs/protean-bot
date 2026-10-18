@@ -88,7 +88,7 @@ async function exchangeState(ctx, d) {
   });
   const whitelisting = await read(ctx, d, "whitelistingEnabled");
   const whitelisted = whitelisting ? await read(ctx, d, "whitelisted", [ctx.treasury]) : true;
-  return { decimals, symbol, accountId: account.accountId, balance: account.balanceCNS, whitelisted };
+  return { decimals, symbol, accountId: account.accountId, balance: account.balanceCNS, locked: account.lockedBalanceCNS ?? 0n, whitelisted };
 }
 
 /** Parse a human decimal into `decimals` places, refusing extra precision (the contract would silently truncate it). */
@@ -247,3 +247,69 @@ export const actions = [
     },
   },
 ];
+
+/*//////////////////////////////////////////////////////////////
+                    /perps (src/perps.js)
+//////////////////////////////////////////////////////////////*/
+
+const num = (value, decimals) => Number(formatUnits(value, decimals));
+
+/** The Treasury's open positions: one getPosition per listed market, details only for the open ones. */
+async function openPositions(ctx, d, accountId) {
+  const entries = Object.entries(d.markets);
+  const found = await Promise.all(entries.map(([, id]) => read(ctx, d, "getPosition", [BigInt(id), accountId])));
+  const open = entries.map(([symbol, id], i) => ({ symbol, id, position: found[i][0], mark: found[i][1] })).filter((p) => p.position.lotLNS > 0n);
+  return Promise.all(
+    open.map(async (p) => {
+      const info = await read(ctx, d, "getPerpetualInfo", [BigInt(p.id)]);
+      const pd = Number(info.priceDecimals), ld = Number(info.lotDecimals);
+      const long = Number(p.position.positionType) === 0;
+      const size = num(p.position.lotLNS, ld), entry = num(p.position.pricePNS, pd), mark = num(p.mark || info.markPNS, pd);
+      return { symbol: p.symbol, side: long ? "long" : "short", size, entry, mark, pnl: (mark - entry) * size * (long ? 1 : -1), margin: p.position.depositCNS };
+    })
+  );
+}
+
+export const perps = {
+  venue: "Perpl",
+
+  async overview(ctx) {
+    const d = deployment(ctx);
+    const state = await exchangeState(ctx, d);
+    if (state.accountId === 0n) return { empty: "The Treasury has no Perpl account yet - `deposit <amount>` opens one.", note: whitelistNote(state).trim() };
+    const positions = await openPositions(ctx, d, state.accountId);
+    return {
+      collateral: `${formatUnits(state.balance, state.decimals)} ${state.symbol}${state.locked ? ` (${formatUnits(state.locked, state.decimals)} locked)` : ""}`,
+      positions: positions.map((p) => ({ ...p, margin: `${formatUnits(p.margin, state.decimals)} ${state.symbol}` })),
+      note: whitelistNote(state).trim(),
+    };
+  },
+
+  async markets(ctx) {
+    const d = deployment(ctx);
+    const rows = await Promise.all(
+      Object.entries(d.markets).map(async ([symbol, id]) => {
+        const info = await read(ctx, d, "getPerpetualInfo", [BigInt(id)]);
+        const pd = Number(info.priceDecimals), ld = Number(info.lotDecimals);
+        return { symbol, mark: num(info.markPNS, pd), openInterest: num(info.longOpenInterestLNS, ld) + num(info.shortOpenInterestLNS, ld) };
+      })
+    );
+    return { rows };
+  },
+
+  /** /perps words -> perpl-* action words. */
+  async translate(ctx, t) {
+    if (t.kind === "deposit") return ["perpl-deposit", t.amount];
+    if (t.kind === "withdraw") return ["perpl-withdraw", t.amount];
+    if (t.kind === "open") return ["perpl-open", t.market, t.side, t.size, t.price, `leverage=${t.leverage ?? "1"}`];
+    // close: Perpl wants the side of the position being closed.
+    const d = deployment(ctx);
+    const state = await exchangeState(ctx, d);
+    if (state.accountId === 0n) throw new IntegrationError("The Treasury has no Perpl account.");
+    const id = d.markets[t.market.toUpperCase()];
+    if (id === undefined) throw new IntegrationError(`Unknown Perpl market "${t.market}". Markets: ${Object.keys(d.markets).join(", ")}.`);
+    const [position] = await read(ctx, d, "getPosition", [BigInt(id), state.accountId]);
+    if (position.lotLNS === 0n) throw new IntegrationError(`The Treasury has no ${t.market.toUpperCase()} position on Perpl.`);
+    return ["perpl-close", t.market, Number(position.positionType) === 0 ? "long" : "short", t.size, t.price];
+  },
+};

@@ -353,6 +353,12 @@ const HELP_SECTIONS = [
 ];
 
 const COMMANDS = {
+  perps: {
+    description: "Perpetuals for Solana DAOs",
+    async run() {
+      return reply("Perps for Solana DAOs will use Phoenix - not available yet. Perpl (Monad) and HyperCore (HyperEVM) DAOs can use it now.");
+    },
+  },
   help: {
     usage: "[topic]",
     description: "The commands for this chat's Solana DAO, by topic",

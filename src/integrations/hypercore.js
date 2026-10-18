@@ -291,3 +291,96 @@ export const actions = [
     },
   },
 ];
+
+/*//////////////////////////////////////////////////////////////
+                    /perps (src/perps.js)
+//////////////////////////////////////////////////////////////*/
+
+// Hyperliquid's public info API: read-only (positions, prices, the market
+// list). Nothing proposed depends on it alone - a market name it resolves
+// is checked against HyperCore's own precompile before it's used.
+const INFO_API = { hyperevm: "https://api.hyperliquid.xyz/info", "hyperevm-testnet": "https://api.hyperliquid-testnet.xyz/info" };
+
+async function info(ctx, body) {
+  const url = process.env.HYPERLIQUID_INFO_URL || INFO_API[ctx.network.id];
+  let res;
+  try {
+    res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(10_000) });
+  } catch (err) {
+    throw new IntegrationError(`Hyperliquid's API didn't answer (${err.message}).`);
+  }
+  if (!res.ok) throw new IntegrationError(`Hyperliquid's API answered ${res.status}.`);
+  return res.json();
+}
+
+/** "BTC" -> its perp index, from the API's market list, confirmed by HyperCore itself. */
+async function perpIndex(ctx, name) {
+  const meta = await info(ctx, { type: "meta" });
+  const index = meta.universe.findIndex((a) => a.name.toUpperCase() === String(name).toUpperCase() && !a.isDelisted);
+  if (index < 0) throw new IntegrationError(`HyperCore has no perp market "${name}". \`perps markets\` lists them.`);
+  const onchain = await precompile(ctx, PRECOMPILE.perpAssetInfo, [{ type: "uint32" }], [index], PERP_ASSET_INFO);
+  if (onchain.coin !== meta.universe[index].name) throw new IntegrationError(`Hyperliquid's API and HyperCore disagree on perp ${index} (${meta.universe[index].name} vs ${onchain.coin}) - not proposing.`);
+  return { index, coin: onchain.coin };
+}
+
+async function position(ctx, coin) {
+  const state = await info(ctx, { type: "clearinghouseState", user: ctx.treasury });
+  return state.assetPositions.map((a) => a.position).find((p) => p.coin === coin && Number(p.szi) !== 0) ?? null;
+}
+
+export const perps = {
+  venue: "HyperCore",
+
+  async overview(ctx) {
+    deployment(ctx);
+    const state = await info(ctx, { type: "clearinghouseState", user: ctx.treasury });
+    const positions = state.assetPositions.map((a) => a.position).filter((p) => Number(p.szi) !== 0).map((p) => {
+      const size = Math.abs(Number(p.szi));
+      return {
+        symbol: p.coin,
+        side: Number(p.szi) > 0 ? "long" : "short",
+        size,
+        entry: Number(p.entryPx),
+        mark: Number(p.positionValue) / size,
+        pnl: Number(p.unrealizedPnl),
+        margin: `${Number(p.marginUsed).toFixed(2)} USDC, ${p.leverage.value}x ${p.leverage.type}`,
+      };
+    });
+    if (!positions.length && Number(state.marginSummary.accountValue) === 0) {
+      return { empty: "The Treasury's HyperCore perp balance is empty - `deposit <amount>` moves USDC there." };
+    }
+    return { collateral: `${Number(state.marginSummary.accountValue).toFixed(2)} USDC (withdrawable ${Number(state.withdrawable).toFixed(2)})`, positions };
+  },
+
+  async markets(ctx) {
+    deployment(ctx);
+    const [meta, ctxs] = await info(ctx, { type: "metaAndAssetCtxs" });
+    const rows = meta.universe
+      .map((a, i) => ({ symbol: a.name, delisted: a.isDelisted, mark: Number(ctxs[i]?.markPx), fundingPerHour: Number(ctxs[i]?.funding) * 100, volume: Number(ctxs[i]?.dayNtlVlm), maxLeverage: a.maxLeverage }))
+      .filter((r) => !r.delisted)
+      .sort((a, b) => b.volume - a.volume)
+      .slice(0, 20);
+    return { rows, note: "Top 20 by 24h volume. Funding is per hour." };
+  },
+
+  /** /perps words -> hypercore-* action words. */
+  async translate(ctx, t) {
+    deployment(ctx);
+    if (t.kind === "deposit") return ["hypercore-deposit-usdc", t.amount, "to=perp"];
+    if (t.kind === "withdraw") return ["hypercore-usd-transfer", t.amount, "to-spot"];
+    const { index, coin } = await perpIndex(ctx, t.market);
+    if (t.kind === "open") {
+      // CoreWriter has no leverage action (hyper-evm-lib HLConstants), so a
+      // contract can't change it: orders use the account's setting for that market.
+      if (t.leverage) {
+        const held = await position(ctx, coin);
+        throw new IntegrationError(`HyperCore's leverage can't be set from a contract - the Treasury trades ${coin} at its account setting${held ? ` (now ${held.leverage.value}x ${held.leverage.type})` : ""}. Leave out "${t.leverage}x".`);
+      }
+      return ["hypercore-order", `perp:${index}`, t.side === "long" ? "buy" : "sell", t.size, t.price, "tif=ioc"];
+    }
+    const held = await position(ctx, coin);
+    if (!held) throw new IntegrationError(`The Treasury has no ${coin} position on HyperCore.`);
+    const size = t.size.toLowerCase() === "all" ? String(Math.abs(Number(held.szi))) : t.size;
+    return ["hypercore-order", `perp:${index}`, Number(held.szi) > 0 ? "sell" : "buy", size, t.price, "tif=ioc", "reduceonly=yes"];
+  },
+};

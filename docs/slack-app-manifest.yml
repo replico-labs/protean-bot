@@ -38,6 +38,7 @@ oauth_config:
       - users:read        # admin check for register/unregister
       - channels:read     # member_joined_channel events (welcome tokens)
       - groups:read       # ...in private channels too
+      - files:write       # vote charts (images) under proposals
 settings:
   event_subscriptions:
     bot_events:

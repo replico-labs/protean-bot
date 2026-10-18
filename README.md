@@ -105,7 +105,16 @@ All six Vortexes models work: **token-weighted**, **quadratic**, **optimistic**,
 
 `/help` is model-aware: it only shows commands that apply to the current chat's governance model and linked wrappers/markets.
 
-### Setup
+### Chat links
+
+Which DAO, network, model, tokens, wrappers and market each chat is linked to. By default they're in `data/chats.json` on the volume, shared by every service under a lock file. With **`CHAT_LINKS_STORE=supabase`** they're rows in Supabase's `chat_links` table instead, so a lost volume doesn't unlink every chat:
+
+1. Run the `chat_links` part of `supabase/schema.sql` in the SQL editor.
+2. Set `CHAT_LINKS_STORE=supabase` on every service and redeploy. The first one to start imports `data/chats.json` (logged: "imported N chats"); the file is left as it was.
+
+Each service keeps the links in memory (re-read every 10 s), so commands don't wait on the database; a change is saved to Supabase straight away and retried until it lands if Supabase is briefly down. A service that starts while Supabase is unreachable uses its last copy (`data/chats.supabase-cache.json`) and catches up. A missing table stops the service with a message saying which SQL to run.
+
+## Setup
 - `/createdao <name> <symbol> <initialSupply> <maxSupply> [model] [network] [council...]` — deploy a DAO and link it here. Models: `tokenWeighted` (default), `quadratic`, `liquid`, `optimistic`, `delegate`, `sortition`, `conviction`, `sowellian`, `decisionMarkets`. `delegate` and `sortition` take the starting council as trailing addresses; sortition's randomness source comes from the bot's config.
 - `/createboarddao <name> <signer1> <signer2> ... [network]` — deploy a Board (multisig) DAO; no token at all
 - **Spaces in arguments:** a description (`/propose`, `/proposeaction`, `/vote` reasons, `/listopportunity`) is everything after the last fixed argument, so it can be plain text with spaces. A DAO name with spaces goes in quotes: `/createdao "Ark DAO" ARK 1000000 10000000` (straight or curly quotes; on Telegram and Slack). Discord's name field takes spaces as is.
@@ -171,12 +180,12 @@ Bonds and seeds (Optimistic challenges, Sowellian bonds and positions, Decision 
 ### Proposal pages
 Every proposal gets a page on the website, `PROPOSAL_SITE_URL/p/<network>/<dao>/<id>`, with details its proposer writes there next to live on-chain data (state, votes or conviction, budget, timelock, actions).
 - **After proposing**, the group sees the page link and the proposer gets a private link to add the details: a Telegram DM (or, if the bot can't message them first, a `t.me/<bot>?start=…` link that opens one), a message only they can see on Discord and Slack, or a WhatsApp DM.
-- **Submitted once, never changed**, so what people back is what they read; the page shows the details' fingerprint (sha256). The proposer has a grace period after proposing (`PROPOSAL_DETAILS_GRACE_HOURS`, default 6) to submit them even if voting has started; after that, only while nobody has voted or backed the proposal, up to 72 hours.
-- **`/proposal <id>`** ends with the page link. Run by the proposer before they've submitted, it also re-sends their link privately.
+- **Edit password and history.** With the first upload the proposer chooses an edit password (8+ characters); any later edit needs the private link *and* that password, so a forwarded link alone can't change anything. Only a scrypt hash of it is stored. 5 wrong passwords lock editing for 15 minutes. Every saved version is kept (`proposal_detail_versions`, up to 20) and listed on the page under History with its time and fingerprint (sha256), so people see exactly what changed. Uploads and edits are allowed during a grace period after proposing (`PROPOSAL_DETAILS_GRACE_HOURS`, default 6) even if voting has started; after that, only while nobody has voted or backed the proposal, up to 72 hours. Then the details are final. Pages uploaded before passwords existed stay as they are.
+- **`/proposal <id>`** ends with the page link. Run by the proposer while they can still upload or edit, it also re-sends their link privately.
 - **How it's served:** the website is static; it reads `GET /api/proposals/<network>/<dao>/<id>` from the bot and the form `POST`s back. The routes share the Slack install page's HTTP server when "Add to Slack" is set up, otherwise the Telegram process listens on `PORT`. Only DAOs registered with the bot are served; CORS allows only `PROPOSAL_SITE_URL`. Edit links are HMAC-signed with `PROPOSAL_LINK_SECRET` and expire with the edit window.
 - **Solana DAOs** get the same pages at `/p/solana-devnet/<governance account>/<id>`: the governance account, not the DAO, so pages stay right after a model switch (the new governance numbers its proposals from 1 again). Live data comes straight from the Vortexes programs; instructions are described in words, addresses link to Solana's explorer.
 - **Board DAOs:** proposing counts as the proposer's own confirmation, so details stay open until a second signer confirms.
-- **Setup:** run the `proposal_details` part of `supabase/schema.sql`, then set `PROPOSAL_SITE_URL` and `PROPOSAL_LINK_SECRET` (a long random string). Without them the bot behaves as before.
+- **Setup:** run the `proposal_details` and `proposal_detail_versions` parts of `supabase/schema.sql` (re-run it on an existing database: it adds the password and version columns), then set `PROPOSAL_SITE_URL` and `PROPOSAL_LINK_SECRET` (a long random string). Without them the bot behaves as before.
 
 ### Conviction spending budgets
 Conviction DAOs from the newer factory check what each proposal spends (see Spaces' README, "Conviction spending budgets"). The bot fills in the budget itself: native sent by `transferETH` or with a `Treasury.execute` step, and tokens moved by `transferERC20` or approved/transferred inside `Treasury.execute` - which covers every action in `/listactions`, the protocol integrations and raw `/propose` calls of those shapes. `/proposal` shows "May spend: 10 USDC, 0.5 MON", or a warning when a proposal weakens the rules. `/assets` lists the assets, their weights, the Treasury's holdings and pending cuts (`/assets apply <asset>` once one is due). The list changes by proposal: `conviction-add-asset`, `conviction-set-asset-weight`, `conviction-remove-asset` (native: `MON`/`ETH`/`HYPE` or `native`). Older Conviction DAOs keep proposing the old way.
@@ -236,6 +245,23 @@ Arguments are positional, then `name=value` options (`/actioninfo` lists them), 
 
 HyperCore note: Core applies CoreWriter actions just after the EVM transaction. A proposal can execute successfully while Core rejects the order (tick size, no balance, no fill). The bot checks Hyperliquid's tick and lot rules before proposing, and says so in every summary.
 
+## Perps (`/perps`)
+
+One command for perpetuals on whichever exchange the chat's network has: **Perpl** on Monad, **HyperCore** on HyperEVM. Base has none (Avantis has no public docs or SDK to build against); Solana DAOs will use **Phoenix** (not built yet: new Phoenix accounts need an access or referral code, and it runs on mainnet only).
+
+| Command | What it does |
+|---|---|
+| `/perps` | The Treasury's collateral and open positions (size, entry, mark, PnL, margin) |
+| `/perps markets` | Mark prices (HyperCore: top 20 by volume, with hourly funding) |
+| `/perps long\|short <market> <size> at <limitPrice> [3x] [description]` | Proposes opening or adding to a position |
+| `/perps close <market> <size\|all> at <limitPrice> [description]` | Proposes closing or reducing one; the side is read from the position |
+| `/perps deposit <amount>` / `/perps withdraw <amount>` | Proposes moving collateral (HyperCore: USDC into the perp balance / perp → spot) |
+
+Reading answers straight away. Everything else becomes a normal proposal through the same `perpl-*` / `hypercore-*` actions as `/proposeaction`, so the Treasury only trades by vote. Orders are immediate-or-cancel at the limit price: a proposal executes hours or days after it's written, and the limit stops a stale one filling at a bad price. Without a description, one is written from the order.
+
+- **Perpl:** positions and prices come from the exchange contract. The Treasury has to be whitelisted by Perpl while whitelisting is on; `/perps` warns when it isn't.
+- **HyperCore:** positions and prices come from Hyperliquid's public info API. A market name is resolved there and then checked against HyperCore's own precompile before anything is proposed. Leverage can't be set from a contract (CoreWriter has no leverage action), so orders use the account's current setting for that market, and `3x` is refused with that explanation.
+
 ## NFTs
 
 The Treasury can't receive NFTs (it has no ERC721/ERC1155 receiver hooks), so **a DAO's NFTs live in its NFT wrapper** (`/deploynftwrapper`):
@@ -287,6 +313,8 @@ Every reply to a command that sends a transaction on Monad, Base or HyperEVM end
 
 Every platform's process polls its linked DAOs (every 20 s) and posts proposal created / queued / executed / cancelled, plus model-specific events, to the linked chat. Each network is polled separately, with **one `eth_getLogs` per block range for all of that network's DAOs** (every address and event in one filter), so RPC use doesn't grow with the number of DAOs — metered plans bill per call. Ranges are ≤90 blocks (Monad testnet caps `eth_getLogs` at 100), or the RPC's own limit, which the listener learns from its error (QuickNode's free plan: 5). Each DAO's progress is saved after every range.
 
+**Vote charts.** When a vote ends, the listener posts the result with a chart (a PNG): *"Voting on proposal #3 has closed: Succeeded"*, For / Against / Abstain bars with each side's share, votes cast and the quorum, titled with the details the proposer wrote on the page. It tracks every proposal it saw created (token-weighted, quadratic, liquid, delegate, sortition, optimistic challenges, Sowellian approval votes, Decision Markets' pass/fail prices; up to 50 open per DAO, for 30 days) and reads one only once its end block has passed, or once a minute where the end isn't a block, so open votes cost almost no RPC. `/proposal <id>` sends the same chart with its answer, on every model that has one (Conviction shows its progress toward the threshold; Board has none). Telegram, Discord and WhatsApp send it as a photo; Slack uploads it, which needs the `files:write` scope (in `docs/slack-app-manifest.yml`; an existing install must be reinstalled to get it - without it the text still goes out and the chart is skipped, logged once). Charts are drawn by `src/charts.js` (SVG rendered with resvg, fonts bundled in `assets/fonts`, so nothing to install on the server); `barChartPng()` is general and meant for markets, futarchy and PnL cards next. Solana chats don't get charts yet.
+
 **Backup RPCs.** `RPC_URL` can be followed by `RPC_URLS` (comma separated, per network with a prefix: `BASE_RPC_URLS`), and the chain's public RPC is always the last resort unless `RPC_PUBLIC_FALLBACK=false`. Requests go to the first RPC that's up; one that times out, refuses or runs out of credits is skipped for a minute (logged once), then tried again. A reverted call is an answer, not a failure, and doesn't switch.
 
 ## Setup
@@ -313,6 +341,7 @@ npm start
 | `PYTH_HERMES_URL` | `/resolveviaoracle` price updates | optional, default `https://pyth.dourolabs.app/hermes` |
 | `KMS_KEY_ID`, `AWS_REGION`, AWS credentials | KMS wallets | symmetric KMS key |
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | KMS wallets | service_role key — RLS allows nothing else |
+| `CHAT_LINKS_STORE` | optional | `supabase` keeps chat links in the `chat_links` table instead of `data/chats.json` — see [Chat links](#chat-links) |
 | `MASTER_WALLET_SEED` | legacy wallets only | keep set only while old wallets still hold funds |
 | `OPPORTUNITY_MARKET_RPC_URL`, `OPPORTUNITY_MARKET_FACTORY_ADDRESS` | Opportunity Markets | Sepolia |
 | `DISCORD_*`, `SLACK_*` | Discord / Slack | see above |
@@ -350,7 +379,7 @@ To try it on a local chain first: start `anvil --chain-id 10143 --block-time 1`,
 - **`/createdao` mints the initial supply to the operator wallet**, not the person who ran the command, and records the operator as `creator` on-chain. `/tip` and welcome distributors are how it reaches members.
 - **Pyth fees come from the caller.** `/startsortition` (when the DAO's Entropy credit is short) and `/resolveviaoracle` (the price update) spend native currency from the caller's wallet on Pyth's fees; gas sponsorship covers gas only.
 - **Wrapped native is never auto-unwrapped.** Redeeming or reclaiming on a Decision Markets quote side returns the wrapped token; `/unwrap` converts it back.
-- **`data/chats.json` is a flat file.** Fine for now; swap for a database before scaling.
+- **Chat links default to a flat file** (`data/chats.json`). Set `CHAT_LINKS_STORE=supabase` to keep them in the database.
 
 ## What's not verified yet
 
@@ -381,6 +410,7 @@ src/
 ├── proposalBuilder.js    action encoding + GuardWrapper routing, shared by every platform
 ├── wrapper.js            GuardWrapper reads/writes
 ├── eventListener.js      chat notifications, per platform and per network
+├── charts.js             vote charts (PNG) for /proposal and vote-close posts
 ├── db.js                 chat ↔ DAO / model / network / wrapper / market links (flat JSON)
 ├── walletResolver.js     KMS-first wallet resolution, legacy migration guard
 ├── kmsWallet.js          KMS envelope encryption

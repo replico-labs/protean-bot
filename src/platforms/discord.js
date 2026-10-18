@@ -1,6 +1,6 @@
 // First: blanks tokens and RPC keys in everything logged after this.
 import "../logRedaction.js";
-import { Client, Events, GatewayIntentBits, PermissionFlagsBits, REST, Routes, SlashCommandBuilder, MessageFlags, ActionRowBuilder, ButtonBuilder, ButtonStyle } from "discord.js";
+import { Client, Events, GatewayIntentBits, PermissionFlagsBits, REST, Routes, SlashCommandBuilder, MessageFlags, ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder } from "discord.js";
 import { COMMANDS, runCommand, ADMIN_COMMANDS } from "./commands.js";
 import { OPPORTUNITY_COMMANDS } from "./commands/opportunity.js";
 import { SOWELLIAN_COMMANDS } from "./commands/sowellian.js";
@@ -146,6 +146,9 @@ async function registerCommands(token, applicationId, guildId) {
   console.log(`[discord] Registered ${body.length} slash commands ${guildId ? `to guild ${guildId}` : "globally"}`);
 }
 
+/** A reply's image (a chart) as a Discord attachment. */
+const discordFiles = (image) => (image ? { files: [new AttachmentBuilder(image.png, { name: image.name })] } : {});
+
 /** A reply's buttons as Discord action rows (at most 5 rows of 5). */
 export function discordComponents(rows = []) {
   return rows.slice(0, 5).map((row) =>
@@ -190,7 +193,7 @@ async function handleButton(interaction) {
     await interaction.followUp({ content: first, flags: MessageFlags.Ephemeral });
     return;
   }
-  await interaction.editReply({ content: first, components: discordComponents(result.buttons) });
+  await interaction.editReply({ content: first, components: discordComponents(result.buttons), ...discordFiles(result.image) });
   for (const content of more) await interaction.followUp({ content });
   if (result.privateFollowUp) await interaction.followUp({ content: toDiscordMarkdown(result.privateFollowUp), flags: MessageFlags.Ephemeral });
 }
@@ -230,7 +233,7 @@ export async function handleInteraction(interaction) {
     await interaction.followUp({ content: first, ...privateFlags });
   } else {
     // Buttons go on the reply only when it's the whole answer in one message.
-    await interaction.editReply({ content: first, ...(more.length === 0 ? { components: discordComponents(result.buttons) } : {}) });
+    await interaction.editReply({ content: first, ...(more.length === 0 ? { components: discordComponents(result.buttons) } : {}), ...discordFiles(result.image) });
   }
   const private_ = Boolean(result.ephemeral || command.ephemeralByDefault);
   for (const content of more) await interaction.followUp({ content, ...(private_ ? privateFlags : {}) });
@@ -253,10 +256,12 @@ export async function startDiscordBot({ token, applicationId, guildId } = {}) {
     console.log(`[discord] Logged in as ${c.user.tag}`);
     startEventListener({
       platform: "discord",
-      notify: async (channelId, text) => {
+      notify: async (channelId, text, { image } = {}) => {
         const channel = await client.channels.fetch(channelId);
         if (!channel?.isTextBased()) return;
-        for (const content of splitForDiscord(toDiscordMarkdown(text))) await channel.send(content);
+        const [first, ...more] = splitForDiscord(toDiscordMarkdown(text));
+        await channel.send({ content: first, ...discordFiles(image) });
+        for (const content of more) await channel.send(content);
       },
     });
   });

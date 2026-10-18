@@ -48,7 +48,23 @@ const { App } = bolt;
 const SLASH_COMMAND = process.env.SLACK_COMMAND || "/protean";
 
 /** Must match oauth_config.scopes.bot in docs/slack-app-manifest.yml. */
-export const SLACK_BOT_SCOPES = ["commands", "chat:write", "chat:write.public", "users:read", "channels:read", "groups:read"];
+export const SLACK_BOT_SCOPES = ["commands", "chat:write", "chat:write.public", "users:read", "channels:read", "groups:read", "files:write"];
+
+let warnedImages = false;
+/**
+ * Posts a reply's image (a chart) to the channel. Needs the files:write
+ * scope and the bot in the channel; without them the text still went out,
+ * so this only logs (once).
+ */
+async function postSlackImage(client, channelId, image, token) {
+  if (!image || !client) return;
+  try {
+    await client.files.uploadV2({ ...(token ? { token } : {}), channel_id: channelId, file: image.png, filename: image.name, title: image.name });
+  } catch (err) {
+    if (!warnedImages) console.warn(`[slack] Couldn't post a chart (${err.data?.error ?? err.message}) - the app needs the files:write scope (reinstall it) and to be in the channel.`);
+    warnedImages = true;
+  }
+}
 
 const REDIRECT_PATH = "/slack/oauth_redirect";
 
@@ -94,6 +110,7 @@ export async function handleSlashCommand({ command, ack, respond, client }) {
   // Public results post to the channel so the whole group sees votes and
   // proposals, same as Telegram; errors and private details stay ephemeral.
   await respond({ response_type: result.ephemeral ? "ephemeral" : "in_channel", text: result.text, mrkdwn: true, ...slackBlocks(result.text, result.buttons) });
+  if (!result.ephemeral) await postSlackImage(client, command.channel_id, result.image);
   // Something only the caller should see after a public reply (a proposal's edit link).
   if (result.privateFollowUp) await respond({ response_type: "ephemeral", text: result.privateFollowUp, mrkdwn: true });
 }
@@ -114,7 +131,7 @@ export function slackBlocks(text, rows = []) {
 }
 
 /** A button press: runs its command as the presser and posts the result in the channel (errors only to them). */
-export async function handleButton({ ack, body, action, respond }) {
+export async function handleButton({ ack, body, action, respond, client }) {
   await ack();
   const decoded = decodeButton(action?.value);
   if (!decoded || !BUTTON_COMMANDS.has(decoded[0]) || !COMMANDS[decoded[0]]) return;
@@ -137,6 +154,7 @@ export async function handleButton({ ack, body, action, respond }) {
   }
   const text = `<@${body.user.id}> → \`${SLASH_COMMAND} ${name} ${args.join(" ")}\`\n\n${result.text}`;
   await respond({ response_type: result.ephemeral ? "ephemeral" : "in_channel", replace_original: false, text, mrkdwn: true, ...(result.ephemeral ? {} : slackBlocks(text, result.buttons)) });
+  if (!result.ephemeral) await postSlackImage(client, channelId, result.image);
   if (result.privateFollowUp) await respond({ response_type: "ephemeral", replace_original: false, text: result.privateFollowUp, mrkdwn: true });
 }
 
@@ -191,12 +209,15 @@ async function adoptUnassignedChannels(client, installation) {
  * comes from the channel's workspace, recorded by recordSlackTeam.
  */
 export function createSlackNotify(app, store) {
-  return async (channelId, text) => {
-    if (!store) return app.client.chat.postMessage({ channel: channelId, text, mrkdwn: true });
-    const teamId = getSlackTeam(channelId);
-    if (!teamId) throw new Error("workspace not known yet - run any /protean command in the channel");
-    const installation = await store.fetchInstallation({ teamId, isEnterpriseInstall: false });
-    return app.client.chat.postMessage({ token: installation.bot.token, channel: channelId, text, mrkdwn: true });
+  return async (channelId, text, { image } = {}) => {
+    let token;
+    if (store) {
+      const teamId = getSlackTeam(channelId);
+      if (!teamId) throw new Error("workspace not known yet - run any /protean command in the channel");
+      token = (await store.fetchInstallation({ teamId, isEnterpriseInstall: false })).bot.token;
+    }
+    await app.client.chat.postMessage({ ...(token ? { token } : {}), channel: channelId, text, mrkdwn: true });
+    await postSlackImage(app.client, channelId, image, token);
   };
 }
 
