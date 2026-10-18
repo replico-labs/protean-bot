@@ -4431,7 +4431,10 @@ bot.callbackQuery(/^c:/, async (ctx) => {
     const who = [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" ") || ctx.from.username || "Someone";
     await ctx.api.sendMessage(message.chat.id, `👆 ${who}: ${text}`).catch(() => {});
   }
-  await bot.handleUpdate({
+  // Not awaited: sequentialize() queues this command behind the button
+  // press (same user), so waiting for it here would wait on ourselves and
+  // freeze that user's commands for good.
+  bot.handleUpdate({
     update_id: 0,
     message: {
       message_id: message.message_id,
@@ -4441,7 +4444,7 @@ bot.callbackQuery(/^c:/, async (ctx) => {
       text,
       entities: [{ type: "bot_command", offset: 0, length: name.length + 1 }],
     },
-  });
+  }).catch((err) => console.error("Button command failed:", err));
 });
 
 bot.catch((err) => {
