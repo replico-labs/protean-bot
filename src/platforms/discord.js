@@ -131,7 +131,9 @@ export function argsFromOptions(command, getOption) {
   for (const opt of command.options) {
     const value = getOption(opt.name);
     if (value === null || value === undefined || value === "") continue;
-    const text = String(value).trim();
+    // Backticks come along when an address is copied with "Copy Text" (the bot shows addresses as code).
+    const text = String(value).replace(/`/g, "").trim();
+    if (!text) continue;
     if (opt.rest || opt.name === "args") args.push(...text.split(/\s+/).filter(Boolean));
     else args.push(text);
   }

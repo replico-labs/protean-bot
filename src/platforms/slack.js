@@ -70,9 +70,33 @@ const REDIRECT_PATH = "/slack/oauth_redirect";
 
 /** Splits "/protean vote 3 for because" into ["vote", ["3", "for", "because"]]. */
 export function parseSlackText(text) {
-  const words = splitArgs(text);
+  const words = splitArgs(plainSlackText(text)).map(plainSlackWord).filter(Boolean);
   const [name = "help", ...args] = words;
   return [name.toLowerCase(), args];
+}
+
+/**
+ * What the user meant, from a slash command's raw text: Slack's links
+ * (<https://x|label>, <mailto:a@b|a@b>) back to their text, and its
+ * &amp; &lt; &gt; escapes decoded.
+ */
+function plainSlackText(text) {
+  return (text ?? "")
+    .replace(/<((?:https?|mailto):[^>|]*)(?:\|([^>]*))?>/g, (_, url, label) => label ?? url)
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+/**
+ * One word without the formatting Slack keeps when someone copies from a
+ * message: `0xabc…` (the bot shows addresses as code), ```0xabc```, and
+ * *bold*, _italic_ or ~struck~ around the whole word.
+ */
+function plainSlackWord(word) {
+  let w = word.replace(/`/g, "");
+  for (let m; (m = w.match(/^([*_~])(.+)\1$/)); ) w = m[2];
+  return w;
 }
 
 async function lookupIsAdmin(client, userId) {
