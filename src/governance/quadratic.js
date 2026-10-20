@@ -174,6 +174,11 @@ const DEFAULT_CONFIG = {
   proposalThreshold: 0n,
 };
 
+/** The rules a new quadratic DAO starts with on this network (also used by /switchmodel). */
+export function newDaoConfig() {
+  return creationConfig("quadratic", DEFAULT_CONFIG);
+}
+
 /**
  * Creates a Quadratic-governed DAO via the factory, using the bot's
  * operator wallet - same convention as contracts.js's createDaoOnChain
@@ -196,7 +201,7 @@ export async function createDAO(name, symbol, initialSupplyWhole, maxSupplyWhole
   const hash = await writeWithGasBuffer(walletClient, {
     ...factory,
     functionName: "createDAO",
-    args: [name, symbol, parseEther(String(initialSupplyWhole)), parseEther(String(maxSupplyWhole)), creationConfig("quadratic", DEFAULT_CONFIG)],
+    args: [name, symbol, parseEther(String(initialSupplyWhole)), parseEther(String(maxSupplyWhole)), newDaoConfig()],
   });
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
   const daoId = createdDaoId(receipt, factory);

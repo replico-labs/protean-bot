@@ -541,6 +541,11 @@ const DEFAULT_CONFIG = {
   maxOracleStaleness: 60n * 60n,
 };
 
+/** The rules a new sowellian DAO starts with on this network (also used by /switchmodel). */
+export function newDaoConfig() {
+  return creationConfig("sowellian", DEFAULT_CONFIG);
+}
+
 /** Creates a Sowellian-governed DAO via the factory, using the bot's operator wallet. */
 export async function createDAO(name, symbol, initialSupplyWhole, maxSupplyWhole) {
   if (!walletClient || !operatorAccount) {
@@ -556,7 +561,7 @@ export async function createDAO(name, symbol, initialSupplyWhole, maxSupplyWhole
   const hash = await writeWithGasBuffer(walletClient, {
     ...factory,
     functionName: "createDAO",
-    args: [name, symbol, parseEther(String(initialSupplyWhole)), parseEther(String(maxSupplyWhole)), creationConfig("sowellian", DEFAULT_CONFIG)],
+    args: [name, symbol, parseEther(String(initialSupplyWhole)), parseEther(String(maxSupplyWhole)), newDaoConfig()],
   });
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
   const daoId = createdDaoId(receipt, factory);

@@ -111,6 +111,82 @@
   },
   {
     "type": "function",
+    "name": "createForSwitch",
+    "inputs": [
+      {
+        "name": "name",
+        "type": "string",
+        "internalType": "string"
+      },
+      {
+        "name": "treasury",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "stakedToken",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "config",
+        "type": "tuple",
+        "internalType": "struct ConvictionGovernance.ConvictionGovernanceConfig",
+        "components": [
+          {
+            "name": "convictionGrowthRate",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "minThresholdConviction",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "thresholdMultiplier",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "proposalThreshold",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "timelockDelay",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "executionPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
+          }
+        ]
+      },
+      {
+        "name": "expectedGovernance",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "governance",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "creatorDAOs",
     "inputs": [
       {
@@ -229,6 +305,44 @@
   },
   {
     "type": "function",
+    "name": "predecessorOf",
+    "inputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "predictSwitchGovernance",
+    "inputs": [
+      {
+        "name": "previousGovernance",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "stakedGovernanceTokenImplementation",
     "inputs": [],
     "outputs": [
@@ -236,6 +350,25 @@
         "name": "",
         "type": "address",
         "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "switchNonce",
+    "inputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"
@@ -291,6 +424,37 @@
     "anonymous": false
   },
   {
+    "type": "event",
+    "name": "DAOSwitched",
+    "inputs": [
+      {
+        "name": "daoId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "previousGovernance",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "governance",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "treasury",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
     "type": "error",
     "name": "FailedDeployment",
     "inputs": []
@@ -310,5 +474,25 @@
         "internalType": "uint256"
       }
     ]
+  },
+  {
+    "type": "error",
+    "name": "NotTreasuryGovernance",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "StakingNotOwned",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "StakingTokenMismatch",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "UnexpectedGovernanceAddress",
+    "inputs": []
   }
 ]

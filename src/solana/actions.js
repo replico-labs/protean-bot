@@ -58,10 +58,16 @@ function keyList(text, what) {
   return keys;
 }
 
-/** The token a switch to a token model keeps: the DAO's own, or the one linked with it. */
-function daoMint(c) {
-  if (c.governance.mint) return c.governance.mint;
-  if (c.link.mint) return new PublicKey(c.link.mint);
+/**
+ * The token a switch to a token model keeps: the one on record at the hub,
+ * else (DAOs created before the record existed) the DAO's own or the one
+ * linked with it, which the switch then records. `recorded` says which.
+ */
+async function daoMint(c) {
+  const recorded = await v.readDaoToken(c.network, c.d.dao);
+  if (recorded) return { mint: recorded, recorded: true };
+  if (c.governance.mint) return { mint: c.governance.mint, recorded: false };
+  if (c.link.mint) return { mint: new PublicKey(c.link.mint), recorded: false };
   return fail("This DAO has no token, so it can't switch to a token model from the bot yet. Switch to board or create a new DAO.");
 }
 
@@ -75,13 +81,20 @@ function switchTo(model, extra) {
     if (c.model === model) fail(`This DAO already runs on ${LABEL[model]}.`);
     if (c.d.record.pendingSwitch) fail("A switch is already pending. Cancel it first with the `cancelswitch` action.");
     const opts = { ...extra?.(c) };
-    if (model !== "board") opts.mint = daoMint(c);
+    // Token models only set up with the hub's token on record; an older DAO
+    // without one gets it recorded first, in the same proposal.
+    const record = [];
+    if (model !== "board") {
+      const { mint, recorded } = await daoMint(c);
+      opts.mint = mint;
+      if (!recorded) record.push(v.stored(await v.setDaoTokenIx(c.network, c.d.dao, c.d.gp, c.d.treasury, c.d.treasury, mint)));
+    }
     const init = await v.initGovernanceIx(c.network, model, c.d.dao, c.d.treasury, c.d.treasury, opts);
     return {
-      instructions: [await v.proposeSwitchIx(c.network, c.d, model), v.stored(init)],
+      instructions: [...record, await v.proposeSwitchIx(c.network, c.d, model), v.stored(init)],
       // The new model's accounts are paid from the treasury's SOL.
       budget: [{ mint: v.SOL_ASSET, amount: 100_000_000n }],
-      summary: `switch this DAO to ${LABEL[model]} governance (same treasury), 2 days after it runs`,
+      summary: `switch this DAO to ${LABEL[model]} governance (same treasury${opts.mint ? ` and token \`${opts.mint.toBase58()}\`` : ""}), 2 days after it runs${record.length ? "; also records that token at the hub" : ""}`,
     };
   };
 }
@@ -219,6 +232,22 @@ export const ACTIONS = {
   },
   switchsowellian: { models: "all", args: [], about: "Switch to Sowellian governance (approval vote, YES/NO positions, measured outcomes), keeping the treasury and token.", build: switchTo("sowellian") },
   switchdecisionmarkets: { models: "all", args: [], about: "Switch to decision markets (pass/fail markets against SOL decide), keeping the treasury and token.", build: switchTo("decisionMarkets") },
+  settoken: {
+    models: "all",
+    args: [{ name: "<mint>", about: "the token's mint address" }],
+    about: "Change the DAO's token on record at the hub. Every model is set up with the recorded token, so this is the only way a later switch can move the DAO to another token; it doesn't move any deposits.",
+    async build(c) {
+      const mint = key(c.args[0], "the token's mint");
+      await v.mintInfo(c.network, mint);
+      const current = await v.readDaoToken(c.network, c.d.dao);
+      if (current?.equals(mint)) fail("That's already the DAO's token.");
+      return {
+        instructions: [v.stored(await v.setDaoTokenIx(c.network, c.d.dao, c.d.gp, c.d.treasury, c.d.treasury, mint))],
+        budget: [{ mint: v.SOL_ASSET, amount: 2_000_000n }],
+        summary: current ? `change the DAO's token from \`${current.toBase58()}\` to \`${mint.toBase58()}\`` : `record \`${mint.toBase58()}\` as the DAO's token`,
+      };
+    },
+  },
   cancelswitch: {
     models: "all",
     args: [],

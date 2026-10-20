@@ -84,6 +84,7 @@ All ten Vortexes models work: **token-weighted**, **quadratic**, **optimistic**,
 | `/dao`, `/treasury` | the DAO's treasury (SOL and tokens), rules, council or signers |
 | `/wallet`, `/balance` | your Solana wallet, its SOL, tokens and stake |
 | `/stake`, `/unstake <amount>` | stake the DAO's token (every model but board and decision markets) |
+| `/migrate` | after a model switch: move your stake from the models the DAO ran before into the current one |
 | `/tip <amount> <address\|treasury>` | hand out the starting tokens (the DAO's creator) |
 | `/propose <recipient> <amount> <SOL\|token> <description>` | a payment from the treasury, in SOL, the DAO's token or any token by mint |
 | `/listactions`, `/actioninfo`, `/proposeaction` | transfer SOL or tokens, mint tokens, board signers, conviction assets, switch to another model |
@@ -105,11 +106,13 @@ All ten Vortexes models work: **token-weighted**, **quadratic**, **optimistic**,
 - **Sortition** councils are drawn with [ORAO VRF](https://github.com/orao-network/solana-vrf): `/startsortition` asks ORAO for randomness (the bot's wallet pays ORAO's small fee) and freezes the pool; `/finalizesortition` seats the council once ORAO answers, usually within seconds. A draw ORAO never answers can be restarted after an hour (fast timings: 2 minutes). The first council is the one named at creation, and later councils have the same size.
 - **Sowellian** proposals take the EVM side's settings as `name=value` words with `/propose` or `/proposeaction`: `track=human|oracle`, `feed=SOL/USD` (or a Pyth feed ID), `goal=<price>`, `when=min|max`, `measure=7d`. Proposing, resolving and challenging each post a 100-token bond. The oracle is always Pyth: resolving reads the feed's sponsored price account (or a `PriceUpdateV2` account given to `/resolveviaoracle`), so no Pyth fee is paid. `/claimposition` collects winnings, refunds and bonds together.
 - **Decision markets** trade the DAO's token against SOL (wrapped and unwrapped by the bot). Proposals need `seed=<tokens> quote=<SOL>` - both markets' starting liquidity, from the proposer's own wallet; members need their own SOL to split. The bot never puts the treasury's money into a market.
-- **Switching models.** The `switch...` actions move a DAO to another model with the same treasury and token. The switch applies 2 days after its proposal runs; the bot applies it then (the next time anyone uses the DAO, or from the notifier) and updates the chat.
+- **Switching models.** The `switch...` actions move a DAO to another model with the same treasury and token. The switch applies 2 days after its proposal runs; the bot applies it then (the next time anyone uses the DAO, or from the notifier) and updates the chat, telling members to run `/migrate`.
+- **The DAO's token** is on record at the hub (recorded when the bot creates the DAO), and every model is set up only with that token, so a switch can't quietly change it. The `settoken <mint>` action changes it deliberately. A DAO created before the record existed has it recorded by its next switch to a token model (the bot adds that step to the switch proposal).
+- **Moving stake after a switch.** Each model keeps the DAO's deposits in its own vault, so stake stays in the old model's vault after a switch. `/migrate` finds it in every model the DAO ran before (from the DAO's address alone), withdraws it - first taking back Conviction support or leaving an old Sortition draw pool if that holds it - and stakes it in the current model, or returns it to the wallet if the current model has no staking. Stake still locked by an open vote there is reported and left for later.
 - **Notifications.** Each platform's event listener also watches its Solana chats: new proposals, challenges, queued and executed proposals, cancellations, elections and recalls, council draws, Sowellian approvals and resolutions, and decision markets' outcomes.
 - **Not on Solana:** the EVM-only extras (wrappers, distributors, integrations). Those commands say so in a Solana chat; Opportunity Market commands work as usual. On Discord, `/propose`'s fields read target/value/data for EVM and recipient/amount/asset for Solana.
 
-`scripts/test-solana-local.mjs` runs these commands end to end against a local validator running the Vortexes programs, and `scripts/test-solana-new-models.mjs` does the same for liquid, sortition, Sowellian and decision markets (with a stand-in for ORAO and a Pyth price account loaded into the validator; its header says how).
+`scripts/test-solana-switch.mjs` checks the token record, a switch that keeps it, `settoken` and `/migrate` on a local validator. `scripts/test-solana-local.mjs` runs these commands end to end against a local validator running the Vortexes programs, and `scripts/test-solana-new-models.mjs` does the same for liquid, sortition, Sowellian and decision markets (with a stand-in for ORAO and a Pyth price account loaded into the validator; its header says how).
 
 ## Commands
 
@@ -151,6 +154,22 @@ Each service keeps the links in memory (re-read every 10 s), so commands don't w
 - `/actioninfo <actionId>` — an action's arguments, options, and the sources its contract addresses were checked against
 - `/propose <target> <value> <data> <description>` — raw calldata, for anything else
 - `/vote <id> for|against|abstain [reason]` · `/queue <id>` · `/execute <id> [nativeValue]` · `/cancel <id>`
+- `/switchmodel <model> [council or signers…] [description]` — proposes moving the DAO to another governance model (EVM; see [Switching models](#switching-models))
+
+### Switching models
+
+`/switchmodel quadratic` (or any other model) creates one proposal on the DAO's current governance. When it executes, the target model's factory deploys only a new governance contract on the DAO's existing Treasury and staking contract, and the Treasury, token and staking contract are handed to it in the same transaction. Nobody re-stakes: balances and voting power carry straight over. Delegate and Sortition take a starting council, and Board its signers, as addresses after the model; the new governance starts with the same rules a new DAO of that model gets. Sowellian and Decision Markets DAOs add their usual `name=value` proposal settings.
+
+Before proposing, the bot checks the switch against the chain: the current governance must still control the Treasury, the target factory must support switching, and the deploy is simulated as the governance itself, so a switch that would fail is refused before anyone votes. It shows the new governance's address in the proposal reply.
+
+Once the proposal executes, the event listener sees the Treasury's new governance (`predecessorOf` on the factory that deployed it), moves the chat's link to it, and posts a notice. The old governance stays on record: stake still backing a proposal on an old Conviction governance stays locked until its owner runs `/withdrawsupport`, which reaches the old governance after the switch.
+
+Limits:
+- **The network's factories must be the current ones** (Spaces with `createForSwitch`). Until an admin redeploys them and updates the factory addresses, `/switchmodel` says so.
+- **DAOs from older factories** have their staking contract owned by that factory, so it isn't handed over (voting works the same), and they can't switch into Conviction.
+- **A DAO whose Treasury sits behind a GuardWrapper** can't switch through the bot yet.
+- **A Board DAO that never had a token** can't switch to a token model. One that came from a token model finds its token again through the governance it replaced.
+- **Solana DAOs** switch through the hub (`propose_switch` / `apply_switch`); see [Solana (Vortexes)](#solana-vortexes).
 
 ### Model-specific
 | Model | Commands |
@@ -417,6 +436,8 @@ Sowellian oracle proposals need no keeper: `/resolveviaoracle` posts Pyth's pric
 `node scripts/test-evm-models.mjs --network monad-testnet` runs all ten models' lifecycles side by side through the bot's own adapters: a fresh DAO per model, proposals voted (or confirmed, supported, challenged, traded) through to execution with a real treasury payment, plus delegate elections and recalls, a sortition draw, a challenged optimistic vote, a Sowellian adjudication, a Sowellian proposal resolved by a live Pyth price (`sowellianOracle`, passed on Monad testnet: the ETH/USD feed looked up on Hermes, a signed update posted, read through `PYTH_PRICE_ADAPTER`) and a decision-market finalization. It uses the bot's `.env` (operator key, factory addresses, `SORTITION_RANDOMNESS_SOURCE`, `PYTH_PRICE_ADAPTER`, and `PYTH_API_KEY` if your Hermes needs one), creates its DAOs with fast timings whatever the bot's own setting, and writes a report of every failed step and its revert to `data/evm-tests/`. About 20 minutes; `--models board,conviction` runs a subset. Throwaway member wallets get their leftover gas swept back to the operator.
 
 To try it on a local chain first: start `anvil --chain-id 10143 --block-time 1`, build Spaces (`FOUNDRY_PROFILE=size-limited forge build`, plus `forge build test/PythAdapters.t.sol` for the stand-in Entropy), run `node scripts/deploy-local-evm.mjs > local.env`, and run the test with those variables, `BLOCK_TIME_MS=1000` and an anvil account as `OPERATOR_PRIVATE_KEY`.
+
+`scripts/test-evm-switch.mjs` runs model switching end to end on a local anvil chain through the same code `/switchmodel` uses: one DAO goes token-weighted → quadratic → board → conviction → token-weighted, each a real proposal that passes and executes, checking the Treasury, token and staking contract follow and nobody's stake moves (start anvil with `--code-size-limit 100000 --prune-history`, deploy with `deploy-local-evm.mjs`, then `node --env-file=local.env scripts/test-evm-switch.mjs`).
 
 `<PREFIX>_FAST_TIMINGS=true` (`FAST_TIMINGS` on Monad testnet) gives the bot's own new DAOs the same short periods, for trying flows by hand. Testnets only. `<PREFIX>_FAST_SCALE` multiplies them: `0.5` gives ~1 minute votes and 30 second timelocks, `0.25` ~30 seconds and 15 seconds (`FAST_SCALE` on Monad testnet); it only affects DAOs created after it's set.
 

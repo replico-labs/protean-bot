@@ -429,6 +429,20 @@ const DEFAULT_CONFIG_WITHOUT_COUNCIL_SIZE = {
 };
 
 /**
+ * The rules a new delegate DAO starts with on this network (also used by
+ * /switchmodel): council size from the starting council, quorum a
+ * majority of it, rounded up.
+ */
+export function newDaoConfig(initialCouncil) {
+  const councilSize = initialCouncil.length;
+  return {
+    ...creationConfig("delegate", DEFAULT_CONFIG_WITHOUT_COUNCIL_SIZE),
+    councilSize,
+    councilQuorum: Math.ceil((councilSize + 1) / 2),
+  };
+}
+
+/**
  * Creates a Delegate-governed DAO via the factory, using the bot's
  * operator wallet. `initialCouncil` is required - there's no sensible
  * default for who the starting council actually is. councilSize and
@@ -447,12 +461,7 @@ export async function createDAO(name, symbol, initialSupplyWhole, maxSupplyWhole
     throw new Error("initialCouncil is required - at least one address must be supplied");
   }
 
-  const councilSize = initialCouncil.length;
-  const config = {
-    ...creationConfig("delegate", DEFAULT_CONFIG_WITHOUT_COUNCIL_SIZE),
-    councilSize,
-    councilQuorum: Math.ceil((councilSize + 1) / 2),
-  };
+  const config = newDaoConfig(initialCouncil);
 
   const factory = { address: getAddress(factoryAddress), abi: factoryAbi };
 

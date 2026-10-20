@@ -479,7 +479,7 @@ async function assetLines(network, d, g, tok, now) {
 // topic still works; it just isn't listed.
 const HELP_SECTIONS = [
   ["setup", "Setup", ["network", "unregister"]],
-  ["wallet", "Your wallet", ["wallet", "balance", "stake", "unstake"]],
+  ["wallet", "Your wallet", ["wallet", "balance", "stake", "unstake", "migrate"]],
   ["dao", "The DAO", ["dao", "treasury", "tip", "proposals", "proposal"]],
   ["proposing", "Proposing", ["propose", "proposeaction", "listactions", "actioninfo"]],
   ["deciding", "Deciding", ["vote", "delegate", "undelegate", "challenge", "support", "withdrawsupport", "mysupport", "assets", "confirm", "revoke", "queue", "execute", "cancel"]],
@@ -644,6 +644,62 @@ const COMMANDS = {
       const kp = await member(ctx, network);
       const sig = await v.withdraw(network, model, kp, d, governance, raw);
       return reply(`✅ Unstaked ${tok.fmt(raw)} ${tok.symbol}.\n${explorerUrl(network, "tx", sig)}`);
+    },
+  },
+
+  migrate: {
+    usage: "",
+    description: "Move your stake from models this DAO ran before into the current one",
+    async run(ctx) {
+      const { network, d, model, governance, link } = await loadDao(ctx);
+      const kp = await member(ctx, network, 200);
+      const me = kp.publicKey;
+      // Each model keeps the DAO's deposits in its own vault, found from the
+      // DAO's address alone: look in every one the DAO isn't using now.
+      const found = [];
+      for (const old of v.STAKE_MODELS) {
+        if (old === model || !network.programs[old]) continue;
+        const od = v.addresses(network, d.dao, network.programs[old]);
+        const voter = await v.readVoter(network, old, od.voter(me)).catch(() => null);
+        if (voter && BigInt(voter.amount.toString()) > 0n) found.push({ old, od, voter, amount: BigInt(voter.amount.toString()) });
+      }
+      if (found.length === 0) return reply(`You have no stake left in models this DAO ran before - nothing to move.`);
+
+      const target = v.STAKE_MODELS.includes(model) ? governance.mint : null;
+      const lines = [];
+      let moved = 0n;
+      let mint = target;
+      let decimals = target ? (await v.mintInfo(network, target)).decimals : null;
+      for (const { old, od, voter, amount } of found) {
+        const og = await v.readGovernance(network, old, od.governance);
+        const label = MODEL_LABEL[old];
+        const oldDecimals = (await v.mintInfo(network, og.mint)).decimals;
+        const fmt = `${v.formatUnits(amount, oldDecimals)} ${link.symbol ?? "tokens"}`;
+        if (mint && !og.mint.equals(mint)) {
+          lines.push(`• ${label}: ${fmt} of another token (\`${og.mint.toBase58()}\`) - left there; the DAO changed its token since.`);
+          continue;
+        }
+        try {
+          // What would hold the stake there: support for an old Conviction
+          // proposal, or a seat in an old Sortition draw pool.
+          if (old === "conviction" && voter.supporting && !voter.supporting.equals(PublicKey.default)) await v.withdrawSupport(network, kp, od, voter.supporting);
+          if (old === "sortition" && voter.eligible) await v.leavePool(network, kp, od);
+          await v.withdraw(network, old, kp, od, og, amount);
+          moved += amount;
+          mint ??= og.mint;
+          decimals ??= oldDecimals;
+          lines.push(`• ${label}: took out ${fmt}.`);
+        } catch (err) {
+          lines.push(`• ${label}: ${fmt} stays there for now - ${err.message}`);
+        }
+      }
+      if (moved > 0n && target) {
+        await v.deposit(network, model, kp, d, governance, moved);
+        lines.push("", `✅ Staked ${v.formatUnits(moved, decimals)} ${link.symbol ?? "tokens"} in ${MODEL_LABEL[model]}.`);
+      } else if (moved > 0n) {
+        lines.push("", `✅ ${v.formatUnits(moved, decimals)} ${link.symbol ?? "tokens"} are back in your wallet (${MODEL_LABEL[model]} has no staking).`);
+      }
+      return reply(lines.join("\n"));
     },
   },
 

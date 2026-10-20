@@ -401,6 +401,30 @@ async function createDaoIx(network, creator, createKey, name, gp) {
   return { dao, ix };
 }
 
+/** The hub's record of a DAO's token: every token model's setup checks it. */
+export function daoTokenAddress(network, dao) {
+  return pda([seed("token"), dao.toBuffer()], network.programs.hub);
+}
+
+/** The DAO's token on record at the hub, or null (DAOs created before the record existed). */
+export async function readDaoToken(network, dao) {
+  const record = await clients(network).hub.account.daoToken.fetchNullable(daoTokenAddress(network, dao));
+  return record?.mint ?? null;
+}
+
+/**
+ * The hub's set_dao_token: the creator, right after create_dao (before
+ * the first governance is set up), or the treasury inside a proposal - a
+ * deliberate change of token, or a first record for an older DAO. `gp` is
+ * the program running the DAO now.
+ */
+export async function setDaoTokenIx(network, dao, gp, authority, payer, mint) {
+  return clients(network)
+    .hub.methods.setDaoToken(mint)
+    .accountsStrict({ authority, payer, dao, governance: addresses(network, dao, gp).governance, daoToken: daoTokenAddress(network, dao), systemProgram: SystemProgram.programId })
+    .instruction();
+}
+
 /**
  * `init_governance` for `model` on hub DAO `dao`: by its creator right
  * after create_dao, or by the treasury (authority and payer) inside a
@@ -431,6 +455,7 @@ export async function initGovernanceIx(network, model, dao, authority, payer, op
         hubDao: dao,
         governance: a.governance,
         baseMint: opts.mint,
+        daoToken: daoTokenAddress(network, dao),
         quoteMint,
         baseVault: a.baseVault,
         quoteVault: a.quoteVault,
@@ -440,7 +465,7 @@ export async function initGovernanceIx(network, model, dao, authority, payer, op
       })
       .instruction();
   }
-  const accounts = { authority, payer, hubDao: dao, governance: a.governance, mint: opts.mint, vault: a.vault, tokenProgram, systemProgram: SystemProgram.programId };
+  const accounts = { authority, payer, hubDao: dao, governance: a.governance, mint: opts.mint, daoToken: daoTokenAddress(network, dao), vault: a.vault, tokenProgram, systemProgram: SystemProgram.programId };
   switch (model) {
     case "tokenWeighted":
     case "quadratic":
@@ -467,9 +492,9 @@ export async function initGovernanceIx(network, model, dao, authority, payer, op
 /**
  * A DAO with a new token, on any token model: mints `initialSupply` to the
  * operator (handed out with /tip, as on EVM), creates the DAO in the hub
- * with its rules, then makes the treasury the token's mint authority, so
- * new tokens can only ever be minted by a passed proposal. Delegate and
- * sortition also take their first `council`.
+ * with its token on record and its rules, then makes the treasury the
+ * token's mint authority, so new tokens can only ever be minted by a
+ * passed proposal. Delegate and sortition also take their first `council`.
  */
 export async function createTokenDao(network, { name, initialSupply, model = "tokenWeighted", council }) {
   if (!TOKEN_MODELS.includes(model)) throw new Error(`${model} has no token`);
@@ -493,8 +518,9 @@ export async function createTokenDao(network, { name, initialSupply, model = "to
   const createKey = Keypair.generate();
   const { dao, ix: create } = await createDaoIx(network, operator.publicKey, createKey.publicKey, name, gp);
   const a = addresses(network, dao, gp);
+  const record = await setDaoTokenIx(network, dao, gp, operator.publicKey, operator.publicKey, mint.publicKey);
   const init = await initGovernanceIx(network, model, dao, operator.publicKey, operator.publicKey, { mint: mint.publicKey, council });
-  await send(network, [create, init], [operator, createKey]);
+  await send(network, [create, record, init], [operator, createKey]);
 
   await send(network, [createSetAuthorityInstruction(mint.publicKey, operator.publicKey, AuthorityType.MintTokens, a.treasury)], [operator]);
   return { dao, treasury: a.treasury, governance: a.governance, mint: mint.publicKey };

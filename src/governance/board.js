@@ -206,6 +206,11 @@ const DEFAULT_CONFIG_WITHOUT_REQUIRED_APPROVALS = {
   executionPeriod: 60n * 60n * 24n * 7n,
 };
 
+/** The rules a new Board starts with (also used by /switchmodel): a majority of signers, rounded up. */
+export function newDaoConfig(initialSigners) {
+  return { ...creationConfig("board", DEFAULT_CONFIG_WITHOUT_REQUIRED_APPROVALS), requiredApprovals: Math.ceil((initialSigners.length + 1) / 2) };
+}
+
 /**
  * Creates a Board-governed DAO via the factory, using the bot's
  * operator wallet. Genuinely different signature from every other
@@ -229,8 +234,7 @@ export async function createDAO(name, initialSigners) {
     throw new Error("initialSigners is required - at least one address must be supplied");
   }
 
-  const requiredApprovals = Math.ceil((initialSigners.length + 1) / 2);
-  const config = { ...creationConfig("board", DEFAULT_CONFIG_WITHOUT_REQUIRED_APPROVALS), requiredApprovals };
+  const config = newDaoConfig(initialSigners);
 
   const factory = { address: getAddress(factoryAddress), abi: factoryAbi };
 

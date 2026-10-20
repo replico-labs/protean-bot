@@ -398,6 +398,81 @@
       ]
     },
     {
+      "name": "set_dao_token",
+      "docs": [
+        "Records the mint the DAO's token-based governance uses. The creator",
+        "records it once, after create_dao and before setting up the first",
+        "governance; after that only a passed proposal (the treasury) can",
+        "change it, for a deliberate move to another token."
+      ],
+      "discriminator": [
+        213,
+        50,
+        80,
+        210,
+        236,
+        22,
+        154,
+        252
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "docs": [
+            "The creator (first record, before the first governance is set up)",
+            "or the treasury (a passed proposal)."
+          ],
+          "signer": true
+        },
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "dao"
+        },
+        {
+          "name": "governance",
+          "docs": [
+            "it has been set up yet."
+          ]
+        },
+        {
+          "name": "dao_token",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  111,
+                  107,
+                  101,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "dao"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "mint",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
       "name": "set_model",
       "docs": [
         "Approves (or disables) a governance program."
@@ -494,6 +569,19 @@
       ]
     },
     {
+      "name": "DaoToken",
+      "discriminator": [
+        184,
+        109,
+        82,
+        17,
+        243,
+        14,
+        52,
+        162
+      ]
+    },
+    {
       "name": "Hub",
       "discriminator": [
         143,
@@ -532,6 +620,19 @@
         59,
         188,
         88
+      ]
+    },
+    {
+      "name": "DaoTokenSet",
+      "discriminator": [
+        124,
+        66,
+        73,
+        98,
+        122,
+        2,
+        168,
+        36
       ]
     },
     {
@@ -684,6 +785,53 @@
           },
           {
             "name": "governance_program",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DaoToken",
+      "docs": [
+        "The DAO's token: `[TOKEN_SEED, dao]`. Token-based governance programs",
+        "only set a DAO up with this mint."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "dao",
+            "type": "pubkey"
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DaoTokenSet",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "dao",
+            "type": "pubkey"
+          },
+          {
+            "name": "previous",
+            "docs": [
+              "`Pubkey::default()` when first recorded."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "mint",
             "type": "pubkey"
           }
         ]

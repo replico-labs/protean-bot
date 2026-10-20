@@ -16,6 +16,7 @@ const GROUP = [
   ["propose", "Propose a treasury payment"],
   ["proposeaction", "Propose any listed action"],
   ["listactions", "Actions a proposal can take"],
+  ["switchmodel", "Propose switching governance model"],
   ["perps", "Perps: positions, prices, trade proposals"],
   ["desk", "Trading desk: appointed trader, limits, trades"],
   ["proposals", "Recent proposals"],

@@ -290,6 +290,11 @@ const DEFAULT_CONFIG = {
   proposalThreshold: 0n,
 };
 
+/** The rules a new liquid DAO starts with on this network (also used by /switchmodel). */
+export function newDaoConfig() {
+  return creationConfig("liquid", DEFAULT_CONFIG);
+}
+
 /** Creates a Liquid-governed DAO via the factory, using the bot's operator wallet - same convention as every other createDAO in this folder. */
 export async function createDAO(name, symbol, initialSupplyWhole, maxSupplyWhole) {
   if (!walletClient || !operatorAccount) {
@@ -305,7 +310,7 @@ export async function createDAO(name, symbol, initialSupplyWhole, maxSupplyWhole
   const hash = await writeWithGasBuffer(walletClient, {
     ...factory,
     functionName: "createDAO",
-    args: [name, symbol, parseEther(String(initialSupplyWhole)), parseEther(String(maxSupplyWhole)), creationConfig("liquid", DEFAULT_CONFIG)],
+    args: [name, symbol, parseEther(String(initialSupplyWhole)), parseEther(String(maxSupplyWhole)), newDaoConfig()],
   });
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
   const daoId = createdDaoId(receipt, factory);

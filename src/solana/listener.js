@@ -160,7 +160,11 @@ async function settleSwitch(network, d, notify, chat) {
   await v.applySwitch(network, d);
   const model = v.modelOf(network, pending.program);
   if (model) updateChatSolana(chat.chatId, { model }, chat.platform);
-  await notify(chat.chatId, `🔀 *${plain(d.record.name)}* now runs on ${LABEL[model] ?? "a new"} governance, with the same treasury.`);
+  const stakes = v.STAKE_MODELS.includes(d.model);
+  const lines = [`🔀 *${plain(d.record.name)}* now runs on ${LABEL[model] ?? "a new"} governance, with the same treasury.`];
+  // Each model keeps its own vault: stake doesn't follow by itself.
+  if (stakes) lines.push(`Your stake is still in the ${LABEL[d.model] ?? "old"} vault. Run /migrate to move it${v.STAKE_MODELS.includes(model) ? " here" : " back to your wallet"}.`);
+  await notify(chat.chatId, lines.join("\n"));
 }
 
 /** Starts polling Solana DAOs linked on `platform`; returns a function that stops it. Does nothing unless SOLANA_ENABLED. */

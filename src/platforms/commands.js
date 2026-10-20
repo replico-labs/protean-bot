@@ -9,6 +9,7 @@ import { runSolanaCommand } from "../solana/commands.js";
 import { SETUP_COMMANDS } from "./commands/setup.js";
 import { TOKEN_COMMANDS } from "./commands/tokens.js";
 import { MODEL_COMMANDS } from "./commands/models.js";
+import { SWITCH_COMMANDS } from "./commands/switch.js";
 import { SOWELLIAN_COMMANDS } from "./commands/sowellian.js";
 import { MARKET_COMMANDS } from "./commands/markets.js";
 import { OPPORTUNITY_COMMANDS } from "./commands/opportunity.js";
@@ -130,6 +131,7 @@ export const COMMANDS = {
   ...SETUP_COMMANDS,
   ...TOKEN_COMMANDS,
   ...MODEL_COMMANDS,
+  ...SWITCH_COMMANDS,
   ...SOWELLIAN_COMMANDS,
   ...MARKET_COMMANDS,
   ...OPPORTUNITY_COMMANDS,

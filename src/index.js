@@ -615,7 +615,8 @@ function telegramHelpSections(chatId) {
     proposing.push(
       "/listactions — ready-made actions this DAO can propose, including swaps, lending, staking and more on this network's protocols",
       "/proposeaction `<actionId> <args...> <description>` — propose one of them; the bot encodes every step",
-      "/actioninfo `<actionId>` — what any action does, its arguments and their units (and, for protocol actions, where addresses were checked)"
+      "/actioninfo `<actionId>` — what any action does, its arguments and their units (and, for protocol actions, where addresses were checked)",
+      "/switchmodel `<model> [council or signers…] [description]` — propose moving this DAO to another governance model; the Treasury, token and everyone's stake stay put"
     );
     if (model === "sowellian") proposing.push("/feeds `<search>` — find a Pyth price feed for an oracle proposal's `feed=`, e.g. /feeds eth");
     section("proposals", `Proposals (${model})`, proposing);
@@ -2285,6 +2286,8 @@ async function runSharedCommand(ctx, name) {
 }
 
 bot.command("desk", (ctx) => runSharedCommand(ctx, "desk"));
+bot.command("switchmodel", (ctx) => runSharedCommand(ctx, "switchmodel"));
+bot.command("migrate", (ctx) => runSharedCommand(ctx, "migrate"));
 
 /*//////////////////////////////////////////////////////////////
                             /proposeaction
@@ -3121,34 +3124,9 @@ bot.command("support", async (ctx) => {
   }
 });
 
-bot.command("withdrawsupport", async (ctx) => {
-  const address = await requireDAO(ctx);
-  if (!address) return;
-  if (!isWalletStoreConfigured()) {
-    await ctx.reply("Wallets aren't set up on this bot yet - ask an admin.");
-    return;
-  }
-
-  const model = getChatModel(ctx.chat.id);
-  const adapter = getAdapter(model);
-  if (typeof adapter.withdrawSupport !== "function") {
-    await ctx.reply(`This DAO uses ${model} governance, which has no continuous support to withdraw.`);
-    return;
-  }
-
-  const account = await getOrCreateUserAccount(ctx.from.id);
-  const client = walletClientFor(account);
-  const statusMsg = await ctx.reply("⏳ Withdrawing your support…");
-
-  try {
-    await ensureGasFunded(account);
-    await adapter.withdrawSupport(client, address);
-    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, "✅ Support withdrawn. Your staked tokens are unlocked.");
-  } catch (err) {
-    console.error(err);
-    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `Couldn't withdraw support: ${err.shortMessage || err.message}`);
-  }
-});
+// Shared (src/platforms/commands/switch.js): also reaches a Conviction
+// governance this DAO switched away from.
+bot.command("withdrawsupport", (ctx) => runSharedCommand(ctx, "withdrawsupport"));
 
 bot.command("assets", async (ctx) => {
   const address = await requireDAO(ctx);

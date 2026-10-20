@@ -166,6 +166,11 @@ const DEFAULT_GOVERNANCE_CONFIG = {
   proposalThreshold: 0n,
 };
 
+/** The rules a new token-weighted DAO starts with on this network (also used by /switchmodel). */
+export function newTokenWeightedConfig() {
+  return creationConfig("tokenWeighted", DEFAULT_GOVERNANCE_CONFIG);
+}
+
 /**
  * Creates a DAO via the factory using the bot's operator wallet.
  *
@@ -194,7 +199,7 @@ export async function createDaoOnChain(name, symbol, initialSupplyWhole, maxSupp
       symbol,
       parseEther(String(initialSupplyWhole)),
       parseEther(String(maxSupplyWhole)),
-      creationConfig("tokenWeighted", DEFAULT_GOVERNANCE_CONFIG),
+      newTokenWeightedConfig(),
     ],
   });
 

@@ -434,5 +434,9 @@
  "6108": {
   "name": "ProposalDidNotPass",
   "msg": "The proposal didn't pass"
+ },
+ "6109": {
+  "name": "WrongMint",
+  "msg": "That isn't the DAO's token: change it with the hub's set_dao_token first"
  }
 }

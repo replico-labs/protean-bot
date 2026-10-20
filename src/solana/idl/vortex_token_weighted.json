@@ -356,6 +356,68 @@
           "name": "mint"
         },
         {
+          "name": "dao_token",
+          "docs": [
+            "The DAO's token on record at the hub (set_dao_token): setting up -",
+            "a switch included - only works with that mint."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  111,
+                  107,
+                  101,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "hub_dao"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                70,
+                189,
+                194,
+                34,
+                74,
+                135,
+                64,
+                159,
+                100,
+                73,
+                201,
+                85,
+                15,
+                216,
+                245,
+                80,
+                175,
+                196,
+                52,
+                211,
+                147,
+                173,
+                193,
+                149,
+                222,
+                67,
+                28,
+                48,
+                175,
+                252,
+                206,
+                177
+              ]
+            }
+          }
+        },
+        {
           "name": "vault",
           "writable": true,
           "pda": {
@@ -908,6 +970,30 @@
           },
           {
             "name": "executor_bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DaoToken",
+      "docs": [
+        "The DAO's token: `[TOKEN_SEED, dao]`. Token-based governance programs",
+        "only set a DAO up with this mint."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "dao",
+            "type": "pubkey"
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "bump",
             "type": "u8"
           }
         ]

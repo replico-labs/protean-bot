@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { getAllRegisteredDaos } from "./db.js";
+import { getAllRegisteredDaos, followGovernanceSwitch } from "./db.js";
 import { formatEther, parseEventLogs, toEventSelector, toHex } from "viem";
 import { InputFile } from "grammy";
 import { publicClient, walletClient } from "./config.js";
@@ -14,6 +14,7 @@ import { PROPOSAL_STATE_LABELS } from "./governance/common.js";
 import { proposalImage } from "./charts.js";
 import { proposalPageUrl } from "./proposalPages.js";
 import { deskExecuted } from "./desk.js";
+import { detectSwitch } from "./modelSwitch.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // One state file per platform process: Telegram keeps the original file
@@ -249,6 +250,7 @@ async function checkNetwork(notify, daos, currentBlock, state, save) {
             return [];
           });
           if (news.length) await notify(w.dao.chatId, news.join("\n")).catch(() => {});
+          await followSwitch(notify, w.dao);
         }
       }
       state[w.stateKey] = { ...state[w.stateKey], lastProcessedBlock: chunkEnd.toString() };
@@ -256,6 +258,29 @@ async function checkNetwork(notify, daos, currentBlock, state, save) {
     save();
     chunkStart = chunkEnd + 1n;
   }
+}
+
+/**
+ * A /switchmodel proposal just executed: the Treasury now answers to the
+ * new governance. Move the chat's link to it (keeping the old one on
+ * record) and say so. Anything else that executed costs one read.
+ */
+async function followSwitch(notify, dao) {
+  let moved;
+  try {
+    moved = await detectSwitch(dao);
+  } catch (err) {
+    console.error(`Event listener: switch check for ${dao.governanceAddress} failed:`, err.shortMessage ?? err.message);
+    return;
+  }
+  if (!moved) return;
+  followGovernanceSwitch(dao.chatId, dao.platform, moved.governance, moved.model);
+  const text = [
+    `🔀 This DAO now runs on *${moved.model}* governance: \`${moved.governance}\`.`,
+    `The Treasury, token and everyone's stake are unchanged, and this chat now follows the new governance. Proposals on the old ${dao.model} governance can't move the Treasury any more.`,
+    dao.model === "conviction" ? "Stake still backing an old Conviction proposal stays locked until its owner runs withdrawsupport." : null,
+  ].filter(Boolean);
+  await notify(dao.chatId, text.join("\n")).catch((err) => console.error(`Event listener: couldn't notify chat ${dao.chatId}:`, err.message));
 }
 
 /*//////////////////////////////////////////////////////////////

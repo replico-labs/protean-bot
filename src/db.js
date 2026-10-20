@@ -237,6 +237,28 @@ export function getChatGuardWrapper(chatId, platform = "telegram") {
 }
 
 /**
+ * A model switch executed (src/modelSwitch.js): the chat now follows the
+ * new governance, on the same network. The old one is kept in
+ * `previousGovernances`, newest first, so commands that still have
+ * business there (withdrawing old Conviction support) can find it.
+ */
+export function followGovernanceSwitch(chatId, platform, governanceAddress, model) {
+  updateDb((db) => {
+    const k = key(chatId, platform);
+    const entry = db[k];
+    if (!entry?.governanceAddress) return false;
+    const previous = { governanceAddress: entry.governanceAddress, model: entry.model ?? "tokenWeighted", until: Date.now() };
+    db[k] = { ...entry, governanceAddress, model, previousGovernances: [previous, ...(entry.previousGovernances ?? [])].slice(0, 5) };
+  });
+}
+
+/** The chat's most recent earlier governance of `model`, if it switched away from one. */
+export function getPreviousGovernance(chatId, model, platform = "telegram") {
+  const entry = readDb()[key(chatId, platform)];
+  return entry?.previousGovernances?.find((g) => g.model === model)?.governanceAddress ?? null;
+}
+
+/**
  * The chat's Perpl trading desk (src/desk.js): { address, trader, mandate,
  * pending: { [proposalId]: appointment } }, or null.
  */

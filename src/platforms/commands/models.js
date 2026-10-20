@@ -109,14 +109,8 @@ export const MODEL_COMMANDS = {
       return reply(`✅ Now backing proposal #${id} with your full staked balance.${note}`);
     },
   },
-  withdrawsupport: adapterWrite({
-    section: "Deciding",
-    models: ["conviction"],
-    description: "Stop backing your current proposal",
-    fn: "withdrawSupport",
-    notSupported: "This DAO uses {model} governance, which has no continuous support to withdraw.",
-    done: () => "✅ Support withdrawn. Your staked tokens are unlocked.",
-  }),
+  // withdrawsupport lives in ./switch.js: it also reaches a Conviction
+  // governance the DAO switched away from.
   mysupport: {
     section: "Deciding",
     models: ["conviction"],

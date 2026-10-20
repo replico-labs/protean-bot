@@ -307,6 +307,20 @@ const DEFAULT_CONFIG_WITHOUT_COUNCIL_SIZE = {
 };
 
 /**
+ * The rules a new sortition DAO starts with on this network (also used by
+ * /switchmodel): council size from the starting council, quorum a
+ * majority of it, rounded up.
+ */
+export function newDaoConfig(initialCouncil) {
+  const councilSize = initialCouncil.length;
+  return {
+    ...creationConfig("sortition", DEFAULT_CONFIG_WITHOUT_COUNCIL_SIZE),
+    councilSize,
+    councilQuorum: Math.ceil((councilSize + 1) / 2),
+  };
+}
+
+/**
  * Creates a Sortition-governed DAO via the factory, using the bot's
  * operator wallet. Both `randomnessSource` and `initialCouncil` are
  * required, with no sensible default for either - randomnessSource must
@@ -331,12 +345,7 @@ export async function createDAO(name, symbol, initialSupplyWhole, maxSupplyWhole
     throw new Error("initialCouncil is required - at least one address must be supplied");
   }
 
-  const councilSize = initialCouncil.length;
-  const config = {
-    ...creationConfig("sortition", DEFAULT_CONFIG_WITHOUT_COUNCIL_SIZE),
-    councilSize,
-    councilQuorum: Math.ceil((councilSize + 1) / 2),
-  };
+  const config = newDaoConfig(initialCouncil);
 
   const factory = { address: getAddress(factoryAddress), abi: factoryAbi };
 
