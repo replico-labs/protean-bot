@@ -16,10 +16,10 @@ const VOTE = ["tokenWeighted", "quadratic", "liquid", "sortition", "delegate"];
 // markets and Sowellian have their own finalize commands.
 const NO_QUEUE = new Set(["board", "decisionMarkets", "sowellian"]);
 
-const voteRow = (id) => [
-  { label: "✅ For", cmd: `vote ${id} for` },
-  { label: "❌ Against", cmd: `vote ${id} against` },
-  { label: "➖ Abstain", cmd: `vote ${id} abstain` },
+const voteRow = (id, command = "vote") => [
+  { label: "✅ For", cmd: `${command} ${id} for` },
+  { label: "❌ Against", cmd: `${command} ${id} against` },
+  { label: "➖ Abstain", cmd: `${command} ${id} abstain` },
 ];
 
 /** What a member can do with a proposal in `state` ("new" right after it's made). */
@@ -35,6 +35,9 @@ function actionRows(model, id, state) {
       return open ? [[{ label: "💪 Support", cmd: `support ${id}` }]] : [];
     case "board":
       return open ? [[{ label: "✍️ Confirm", cmd: `confirm ${id}` }]] : [];
+    case "sowellian":
+      // The approval vote (whether it opens for positions); EVM labels it ApprovalVoting.
+      return open || state === "ApprovalVoting" ? [voteRow(id, "castapprovalvote")] : [];
     default:
       return VOTE.includes(model) && open ? [voteRow(id)] : [];
   }
@@ -73,7 +76,7 @@ export function decodeButton(data) {
 }
 
 /** Only these commands can come from a button - a forged payload can't run anything else. */
-export const BUTTON_COMMANDS = new Set(["vote", "challenge", "support", "confirm", "queue", "execute", "proposal", "help"]);
+export const BUTTON_COMMANDS = new Set(["vote", "castapprovalvote", "challenge", "support", "confirm", "queue", "execute", "proposal", "help"]);
 
 /** Telegram's inline keyboard for `rows`. */
 export function telegramKeyboard(rows) {

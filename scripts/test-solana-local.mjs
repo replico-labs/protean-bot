@@ -77,8 +77,8 @@ const run = async (chatId, userId, line) => {
   console.log(`\n> /${line}  [chat ${chatId}, user ${userId}]\n${r ? r.text : "(not a Solana matter - falls through)"}`);
   return r?.text ?? null;
 };
-const addressIn = (text) => text.match(/`([1-9A-HJ-NP-Za-km-z]{32,44})`/)[1];
-const field = (text, label) => text.match(new RegExp(`${label}: \`([^\`]+)\``))[1];
+const addressIn = (text) => text.match(/(?:^|[\s`])([1-9A-HJ-NP-Za-km-z]{32,44})(?=[\s`]|$)/)[1];
+const field = (text, label) => text.match(new RegExp(`${label}: \`?([^\`\\s]+)`))[1];
 const fund = async (to, sol) =>
   sendAndConfirmTransaction(conn, new Transaction().add(SystemProgram.transfer({ fromPubkey: op.publicKey, toPubkey: new PublicKey(to), lamports: Math.round(sol * LAMPORTS_PER_SOL) })), [op]);
 const solOf = async (k) => conn.getBalance(new PublicKey(k));

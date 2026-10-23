@@ -5,6 +5,7 @@ import { monad, monadTestnet, base, baseSepolia, hyperEvm, hyperliquidEvmTestnet
 import { failOnRevert, monotonicReads } from "./receipts.js";
 import { pacedFetch } from "./rpcPacing.js";
 import { stickyFallback } from "./rpcFallback.js";
+import { link } from "./links.js";
 
 /**
  * Every chain the governance side of the bot can run on. Opportunity
@@ -387,9 +388,15 @@ export function explorerTxUrl(hash, network = currentNetwork()) {
   return network.explorerUrl ? `${network.explorerUrl}/tx/${hash}` : null;
 }
 
-/** "Explorer: <url>/address/<addr>" on the current network, or null if it has no explorer. */
+/** An address's explorer page on `network`, or null if it has no explorer. */
+export function explorerAddressUrl(address, network = currentNetwork()) {
+  return network.explorerUrl ? `${network.explorerUrl}/address/${address}` : null;
+}
+
+/** "🔍 View on explorer" linking `address` on the current network, or null if it has no explorer. */
 export function explorerAddressLine(address, network = currentNetwork()) {
-  return network.explorerUrl ? `Explorer: ${network.explorerUrl}/address/${address}` : null;
+  const url = explorerAddressUrl(address, network);
+  return url ? `🔍 ${link("View on explorer", url)}` : null;
 }
 
 /** Whether `word` means "native currency" here: the chain's symbol (MON, ETH, HYPE) or "native". */

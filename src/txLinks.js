@@ -9,6 +9,7 @@
  * recorded.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
+import { link } from "./links.js";
 
 const store = new AsyncLocalStorage();
 
@@ -31,10 +32,11 @@ export function trackedChatId() {
   return store.getStore()?.chatId ?? null;
 }
 
-/** The links not shown yet, as lines for the end of a reply ("" if none); marks them shown. */
+/** The links not shown yet, as a line for the end of a reply ("" if none); marks them shown. */
 export function takeTxLinks() {
   const s = store.getStore();
   if (!s?.pending.length) return "";
   const urls = [...new Set(s.pending.splice(0))];
-  return "\n\n" + urls.map((u) => `🔗 ${u}`).join("\n");
+  if (urls.length === 1) return `\n\n🔗 ${link("View transaction", urls[0])}`;
+  return `\n\n🔗 Transactions: ${urls.map((u, i) => link(String(i + 1), u)).join(" · ")}`;
 }

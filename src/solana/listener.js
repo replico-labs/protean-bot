@@ -7,6 +7,7 @@ import { SOLANA_ENABLED, getSolanaNetwork, getSolanaOperator, explorerUrl } from
 import { proposalPageUrl } from "../proposalPages.js";
 import * as v from "./vortex.js";
 import { solanaProposalImage } from "./charts.js";
+import { link } from "../links.js";
 
 /**
  * Notifications for chats linked to a Solana DAO - the Solana side of
@@ -214,7 +215,7 @@ async function postVoteCloses(network, d, chat, open, notify) {
     const image = await solanaProposalImage({ network, networkId: chat.link.network, model: d.model, governance: d.governance, id, p, g, now, state, skipEmpty: true });
     const page = proposalPageUrl(chat.link.network, d.governance.toBase58(), id);
     const unchallenged = d.model === "optimistic" && !p.challenged ? " Nobody challenged it." : "";
-    const text = `🗳️ Voting on proposal #${id}${d.record.name ? ` in *${plain(d.record.name)}*` : ""} has closed: *${state}*.${image ? "" : unchallenged}${page ? `\n📄 ${page}` : ""}`;
+    const text = `🗳️ Voting on proposal #${id}${d.record.name ? ` in *${plain(d.record.name)}*` : ""} has closed: *${state}*.${image ? "" : unchallenged}${page ? `\n📄 ${link("Proposal page", page)}` : ""}`;
     await notify(chat.chatId, text, { image }).catch((err) => console.error(`[solana listener] couldn't notify ${chat.chatId}:`, err.message));
   }
 }
@@ -259,7 +260,7 @@ export function startSolanaListener({ platform, notify }, pollIntervalMs = 30_00
             if (!text) continue;
             // Like the EVM notices: the transaction reported, and a new proposal's page.
             const page = /^proposalCreated$/i.test(ev.name) ? proposalPageUrl(chat.link.network, d.governance.toBase58(), String(ev.data.id)) : null;
-            const links = `\n🔗 ${explorerUrl(network, "tx", ev.signature)}${page ? `\n📄 ${page}` : ""}`;
+            const links = `\n🔗 ${link("View transaction", explorerUrl(network, "tx", ev.signature))}${page ? ` · 📄 ${link("Proposal page", page)}` : ""}`;
             await notify(chat.chatId, text + links).catch((err) => console.error(`[solana listener] couldn't notify ${chat.chatId}:`, err.message));
           }
         }

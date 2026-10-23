@@ -3,7 +3,7 @@ import { takeModelOptions, checkModelOptions, modelOptionsUsage, proposeForModel
 import { feedsText } from "../../governance/sowellian.js";
 import { solanaWalletLine } from "../../solana/commands.js";
 import { isAddress, getAddress, formatEther } from "viem";
-import { currentNetwork, takeNetworkArg, runOnNetwork, getNetwork, ENABLED_NETWORKS, describeNetwork, explorerAddressLine } from "../../networks.js";
+import { currentNetwork, takeNetworkArg, runOnNetwork, getNetwork, ENABLED_NETWORKS, describeNetwork, explorerAddressLine, explorerAddressUrl } from "../../networks.js";
 import { registerChat, recordChatLinker, getChatDAO, getChatModel, unregisterChat, getChatNftWrapper, getChatGuardWrapper, getChatNetwork, getRegisteredToken } from "../../db.js";
 import { getProposalCount, getTreasuryBalance, getVotingPower } from "../../contracts.js";
 import { getAdapter, SUPPORTED_MODELS } from "../../governance/index.js";
@@ -23,6 +23,7 @@ import { proposalImage } from "../../charts.js";
 import { getUserAddress } from "../../walletResolver.js";
 import { parsePerps, perpsUsage, perpsView, perpsProposalWords, PerpsError } from "../../perps.js";
 import { deskUsage, deskStatus, applyForDesk, deskProposalWords, resignFromDesk, linkDesk, trade, DeskError } from "../../desk.js";
+import { link, addressLine } from "../../links.js";
 
 /** The everyday governance loop - linking, DAO info, wallet, staking, proposing, deciding. */
 export const CORE_COMMANDS = {
@@ -97,11 +98,13 @@ export const CORE_COMMANDS = {
       const { daoName, tokenAddress, treasuryAddress, config } = hasToken(model)
         ? await getDaoInfo(model, address)
         : await getAdapter(model).getDaoInfo(address);
+      const network = currentNetwork();
       const lines = [
-        `*${daoName}* (${model})`,
-        `Governance: \`${short(address)}\``,
-        hasToken(model) ? `Token: \`${short(tokenAddress)}\`` : null,
-        `Treasury: \`${short(treasuryAddress)}\``,
+        `*${daoName}* (${model}) on ${network.chain.name}`,
+        "",
+        addressLine("Governance", address, explorerAddressUrl(address, network)),
+        hasToken(model) ? addressLine("Token", tokenAddress, explorerAddressUrl(tokenAddress, network)) : null,
+        addressLine("Treasury", treasuryAddress, explorerAddressUrl(treasuryAddress, network)),
         "",
         ...(CONFIG_DISPLAY_BY_MODEL[model]?.(config) ?? ["Config format not known for this model."]),
       ].filter((l) => l !== null);
@@ -210,7 +213,7 @@ export const CORE_COMMANDS = {
       if (p.executableAfter > 0n) lines.push(`Executable after: ${formatDate(p.executableAfter)}`);
       if (p.actions) lines.push(`Actions: ${p.actions.length}`);
       const page = proposalPageUrl(currentNetwork().id, address, id);
-      if (page) lines.push("", `📄 Details and live status: ${page}`);
+      if (page) lines.push("", `📄 ${link("Proposal page: details and live status", page)}`);
       // The proposer, before submitting details: their link again, privately.
       const submitLink = page
         ? await pendingSubmitLink({

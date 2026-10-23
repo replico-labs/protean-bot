@@ -39,6 +39,7 @@ oauth_config:
       - channels:read     # member_joined_channel events (welcome tokens)
       - groups:read       # ...in private channels too
       - files:write       # vote charts (images) under proposals
+      - channels:join     # join a public channel to post a chart there
 settings:
   event_subscriptions:
     bot_events:

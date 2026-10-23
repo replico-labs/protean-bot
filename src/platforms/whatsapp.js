@@ -25,6 +25,7 @@ import { startEventListener } from "../eventListener.js";
 import { splitArgs } from "../args.js";
 import { whatsappLinkConfigured, writeLinkState, whatsappLinkRoutes, WHATSAPP_LINK_PATH } from "./whatsappLink.js";
 import { startProposalApi } from "../proposalPages.js";
+import { renderLinks } from "../links.js";
 
 /**
  * WhatsApp front-end for the shared command core (commands.js), through
@@ -220,7 +221,9 @@ export function createWhatsAppBot({
         const duration = (await groupMetadata(jid).catch(() => null))?.ephemeralDuration;
         if (duration) extra = { ephemeralExpiration: duration };
       }
-      const sent = await bot.sock.sendMessage(jid, content, { ...extra, ...options });
+      // WhatsApp has no link labels: "label: url" (links.js).
+      const body = typeof content.text === "string" ? { ...content, text: renderLinks(content.text, "whatsapp") } : content;
+      const sent = await bot.sock.sendMessage(jid, body, { ...extra, ...options });
       await wait(SEND_GAP_MS);
       return sent;
     });

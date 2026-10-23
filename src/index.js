@@ -12,7 +12,7 @@ import { takeModelOptions, checkModelOptions, modelOptionsUsage, proposeForModel
 import { feedsText } from "./governance/sowellian.js";
 import { rewardComputedText, withdrawnText } from "./opportunityMarket/payoutText.js";
 import { marketSendMode, sendFromMarketWallet, marketWalletBalances } from "./opportunityMarket/send.js";
-import { currentNetwork, explorerAddressLine, explorerTxUrl, isNativeTokenWord, runOnNetwork, takeNetworkArg, describeNetwork, ENABLED_NETWORKS, getNetwork, blocksToDuration } from "./networks.js";
+import { currentNetwork, explorerAddressLine, explorerAddressUrl, explorerTxUrl, isNativeTokenWord, runOnNetwork, takeNetworkArg, describeNetwork, ENABLED_NETWORKS, getNetwork, blocksToDuration } from "./networks.js";
 import {
   registerChat,
   getChatDAO,
@@ -102,6 +102,7 @@ import { revealAndCompleteWinningTotal, revealAndCompleteWithdrawal } from "./op
 import { sendNativeSponsored } from "./gasSponsor.js";
 import { splitArgs } from "./args.js";
 import { budgetLine, assetsText } from "./governance/budgetText.js";
+import { link, telegramLinks, hasLinks, addressLine } from "./links.js";
 
 // Checked here rather than in config.js, so the keepers and the Discord
 // and Slack entrypoints (which share config.js) don't need a Telegram token.
@@ -149,6 +150,13 @@ bot.api.config.use((prev, method, payload, signal) => {
     if (links && payload.text.length + links.length <= 4096) {
       payload = { ...payload, text: payload.text + links, link_preview_options: payload.link_preview_options ?? { is_disabled: true } };
     }
+  }
+  // Links written as [label](url) (links.js): legacy Markdown reads them
+  // itself; a plain-text message gets the labels as text_link entities.
+  // Either way, no preview card for them.
+  if ((method === "sendMessage" || method === "editMessageText") && hasLinks(payload?.text)) {
+    const linked = payload.parse_mode ? null : telegramLinks(payload.text, payload.entities);
+    payload = { ...payload, ...linked, link_preview_options: payload.link_preview_options ?? { is_disabled: true } };
   }
   return prev(method, payload, signal);
 });
@@ -451,7 +459,7 @@ async function tgProposalPage(ctx, address, model, proposalId) {
   const how = delivered
     ? "The proposer got a private link to add the details."
     : `Proposer: open ${`https://t.me/${ctx.me.username}?start=${proposalStartPayload(network, address, proposalId)}`} to get your private link for adding the details.`;
-  await ctx.reply(`📄 Proposal #${proposalId}: ${page.page}\n${how}`, { link_preview_options: { is_disabled: true }, ...keyboard }).catch(() => {});
+  await ctx.reply(`📄 ${link(`Proposal #${proposalId} page`, page.page)}\n${how}`, { link_preview_options: { is_disabled: true }, ...keyboard }).catch(() => {});
 }
 
 /**
@@ -1560,11 +1568,13 @@ bot.command("dao", async (ctx) => {
       ? await getDaoInfo(model, address)
       : await adapter.getDaoInfo(address);
 
+    const network = currentNetwork();
     const lines = [
-      `*${daoName}*`,
-      `Governance: \`${short(address)}\``,
-      hasToken(model) ? `Token: \`${short(tokenAddress)}\`` : null,
-      `Treasury: \`${short(treasuryAddress)}\``,
+      `*${daoName}* (${model}) on ${network.chain.name}`,
+      "",
+      addressLine("Governance", address, explorerAddressUrl(address, network)),
+      hasToken(model) ? addressLine("Token", tokenAddress, explorerAddressUrl(tokenAddress, network)) : null,
+      addressLine("Treasury", treasuryAddress, explorerAddressUrl(treasuryAddress, network)),
       "",
       ...(CONFIG_DISPLAY_BY_MODEL[model]?.(config) ?? ["Config format not known for this model."]),
     ].filter(Boolean);
@@ -2046,7 +2056,7 @@ bot.command("proposal", async (ctx) => {
     if (p.executableAfter > 0n) lines.push(`Executable after: ${formatDate(p.executableAfter)}`);
     lines.push(`Actions: ${p.actions.length}`);
     const page = proposalPageUrl(currentNetwork().id, address, id);
-    if (page) lines.push("", `📄 Details and live status: ${page}`);
+    if (page) lines.push("", `📄 ${link("Proposal page: details and live status", page)}`);
 
     await ctx.reply(lines.join("\n"), { parse_mode: "Markdown", reply_markup: telegramKeyboard(proposalButtons({ model, id, state: stateLabel, page })) });
     const image = await proposalImage({ network: currentNetwork().id, chainName: currentNetwork().chain.name, model, dao: address, p, state: stateLabel });

@@ -36,7 +36,9 @@ npm run whatsapp  # WHATSAPP_LINK_SECRET (scan a QR) or WHATSAPP_PHONE_NUMBER (p
 ## Slack
 
 - **One command:** `/protean <subcommand>`, e.g. `/protean vote 3 for`.
-- **Creating the app:** use [`slack-app-manifest.yml`](slack-app-manifest.yml). It turns on interactivity for buttons and the `files:write` scope for charts.
+- **Creating the app:** use [`slack-app-manifest.yml`](slack-app-manifest.yml). It turns on interactivity for buttons, `files:write` for charts and `channels:join` so the app can join a public channel to post a chart there. An app created from an older manifest needs both scopes added and a reinstall, and Interactivity turned on.
+- **Charts:** Slack only takes files in channels the app is in, and `/protean` works in channels it isn't. So on `not_in_channel` the app joins (public channels) and posts again. When it still can't, the person who ran the command is told why: a missing permission (reinstall) or a private channel (`/invite @Protean DAO`).
+- **Addresses are plain text on Slack,** not code, so they copy cleanly there; the other platforms keep them as code (tap to copy on Telegram). Commands in replies stay as code.
 - **Copied formatting** in arguments (backticks, code blocks, bold and italic, links, escapes) is stripped.
 - **Welcome tokens:** joining a channel with a welcome distributor sends the newcomer their tokens, as on Telegram.
 - **Any workspace:**

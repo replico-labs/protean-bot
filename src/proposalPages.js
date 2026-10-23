@@ -6,6 +6,7 @@ import { getAdapter } from "./governance/index.js";
 import { PROPOSAL_STATE_LABELS } from "./governance/common.js";
 import { getNetwork, resolveNetworkId, runOnNetwork, NETWORK_IDS } from "./networks.js";
 import { SOLANA_NETWORK_IDS, resolveSolanaNetwork } from "./solana/config.js";
+import { link } from "./links.js";
 
 /**
  * Proposal pages: every proposal gets a page on the website
@@ -237,12 +238,12 @@ export function cleanDetails(input) {
 //////////////////////////////////////////////////////////////*/
 
 const editMessage = (proposalId, edit, page, cmd) =>
-  `📝 Add the details for proposal #${proposalId} - a title, summary and links - here (only you have this link):\n${edit}\n\n` +
+  `📝 Add the details for proposal #${proposalId} - a title, summary and links: ${link("open your edit page", edit)} (only you have this link).\n\n` +
   `With the first upload you choose an edit password: any later change needs this link and that password, and every version stays visible on the page. ${windowText()} ` +
-  `Everyone sees them at ${page} and through ${cmd("proposal")} ${proposalId}. Lost this link? ${cmd("proposal")} ${proposalId} sends it again.`;
+  `Everyone sees them on the ${link("proposal page", page)} and through ${cmd("proposal")} ${proposalId}. Lost this link? ${cmd("proposal")} ${proposalId} sends it again.`;
 
 const reEditMessage = (proposalId, edit, page) =>
-  `📝 Your edit link for proposal #${proposalId} (only you have it):\n${edit}\n\nChanges need the edit password you chose. Every version stays visible at ${page}. ${windowText()}`;
+  `📝 ${link(`Your edit page for proposal #${proposalId}`, edit)} (only you have this link).\n\nChanges need the edit password you chose. Every version stays visible on the ${link("proposal page", page)}. ${windowText()}`;
 
 /**
  * Called right after a proposal is created: records its page and returns

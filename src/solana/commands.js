@@ -12,6 +12,7 @@ import { proposalCreated, proposalPageUrl, pendingSubmitLink, proposalStartPaylo
 import { takeModelOptions, oracleGoalValue, oracleFeedLine } from "../modelProposal.js";
 import { lookupPythFeed } from "../governance/sowellian.js";
 import { parseDuration } from "../integrations/common.js";
+import { link as linkTo, addressLine } from "../links.js";
 
 /**
  * Commands for chats linked to a Solana (Vortexes) DAO, shared by every
@@ -374,7 +375,7 @@ async function proposalMade(ctx, c, id, text) {
   const page = await proposalCreated({ ...args, platform: ctx.platform, userId: ctx.userId, cmd: ctx.cmd });
   const buttons = proposalButtons({ model: c.model, id, page: page?.page });
   if (!page) return reply(text, { buttons });
-  return { text: `${text}\n\n📄 ${page.page} - the proposer is adding the details there.`, privateFollowUp: page.editText, startPayload: proposalStartPayload(args.network, args.dao, id), buttons };
+  return { text: `${text}\n\n📄 ${linkTo("Proposal page", page.page)} - the proposer is adding the details there.`, privateFollowUp: page.editText, startPayload: proposalStartPayload(args.network, args.dao, id), buttons };
 }
 
 /** The extra settings a model's proposals take, for usage lines ("" for most). */
@@ -533,10 +534,20 @@ const COMMANDS = {
       const c = await loadDao(ctx);
       const { network, d, model, governance, tok } = c;
       const [treasurySol, now] = await Promise.all([network.connection.getBalance(d.treasury), v.clusterNow(network)]);
-      const lines = [`*${d.record.name}* — ${MODEL_LABEL[model]} DAO on ${network.name}`, "", `DAO: \`${d.dao.toBase58()}\``, `Treasury: \`${d.treasury.toBase58()}\``, `Treasury holds: ${sol(treasurySol)}`];
+      const at = (key) => explorerUrl(network, "address", key.toBase58());
+      const lines = [
+        `*${d.record.name}* — ${MODEL_LABEL[model]} DAO on ${network.name}`,
+        "",
+        addressLine("DAO", d.dao.toBase58(), at(d.dao)),
+        addressLine("Governance", d.governance.toBase58(), at(d.governance)),
+        ...(tok ? [addressLine("Token", governance.mint.toBase58(), at(governance.mint))] : []),
+        addressLine("Treasury", d.treasury.toBase58(), at(d.treasury)),
+        "",
+        `Treasury holds: ${sol(treasurySol)}`,
+      ];
       if (tok) {
         lines.push(`  and ${tok.fmt(await v.tokenBalance(network, governance.mint, d.treasury))} ${tok.symbol}`);
-        lines.push("", `Token: \`${governance.mint.toBase58()}\` (${tok.symbol})`, `Staked: ${tok.fmt(governance.totalDeposited)} ${tok.symbol}`);
+        lines.push(`Staked: ${tok.fmt(governance.totalDeposited)} ${tok.symbol}`);
       } else lines.push("");
       lines.push(...(await rulesLines(ctx, c, now)));
       lines.push("", `Proposals so far: ${governance.proposalCount.toString()}`, `Governance setup #${d.record.epoch}`);
@@ -545,7 +556,6 @@ const COMMANDS = {
         const to = MODEL_LABEL[v.modelOf(network, ps.program)] ?? `program \`${short(ps.program)}\``;
         lines.push(`⚠️ Switching to ${to} in ${duration(num(ps.readyAt) - now)} (same treasury). A proposal running \`cancelswitch\` can still stop it.`);
       }
-      lines.push("", explorerUrl(network, "address", d.treasury.toBase58()));
       return reply(lines.join("\n"));
     },
   },
@@ -557,7 +567,7 @@ const COMMANDS = {
       const { network, d, governance, tok } = await loadDao(ctx);
       const lines = [`Treasury: \`${d.treasury.toBase58()}\``, `Holds: ${sol(await network.connection.getBalance(d.treasury))}`];
       if (tok) lines.push(`  and ${tok.fmt(await v.tokenBalance(network, governance.mint, d.treasury))} ${tok.symbol}`);
-      lines.push("", "Anyone can send SOL to this address to fund the DAO.", explorerUrl(network, "address", d.treasury.toBase58()));
+      lines.push("", "Anyone can send SOL to this address to fund the DAO.", `🔍 ${linkTo("View on explorer", explorerUrl(network, "address", d.treasury.toBase58()))}`);
       return reply(lines.join("\n"));
     },
   },
@@ -865,7 +875,7 @@ const COMMANDS = {
       const buttons = proposalButtons({ model, id, state, page });
       const image = await solanaProposalImage({ network, networkId: link.network, model, governance: d.governance, id, p, g, now, state });
       if (!page) return reply(lines.join("\n"), { buttons, image });
-      lines.push("", `📄 Details and live status: ${page}`);
+      lines.push("", `📄 ${linkTo("Proposal page: details and live status", page)}`);
       // The proposer, before submitting details: their link again, privately.
       const args = { network: link.network, dao: d.governance.toBase58(), model, proposalId: id };
       const submit = await pendingSubmitLink({ ...args, platform: ctx.platform, userId: ctx.userId, walletAddress: await getSolanaAddress(ctx.userId, ctx.platform).catch(() => null), cmd: ctx.cmd }).catch(() => null);

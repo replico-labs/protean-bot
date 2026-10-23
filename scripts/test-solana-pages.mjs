@@ -118,11 +118,11 @@ const run = async (chatId, userId, line) => {
   console.log(`\n> /${line}  [user ${userId}]\n${r?.text}${r?.privateFollowUp ? `\n  [private] ${r.privateFollowUp.split("\n")[0]}` : ""}`);
   return r;
 };
-const addressIn = (text) => text.match(/`([1-9A-HJ-NP-Za-km-z]{32,44})`/)[1];
-const field = (text, label) => text.match(new RegExp(`${label}: \`([^\`]+)\``))[1];
+const addressIn = (text) => text.match(/(?:^|[\s`])([1-9A-HJ-NP-Za-km-z]{32,44})(?=[\s`]|$)/)[1];
+const field = (text, label) => text.match(new RegExp(`${label}: \`?([^\`\\s]+)`))[1];
 /** The page's network, governance and id, and the edit token, from the private link. */
 function editLink(text) {
-  const url = new URL(text.match(/https:\/\/protean\.example\S+/)[0]);
+  const url = new URL(text.match(/https:\/\/protean\.example[^\s)]+/)[0]);
   const [, , network, dao, id] = url.pathname.split("/");
   return { network, dao, id, token: url.searchParams.get("edit") };
 }
@@ -151,7 +151,7 @@ test("Solana proposal pages", { timeout: 300_000 }, async () => {
   await run(T, 1, "stake 600");
   const to = Keypair.generate().publicKey.toBase58();
   r = await run(T, 1, `propose ${to} 0.002 SOL Pay the designer`);
-  assert.match(r.text, /📄 https:\/\/protean\.example\/p\/solana-devnet\/[1-9A-HJ-NP-Za-km-z]+\/1 /);
+  assert.match(r.text, /📄 \[Proposal page\]\(https:\/\/protean\.example\/p\/solana-devnet\/[1-9A-HJ-NP-Za-km-z]+\/1\) /);
   assert.match(r.privateFollowUp, /only you have this link/);
   const link = editLink(r.privateFollowUp);
   assert.strictEqual(link.network, "solana-devnet");
@@ -176,7 +176,7 @@ test("Solana proposal pages", { timeout: 300_000 }, async () => {
 
   // /proposal: the proposer gets their link again, nobody else does.
   r = await run(T, 1, "proposal 1");
-  assert.match(r.text, /📄 Details and live status: https:\/\/protean\.example\/p\/solana-devnet\//);
+  assert.match(r.text, /📄 \[Proposal page: details and live status\]\(https:\/\/protean\.example\/p\/solana-devnet\//);
   assert.match(r.privateFollowUp ?? "", /only you have this link/);
   r = await run(T, 2, "proposal 1");
   assert.strictEqual(r.privateFollowUp, undefined);

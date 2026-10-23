@@ -77,7 +77,7 @@ const run = async (chatId, userId, line) => {
   console.log(`\n> /${line}  [chat ${chatId}, user ${userId}]\n${r ? r.text : "(falls through)"}`);
   return r?.text ?? null;
 };
-const addressIn = (text) => text.match(/`([1-9A-HJ-NP-Za-km-z]{32,44})`/)[1];
+const addressIn = (text) => text.match(/(?:^|[\s`])([1-9A-HJ-NP-Za-km-z]{32,44})(?=[\s`]|$)/)[1];
 
 async function setUpHub() {
   const provider = new anchor.AnchorProvider(conn, new anchor.Wallet(op), { commitment: "confirmed" });

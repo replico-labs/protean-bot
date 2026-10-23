@@ -32,12 +32,13 @@ Every proposal gets a page on the website, `PROPOSAL_SITE_URL/p/<network>/<dao>/
 
 ## Explorer links
 
-Every reply to a command that sends a transaction ends with a 🔗 link to it on the network's explorer. That covers creating a DAO, tips and sends, staking, proposing, votes, challenges, support, confirmations, queue, execute, elections, trades and the rest.
+Every reply to a command that sends a transaction ends with **🔗 View transaction**, a link to it on the network's explorer (**🔗 Transactions: 1 · 2** when it sent several). That covers creating a DAO, tips and sends, staking, proposing, votes, challenges, support, confirmations, queue, execute, elections, trades and the rest.
 
 - **EVM:** links are recorded where every transaction leaves the bot (`writeWithGasBuffer`, `deployWithGasLimit`, native sends; see `src/txLinks.js`), so new commands get them too.
 - **Solana:** links are recorded in `send()` in `src/solana/vortex.js`, which every Vortexes transaction goes through.
 - **Opportunity Markets:** transactions link Sepolia Etherscan, and `/migratewallet` links its transfer.
 - **Notifications** link the transaction they report, and `/wallet` links your address.
+- **Links are labels, not raw URLs.** Messages write them once as `[label](url)` (`link()` in `src/links.js`) and each platform shows the label as a link: Telegram's Markdown, or a text link entity on plain messages; `[label](<url>)` on Discord (no preview card); `<url|label>` on Slack (no unfurl). WhatsApp can't label links, so it shows `label: url`. That covers transactions, **📄 Proposal page**, the proposer's edit link, **🔍 View on explorer** and the explorer links in `/dao`.
 - **Explorers:**
   - Monad testnet: `testnet.monadexplorer.com`
   - Base Sepolia: `sepolia.basescan.org`

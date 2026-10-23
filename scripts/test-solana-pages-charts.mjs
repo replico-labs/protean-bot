@@ -130,9 +130,9 @@ const run = (chatId, userId, line) =>
     console.log(`\n> /${line}  [chat ${chatId}, user ${userId}]\n${out.text}${out.image ? `\n[chart ${out.image.name}, ${out.image.png.length} bytes]` : ""}`);
     return out;
   });
-const addressIn = (text) => text.match(/`([1-9A-HJ-NP-Za-km-z]{32,44})`/)[1];
+const addressIn = (text) => text.match(/(?:^|[\s`])([1-9A-HJ-NP-Za-km-z]{32,44})(?=[\s`]|$)/)[1];
 const isPng = (image) => image && image.png.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-const TX_LINK = /🔗 https:\/\/explorer\.solana\.com\/tx\/[1-9A-HJ-NP-Za-km-z]+\?cluster=/;
+const TX_LINK = /🔗 (?:\[View transaction\]|Transactions: \[1\])\(https:\/\/explorer\.solana\.com\/tx\/[1-9A-HJ-NP-Za-km-z]+\?cluster=/;
 
 async function setUpHub() {
   const provider = new anchor.AnchorProvider(conn, new anchor.Wallet(op), { commitment: "confirmed" });
@@ -180,11 +180,11 @@ test("Solana proposal pages, charts and explorer links", { timeout: 1_200_000 },
   await run(T, 2, "stake 400");
   out = await run(T, 1, `propose ${pay()} 0.01 SOL Fund the docs`);
   assert.match(out.text, TX_LINK, "proposing links its transaction");
-  const pageUrl = out.text.match(/📄 (https:\/\/site\.test\/p\/solana-devnet\/([1-9A-HJ-NP-Za-km-z]+)\/1)/);
+  const pageUrl = out.text.match(/📄 \[Proposal page\]\((https:\/\/site\.test\/p\/solana-devnet\/([1-9A-HJ-NP-Za-km-z]+)\/1)\)/);
   assert.ok(pageUrl, "the proposal reply links its page");
   const governance = pageUrl[2];
   assert.match(out.privateFollowUp ?? "", /\?edit=/, "the proposer gets a private edit link");
-  const token = new URL(out.privateFollowUp.match(/https:\/\/site\.test\/\S+\?edit=\S+/)[0]).searchParams.get("edit");
+  const token = new URL(out.privateFollowUp.match(/https:\/\/site\.test\/[^\s)]+\?edit=[^\s)]+/)[0]).searchParams.get("edit");
 
   let page = await api(`solana-devnet/${governance}/1`);
   assert.equal(page.status, 200, JSON.stringify(page.body));
@@ -211,7 +211,7 @@ test("Solana proposal pages, charts and explorer links", { timeout: 1_200_000 },
   await run(T, 2, "vote 1 against");
   out = await run(T, 3, "proposal 1");
   assert.ok(isPng(out.image), "/proposal returns a chart");
-  assert.match(out.text, /📄 Details and live status: https:\/\/site\.test\/p\/solana-devnet\//);
+  assert.match(out.text, /📄 \[Proposal page: details and live status\]\(https:\/\/site\.test\/p\/solana-devnet\//);
 
   // ---- council and conviction models: /proposal charts ----
   const D = -202;
@@ -235,7 +235,7 @@ test("Solana proposal pages, charts and explorer links", { timeout: 1_200_000 },
   await run(Q, 1, `tip 400 ${A}`);
   await run(Q, 1, "stake 400");
   const B2 = await run(Q, 1, `propose ${pay()} 0.01 SOL Quadratic pays`);
-  assert.match(B2.text, /📄 https:\/\/site\.test\/p\/solana-devnet\//);
+  assert.match(B2.text, /📄 \[Proposal page\]\(https:\/\/site\.test\/p\/solana-devnet\//);
   await run(Q, 1, "vote 1 for");
 
   const O = -205;
@@ -268,14 +268,14 @@ test("Solana proposal pages, charts and explorer links", { timeout: 1_200_000 },
   const created = posted.find((p) => p.chatId === String(T) && p.text.includes("New proposal #2"));
   assert.ok(created, "the listener announced the new proposal");
   assert.match(created.text, TX_LINK, "notices link their transaction");
-  assert.match(created.text, /📄 https:\/\/site\.test\/p\/solana-devnet\/.+\/2/, "a new proposal's notice links its page");
+  assert.match(created.text, /📄 \[Proposal page\]\(https:\/\/site\.test\/p\/solana-devnet\/.+\/2\)/, "a new proposal's notice links its page");
 
   for (const [chat, label] of [[T, "token-weighted"], [Q, "quadratic"], [D, "delegate"]]) {
     const c = closed(chat, 2);
     assert.ok(c, `${label}: the vote's result was posted`);
     assert.match(c.text, /has closed: \*Succeeded\*/, `${label}: ${c.text}`);
     assert.ok(isPng(c.image), `${label}: with a chart`);
-    assert.match(c.text, /📄 https:\/\/site\.test\/p\/solana-devnet\//, `${label}: and the page link`);
+    assert.match(c.text, /📄 \[Proposal page\]\(https:\/\/site\.test\/p\/solana-devnet\//, `${label}: and the page link`);
   }
   const quiet = closed(O, 2);
   assert.ok(quiet, "optimistic: the unchallenged result was posted");

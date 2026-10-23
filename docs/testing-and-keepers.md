@@ -47,6 +47,10 @@ It uses the bot's `.env`: the operator key, factory addresses, `SORTITION_RANDOM
 
 **Trying flows by hand:** `<PREFIX>_FAST_TIMINGS=true` (`FAST_TIMINGS` on Monad testnet) gives the bot's own new DAOs the same short periods. Testnets only. `<PREFIX>_FAST_SCALE` multiplies them: `0.5` gives ~1-minute votes and 30-second timelocks, `0.25` ~30 seconds and 15 seconds (`FAST_SCALE` on Monad testnet). It only affects DAOs created after it's set.
 
+## Slack and links
+
+`node --experimental-test-module-mocks --test scripts/test-slack.mjs` needs no chain or workspace. It runs `/protean` with a stand-in result and a fake Slack client, and checks: labelled links and plain addresses, the buttons under a proposal for every model, the chart upload (joining the channel when needed, and the note when it can't post), and links.js's Telegram, Discord and WhatsApp forms.
+
 ## Solana
 
 All of these run against a local validator loaded with the Vortexes programs at their `declare_id!` addresses (`anchor build` in Vortexes, then `solana-test-validator --reset --bpf-program <id> target/deploy/<program>.so ...`). Each script's header has the exact setup. Run each with `node --experimental-test-module-mocks --test <script>`.

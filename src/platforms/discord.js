@@ -7,6 +7,7 @@ import { SOWELLIAN_COMMANDS } from "./commands/sowellian.js";
 import { MARKET_COMMANDS } from "./commands/markets.js";
 import { startEventListener } from "../eventListener.js";
 import { encodeButton, decodeButton, BUTTON_COMMANDS } from "../buttons.js";
+import { renderLinks } from "../links.js";
 
 /**
  * Discord front-end for the shared command core (commands.js).
@@ -54,11 +55,12 @@ export const discordCommand = (name) => (GROUP_OF[name] ? `/${GROUP_OF[name]} ${
 
 /** Telegram-style *bold* -> Discord **bold**, leaving `code` spans alone. */
 export function toDiscordMarkdown(text) {
-  return text
+  const bolded = text
     .split(/(`[^`]*`)/)
     .map((part) => (part.startsWith("`") ? part : part.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1**$2**")))
-    .join("")
-    .replace(/🔗 (https?:\/\/\S+)/g, "🔗 <$1>"); // explorer links (txLinks.js) without a preview card each
+    .join("");
+  // Labelled links (links.js), without a preview card each.
+  return renderLinks(bolded, "discord");
 }
 
 /**

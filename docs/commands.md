@@ -24,7 +24,7 @@ Every command, and the buttons and help menu that run them. `/help` only shows t
 - `/stake <amount>` · `/unstake <amount>`
 
 **The DAO**
-- `/dao`: name, token, treasury and the full model-specific config
+- `/dao`: name, network, the governance, token and treasury addresses in full (each linked to the explorer), and the full model-specific config. Solana DAOs also show the DAO and governance accounts.
 - `/treasury` · `/contribute` (the treasury address, sent privately)
 - `/proposals` · `/proposal <id>`: a list, or one proposal in full, shown in its model's own vote shape, with its chart and page
 
@@ -46,10 +46,13 @@ Every command, and the buttons and help menu that run them. `/help` only shows t
     - **Challenge:** optimistic
     - **Support:** conviction
     - **Confirm:** board
+    - **For / Against / Abstain** on the approval vote (`castapprovalvote`): Sowellian
+    - none for Decision Markets, which trade instead (`trade`)
   - Every proposal also gets **Status** and a **Details** link to its page.
   - `/proposal <id>` shows what fits the proposal's state now: the vote buttons while it's open, **Queue** once it has passed, **Execute** once it's queued.
   - A button runs the same command as typing it, as whoever pressed it, with their own wallet and the same checks; the chat sees who pressed what. On Discord and Slack, errors (already voted, no stake) go only to the presser.
-  - Only `vote`, `challenge`, `support`, `confirm`, `queue`, `execute`, `proposal` and `help` can come from a button.
+  - Only `vote`, `castapprovalvote`, `challenge`, `support`, `confirm`, `queue`, `execute`, `proposal` and `help` can come from a button.
+  - Once voting has closed (Defeated, Executed, Expired…) there's nothing left to press, so only **Status** and **Details** remain.
   - Slack needs `interactivity` on in the app manifest (it is, in [`slack-app-manifest.yml`](slack-app-manifest.yml)).
 - **`/help` is a menu:**
   - It opens with a line about the chat's DAO and a button per topic (Setup, Wallet, The DAO, Proposing, Deciding, Council, …), showing only what applies to the model.

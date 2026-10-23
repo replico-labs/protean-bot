@@ -11,6 +11,7 @@ import { splitArgs } from "../args.js";
 import { encodeButton, decodeButton, BUTTON_COMMANDS } from "../buttons.js";
 import { proposalApiRoutes, proposalPagesConfigured } from "../proposalPages.js";
 import { whatsappLinkConfigured, whatsappLinkRoutes } from "./whatsappLink.js";
+import { renderLinks } from "../links.js";
 
 const { App } = bolt;
 
@@ -48,21 +49,53 @@ const { App } = bolt;
 const SLASH_COMMAND = process.env.SLACK_COMMAND || "/protean";
 
 /** Must match oauth_config.scopes.bot in docs/slack-app-manifest.yml. */
-export const SLACK_BOT_SCOPES = ["commands", "chat:write", "chat:write.public", "users:read", "channels:read", "groups:read", "files:write"];
+export const SLACK_BOT_SCOPES = ["commands", "chat:write", "chat:write.public", "users:read", "channels:read", "groups:read", "files:write", "channels:join"];
 
-let warnedImages = false;
+// Addresses in `code` (how Telegram makes them tap-to-copy) are plain on
+// Slack, where code spans copy awkwardly: full EVM and Solana addresses
+// and short forms like 0x1234…abcd.
+const CODE_ADDRESS = /`(0x[0-9a-fA-F]{40}|[1-9A-HJ-NP-Za-km-z]{32,44}|(?:0x)?[0-9A-Za-z]{3,8}(?:…|\.\.\.)[0-9A-Za-z]{3,8})`/g;
+
+/** A reply's text as Slack shows it: labelled links as <url|label>, addresses plain. */
+export function slackText(text) {
+  if (typeof text !== "string") return text;
+  return renderLinks(text.replace(CODE_ADDRESS, "$1"), "slack");
+}
+
+// Labels instead of URLs, so no unfurled previews under every message.
+const NO_UNFURL = { unfurl_links: false, unfurl_media: false };
+
 /**
- * Posts a reply's image (a chart) to the channel. Needs the files:write
- * scope and the bot in the channel; without them the text still went out,
- * so this only logs (once).
+ * Posts a reply's image (a chart) to the channel. Slack only takes files
+ * in channels the app is in, and slash commands work in channels it isn't,
+ * so on not_in_channel it joins (public channels; needs channels:join) and
+ * tries again. Returns null when posted, else why not, in words for the
+ * person who ran the command - the text still went out either way.
  */
-async function postSlackImage(client, channelId, image, token) {
-  if (!image || !client) return;
+export async function postSlackImage(client, channelId, image, token) {
+  if (!image || !client) return null;
+  const auth = token ? { token } : {};
+  const upload = () => client.files.uploadV2({ ...auth, channel_id: channelId, file: image.png, filename: image.name, title: image.name });
   try {
-    await client.files.uploadV2({ ...(token ? { token } : {}), channel_id: channelId, file: image.png, filename: image.name, title: image.name });
+    await upload();
+    return null;
   } catch (err) {
-    if (!warnedImages) console.warn(`[slack] Couldn't post a chart (${err.data?.error ?? err.message}) - the app needs the files:write scope (reinstall it) and to be in the channel.`);
-    warnedImages = true;
+    let code = err.data?.error ?? err.message;
+    if (code === "not_in_channel" || code === "channel_not_found") {
+      const joined = await client.conversations.join({ ...auth, channel: channelId }).then(() => true, (e) => ((code = e.data?.error ?? code), false));
+      if (joined) {
+        try {
+          await upload();
+          return null;
+        } catch (again) {
+          code = again.data?.error ?? again.message;
+        }
+      }
+    }
+    console.warn(`[slack] Couldn't post a chart in ${channelId}: ${code}`);
+    if (code === "missing_scope") return "📊 The vote chart couldn't be posted: the app is missing the files:write or channels:join permission. A workspace admin needs to reinstall it (the manifest in docs/slack-app-manifest.yml has both).";
+    if (code === "not_in_channel" || code === "channel_not_found" || code === "method_not_supported_for_channel_type") return `📊 The vote chart couldn't be posted because the app isn't in this channel. Add it (\`/invite @Protean DAO\`) and charts will appear.`;
+    return `📊 The vote chart couldn't be posted (${code}).`;
   }
 }
 
@@ -133,10 +166,12 @@ export async function handleSlashCommand({ command, ack, respond, client }) {
   recordSlackTeam(command.channel_id, command.team_id);
   // Public results post to the channel so the whole group sees votes and
   // proposals, same as Telegram; errors and private details stay ephemeral.
-  await respond({ response_type: result.ephemeral ? "ephemeral" : "in_channel", text: result.text, mrkdwn: true, ...slackBlocks(result.text, result.buttons) });
-  if (!result.ephemeral) await postSlackImage(client, command.channel_id, result.image);
+  const text = slackText(result.text);
+  await respond({ response_type: result.ephemeral ? "ephemeral" : "in_channel", text, mrkdwn: true, ...NO_UNFURL, ...slackBlocks(text, result.buttons) });
+  const imageProblem = result.ephemeral ? null : await postSlackImage(client, command.channel_id, result.image);
+  if (imageProblem) await respond({ response_type: "ephemeral", text: imageProblem });
   // Something only the caller should see after a public reply (a proposal's edit link).
-  if (result.privateFollowUp) await respond({ response_type: "ephemeral", text: result.privateFollowUp, mrkdwn: true });
+  if (result.privateFollowUp) await respond({ response_type: "ephemeral", text: slackText(result.privateFollowUp), mrkdwn: true, ...NO_UNFURL });
 }
 
 /**
@@ -173,13 +208,15 @@ export async function handleButton({ ack, body, action, respond, client }) {
   if (body.team?.id) recordSlackTeam(channelId, body.team.id);
   // Help topics swap the (private) help message in place.
   if (name === "help") {
-    await respond({ response_type: "ephemeral", replace_original: true, text: result.text, mrkdwn: true, ...slackBlocks(result.text, result.buttons) });
+    const help = slackText(result.text);
+    await respond({ response_type: "ephemeral", replace_original: true, text: help, mrkdwn: true, ...NO_UNFURL, ...slackBlocks(help, result.buttons) });
     return;
   }
-  const text = `<@${body.user.id}> → \`${SLASH_COMMAND} ${name} ${args.join(" ")}\`\n\n${result.text}`;
-  await respond({ response_type: result.ephemeral ? "ephemeral" : "in_channel", replace_original: false, text, mrkdwn: true, ...(result.ephemeral ? {} : slackBlocks(text, result.buttons)) });
-  if (!result.ephemeral) await postSlackImage(client, channelId, result.image);
-  if (result.privateFollowUp) await respond({ response_type: "ephemeral", replace_original: false, text: result.privateFollowUp, mrkdwn: true });
+  const text = `<@${body.user.id}> → \`${SLASH_COMMAND} ${name} ${args.join(" ")}\`\n\n${slackText(result.text)}`;
+  await respond({ response_type: result.ephemeral ? "ephemeral" : "in_channel", replace_original: false, text, mrkdwn: true, ...NO_UNFURL, ...(result.ephemeral ? {} : slackBlocks(text, result.buttons)) });
+  const imageProblem = result.ephemeral ? null : await postSlackImage(client, channelId, result.image);
+  if (imageProblem) await respond({ response_type: "ephemeral", replace_original: false, text: imageProblem });
+  if (result.privateFollowUp) await respond({ response_type: "ephemeral", replace_original: false, text: slackText(result.privateFollowUp), mrkdwn: true, ...NO_UNFURL });
 }
 
 /**
@@ -240,7 +277,7 @@ export function createSlackNotify(app, store) {
       if (!teamId) throw new Error("workspace not known yet - run any /protean command in the channel");
       token = (await store.fetchInstallation({ teamId, isEnterpriseInstall: false })).bot.token;
     }
-    await app.client.chat.postMessage({ ...(token ? { token } : {}), channel: channelId, text, mrkdwn: true });
+    await app.client.chat.postMessage({ ...(token ? { token } : {}), channel: channelId, text: slackText(text), mrkdwn: true, ...NO_UNFURL });
     await postSlackImage(app.client, channelId, image, token);
   };
 }

@@ -15,6 +15,7 @@ import { proposalImage } from "./charts.js";
 import { proposalPageUrl } from "./proposalPages.js";
 import { deskExecuted } from "./desk.js";
 import { detectSwitch } from "./modelSwitch.js";
+import { link } from "./links.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // One state file per platform process: Telegram keeps the original file
@@ -237,7 +238,7 @@ async function checkNetwork(notify, daos, currentBlock, state, save) {
         }
         if (log.eventName === "ProposalCreated" && log.args?.proposalId !== undefined) trackVote(state, w, log.args.proposalId);
         const url = log.transactionHash ? explorerTxUrl(log.transactionHash) : null;
-        const message = formatEvent(log.eventName, log.args ?? {}) + (url ? `\n🔗 ${url}` : "");
+        const message = formatEvent(log.eventName, log.args ?? {}) + (url ? `\n🔗 ${link("View transaction", url)}` : "");
         try {
           await notify(w.dao.chatId, message);
         } catch (sendErr) {
@@ -342,7 +343,7 @@ async function checkVoteCloses(notify, daos, currentBlock, state) {
       if (label === "Cancelled") continue; // already announced by ProposalCancelled
       const image = await proposalImage({ network: dao.network, chainName: currentNetwork().chain.name, model: dao.model, dao: dao.governanceAddress, p, state: label, skipEmpty: true }).catch(() => null);
       const page = proposalPageUrl(dao.network, dao.governanceAddress, id);
-      const text = `🗳️ Voting on proposal #${id} has closed: *${label}*.${image ? "" : unchallengedNote(dao.model, label)}${page ? `\n📄 ${page}` : ""}`;
+      const text = `🗳️ Voting on proposal #${id} has closed: *${label}*.${image ? "" : unchallengedNote(dao.model, label)}${page ? `\n📄 ${link("Proposal page", page)}` : ""}`;
       try {
         await notify(dao.chatId, text, { image });
       } catch (err) {

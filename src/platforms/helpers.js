@@ -9,6 +9,7 @@ import { opportunityWalletClientFor } from "../opportunityMarket/config.js";
 import { currentNetwork } from "../networks.js";
 import { proposalCreated } from "../proposalPages.js";
 import { proposalButtons } from "../buttons.js";
+import { link } from "../links.js";
 
 /**
  * Shared building blocks for the platform command groups in
@@ -44,7 +45,7 @@ export async function proposalReply(ctx, governanceAddress, model, proposalId, t
   });
   const buttons = proposalButtons({ model, id: proposalId, page: page?.page });
   if (!page) return reply(text, { buttons });
-  return reply(`${text}\n\n📄 ${page.page} - the proposer is adding the details there.`, { privateFollowUp: page.editText, buttons });
+  return reply(`${text}\n\n📄 ${link("Proposal page", page.page)} - the proposer is adding the details there.`, { privateFollowUp: page.editText, buttons });
 }
 
 /** A reply only the caller sees - the equivalent of Telegram's DM delivery for sensitive results. */
