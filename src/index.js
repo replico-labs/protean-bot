@@ -215,6 +215,7 @@ bot.on("message:text", async (ctx, next) => {
     // Text from members (a proposal's description) can break Markdown - send it plain.
     await ctx.reply(result.text, { link_preview_options: { is_disabled: true }, ...markup });
   }
+  if (result.image) await ctx.replyWithPhoto(new InputFile(result.image.png, result.image.name)).catch((err) => console.warn(`Couldn't send a chart: ${err.message}`));
   // A proposer's link for adding the proposal's details: privately, or a
   // t.me link that opens a private chat when the bot can't message them first.
   if (result.privateFollowUp) {

@@ -3,8 +3,10 @@ import { fileURLToPath } from "url";
 import { PublicKey } from "@solana/web3.js";
 import { getAllSolanaChats, updateChatSolana } from "../db.js";
 import { readJson, writeJsonAtomic } from "../jsonFile.js";
-import { SOLANA_ENABLED, getSolanaNetwork, getSolanaOperator } from "./config.js";
+import { SOLANA_ENABLED, getSolanaNetwork, getSolanaOperator, explorerUrl } from "./config.js";
+import { proposalPageUrl } from "../proposalPages.js";
 import * as v from "./vortex.js";
+import { solanaProposalImage } from "./charts.js";
 
 /**
  * Notifications for chats linked to a Solana DAO - the Solana side of
@@ -114,7 +116,7 @@ export function formatSolanaEvent(name, e, { model, now, name: daoName }) {
   }
 }
 
-/** The DAO's new events since `until` (oldest first), and its newest signature. */
+/** The DAO's new events since `until` (oldest first, each with its transaction's signature), and its newest signature. */
 async function newEvents(network, d, until) {
   const conn = network.connection;
   const sigs = await conn.getSignaturesForAddress(d.governance, until ? { until, limit: 100 } : { limit: 1 }, "confirmed");
@@ -125,7 +127,7 @@ async function newEvents(network, d, until) {
   for (const s of [...sigs].reverse()) {
     if (s.err) continue;
     const tx = await conn.getTransaction(s.signature, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
-    events.push(...programEvents(tx?.meta?.logMessages ?? [], d.gp, coder));
+    for (const ev of programEvents(tx?.meta?.logMessages ?? [], d.gp, coder)) events.push({ ...ev, signature: s.signature });
   }
   return { newest, events };
 }
@@ -150,6 +152,71 @@ export function programEvents(logs, programId, coder) {
     }
   }
   return events;
+}
+
+/*
+ * Vote results, as on EVM (eventListener.js): every proposal seen opening
+ * a vote (or a challenge window, approval vote or trading) is tracked by
+ * when that ends, read once it has, and its result posted with its chart.
+ */
+const VOTE_MODELS = new Set(["tokenWeighted", "quadratic", "liquid", "delegate", "sortition", "optimistic", "sowellian", "decisionMarkets"]);
+// States in which the vote (or challenge window, approval vote, trading) is still going.
+const STILL_OPEN = new Set(["Pending", "Active", "ChallengeWindow", "Trading"]);
+const MAX_TRACKED = 50; // per DAO
+const TRACK_DAYS = 30;
+
+/** When the vote an event opens ends (cluster seconds), or null if the event opens none. */
+function voteEndsAt(name, e) {
+  switch (name.charAt(0).toUpperCase() + name.slice(1)) {
+    case "ProposalCreated":
+      return num(e.votingEndsAt ?? e.challengeDeadline ?? e.approvalEndsAt ?? e.tradingDeadline ?? 0) || null;
+    case "Challenged":
+      return num(e.votingEndsAt);
+    default:
+      return null;
+  }
+}
+
+function trackVote(open, model, name, e) {
+  if (!VOTE_MODELS.has(model) || e.id === undefined) return;
+  const endsAt = voteEndsAt(name, e);
+  if (!endsAt) return;
+  const id = String(e.id);
+  if (!open[id] && Object.keys(open).length >= MAX_TRACKED) return;
+  open[id] = { endsAt, since: open[id]?.since ?? Date.now() };
+}
+
+/** Posts the result of each tracked vote that has ended, then stops tracking it. */
+async function postVoteCloses(network, d, chat, open, notify) {
+  const now = await v.clusterNow(network);
+  let g = null;
+  for (const [id, t] of Object.entries(open)) {
+    if (Date.now() - t.since > TRACK_DAYS * 86_400_000) {
+      delete open[id];
+      continue;
+    }
+    if (now < t.endsAt) continue;
+    g ??= await v.readGovernance(network, d.model, d.governance);
+    const p = await v.readProposal(network, d.model, d.proposal(Number(id)));
+    if (!p) {
+      delete open[id];
+      continue;
+    }
+    const state = v.proposalState(d.model, p, g, now);
+    if (STILL_OPEN.has(state)) {
+      // e.g. an optimistic proposal challenged since: follow its vote instead.
+      const next = num(p.votingEndsAt ?? 0);
+      t.endsAt = next > now ? next : now + 60;
+      continue;
+    }
+    delete open[id];
+    if (state === "Cancelled") continue; // already announced by ProposalCancelled
+    const image = await solanaProposalImage({ network, networkId: chat.link.network, model: d.model, governance: d.governance, id, p, g, now, state, skipEmpty: true });
+    const page = proposalPageUrl(chat.link.network, d.governance.toBase58(), id);
+    const unchallenged = d.model === "optimistic" && !p.challenged ? " Nobody challenged it." : "";
+    const text = `🗳️ Voting on proposal #${id}${d.record.name ? ` in *${plain(d.record.name)}*` : ""} has closed: *${state}*.${image ? "" : unchallenged}${page ? `\n📄 ${page}` : ""}`;
+    await notify(chat.chatId, text, { image }).catch((err) => console.error(`[solana listener] couldn't notify ${chat.chatId}:`, err.message));
+  }
 }
 
 /** Applies the DAO's pending switch once it's due, telling the chat. */
@@ -183,14 +250,21 @@ export function startSolanaListener({ platform, notify }, pollIntervalMs = 30_00
         // Keyed by governance account, so a switched DAO starts afresh in its new program.
         const k = `${chat.chatId}:${d.governance.toBase58()}`;
         const { newest, events } = await newEvents(network, d, state[k]);
+        const open = (state[`${k}#votes`] ??= {});
+        for (const ev of events) trackVote(open, d.model, ev.name, ev.data);
         if (events.length) {
           const now = await v.clusterNow(network);
           for (const ev of events) {
             const text = formatSolanaEvent(ev.name, ev.data, { model: d.model, now, name: d.record.name });
-            if (text) await notify(chat.chatId, text).catch((err) => console.error(`[solana listener] couldn't notify ${chat.chatId}:`, err.message));
+            if (!text) continue;
+            // Like the EVM notices: the transaction reported, and a new proposal's page.
+            const page = /^proposalCreated$/i.test(ev.name) ? proposalPageUrl(chat.link.network, d.governance.toBase58(), String(ev.data.id)) : null;
+            const links = `\n🔗 ${explorerUrl(network, "tx", ev.signature)}${page ? `\n📄 ${page}` : ""}`;
+            await notify(chat.chatId, text + links).catch((err) => console.error(`[solana listener] couldn't notify ${chat.chatId}:`, err.message));
           }
         }
         if (newest) state[k] = newest;
+        await postVoteCloses(network, d, chat, open, notify);
       } catch (err) {
         console.error(`[solana listener] ${chat.link.dao} failed:`, err.message);
       }

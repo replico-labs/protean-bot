@@ -27,7 +27,8 @@ import anchor from "@coral-xyz/anchor";
 
 const { AnchorProvider, Program, BN } = anchor;
 export { BN };
-import { IDLS, GOV_ERRORS, getSolanaOperator } from "./config.js";
+import { IDLS, GOV_ERRORS, getSolanaOperator, explorerUrl } from "./config.js";
+import { trackTx } from "../txLinks.js";
 
 /**
  * Talks to the Vortexes programs: the hub (DAO records, treasuries,
@@ -161,13 +162,19 @@ export function tokenAccount(mint, owner, tokenProgram = TOKEN_PROGRAM_ID) {
 // sending
 // ---------------------------------------------------------------
 
-/** Sends `ixs` signed by `signers` (the first pays); returns the signature. */
+/**
+ * Sends `ixs` signed by `signers` (the first pays); returns the signature.
+ * Every Vortexes transaction leaves the bot here, so this is where its
+ * explorer link is recorded for the command's reply (txLinks.js).
+ */
 export async function send(network, ixs, signers, { computeUnits } = {}) {
   const tx = new Transaction();
   if (computeUnits) tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: computeUnits }));
   tx.add(...ixs);
   try {
-    return await sendAndConfirmTransaction(network.connection, tx, signers, { commitment: "confirmed" });
+    const sig = await sendAndConfirmTransaction(network.connection, tx, signers, { commitment: "confirmed" });
+    trackTx(explorerUrl(network, "tx", sig));
+    return sig;
   } catch (err) {
     // A failure found while confirming carries no logs; fetch them, as they name the error.
     if (!err?.logs?.length && !err?.transactionLogs?.length && typeof err?.getLogs === "function") {

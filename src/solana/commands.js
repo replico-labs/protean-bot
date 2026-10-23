@@ -2,6 +2,7 @@ import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { getChatSolana, registerSolanaChat, unregisterSolanaChat, updateChatSolana } from "../db.js";
 import { proposalButtons } from "../buttons.js";
+import { solanaProposalImage } from "./charts.js";
 import { helpReply } from "../helpMenu.js";
 import { SOLANA_ENABLED, SOLANA_MODELS, getSolanaNetwork, resolveSolanaNetwork, explorerUrl, getSolanaOperator } from "./config.js";
 import { getOrCreateSolanaKeypair, getSolanaAddress, ensureSolFunded } from "./wallets.js";
@@ -623,12 +624,12 @@ const COMMANDS = {
       if (!ctx.args[0]) fail(`Usage: \`${ctx.cmd("stake")} <amount>\``);
       const raw = tok.parse(ctx.args[0]);
       const kp = await member(ctx, network);
-      const sig = await v.deposit(network, model, kp, d, governance, raw);
+      await v.deposit(network, model, kp, d, governance, raw);
       const extra =
         model === "conviction" ? `\nTo back a proposal with it, \`${ctx.cmd("support")} <id>\` (again, if you already back one).`
         : model === "sortition" ? `\nTo be in the next council draw, \`${ctx.cmd("registereligible")}\`.`
         : "";
-      return reply(`✅ Staked ${tok.fmt(raw)} ${tok.symbol}.${extra}\n${explorerUrl(network, "tx", sig)}`);
+      return reply(`✅ Staked ${tok.fmt(raw)} ${tok.symbol}.${extra}`);
     },
   },
 
@@ -642,8 +643,8 @@ const COMMANDS = {
       if (!ctx.args[0]) fail(`Usage: \`${ctx.cmd("unstake")} <amount>\``);
       const raw = tok.parse(ctx.args[0]);
       const kp = await member(ctx, network);
-      const sig = await v.withdraw(network, model, kp, d, governance, raw);
-      return reply(`✅ Unstaked ${tok.fmt(raw)} ${tok.symbol}.\n${explorerUrl(network, "tx", sig)}`);
+      await v.withdraw(network, model, kp, d, governance, raw);
+      return reply(`✅ Unstaked ${tok.fmt(raw)} ${tok.symbol}.`);
     },
   },
 
@@ -715,8 +716,8 @@ const COMMANDS = {
       if (!amount || !to) fail(`Usage: \`${ctx.cmd("tip")} <amount> <address|treasury>\``);
       const recipient = to.toLowerCase() === "treasury" ? d.treasury : parseKey(to, "the recipient");
       const raw = tok.parse(amount);
-      const sig = await v.tipTokens(network, governance.mint, recipient, raw);
-      return reply(`✅ Sent ${tok.fmt(raw)} ${tok.symbol} to \`${short(recipient)}\`.\n${explorerUrl(network, "tx", sig)}`);
+      await v.tipTokens(network, governance.mint, recipient, raw);
+      return reply(`✅ Sent ${tok.fmt(raw)} ${tok.symbol} to \`${short(recipient)}\`.`);
     },
   },
 
@@ -862,12 +863,13 @@ const COMMANDS = {
       }
       const page = proposalPageUrl(link.network, d.governance.toBase58(), id);
       const buttons = proposalButtons({ model, id, state, page });
-      if (!page) return reply(lines.join("\n"), { buttons });
+      const image = await solanaProposalImage({ network, networkId: link.network, model, governance: d.governance, id, p, g, now, state });
+      if (!page) return reply(lines.join("\n"), { buttons, image });
       lines.push("", `📄 Details and live status: ${page}`);
       // The proposer, before submitting details: their link again, privately.
       const args = { network: link.network, dao: d.governance.toBase58(), model, proposalId: id };
       const submit = await pendingSubmitLink({ ...args, platform: ctx.platform, userId: ctx.userId, walletAddress: await getSolanaAddress(ctx.userId, ctx.platform).catch(() => null), cmd: ctx.cmd }).catch(() => null);
-      return submit ? { text: lines.join("\n"), privateFollowUp: submit, startPayload: proposalStartPayload(args.network, args.dao, id), buttons } : reply(lines.join("\n"), { buttons });
+      return submit ? { text: lines.join("\n"), privateFollowUp: submit, startPayload: proposalStartPayload(args.network, args.dao, id), buttons, image } : reply(lines.join("\n"), { buttons, image });
     },
   },
 
@@ -1092,8 +1094,8 @@ const COMMANDS = {
     async run(ctx) {
       const id = parseId(ctx.args[0], `${ctx.cmd("execute")} <id>`);
       const { network, d, model } = await loadDao(ctx);
-      const sig = await v.execute(network, d, model, id);
-      return reply(`✅ Proposal #${id} executed - the treasury has done what it said.\n${explorerUrl(network, "tx", sig)}`);
+      await v.execute(network, d, model, id);
+      return reply(`✅ Proposal #${id} executed - the treasury has done what it said.`);
     },
   },
 
