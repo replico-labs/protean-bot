@@ -67,7 +67,7 @@ const DEFINITIONS = {
     chain: hyperEvm,
     envPrefix: "HYPEREVM",
     // HyperEVM's small blocks (1s, 2M gas). Anything bigger than 2M gas
-    // only fits in its big blocks - see the README's HyperEVM notes.
+    // only fits in its big blocks - see docs/architecture.md's HyperEVM notes.
     blockTimeMs: 1000,
     gas: { min: "0.001", first: "0.01", repeat: "0.005" },
     maxContractSize: 24_576,

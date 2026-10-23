@@ -164,7 +164,7 @@ export async function writeWithGasBuffer(client, contractParams) {
     if (estimate > smallBlockGasLimit) {
       throw new Error(
         `This transaction needs ~${estimate} gas, more than ${chain.name}'s ${smallBlockGasLimit} small-block limit. ` +
-          `The sending wallet must be switched to big blocks first (see README: HyperEVM).`
+          `The sending wallet must be switched to big blocks first (see docs/architecture.md, Networks and gas: HyperEVM).`
       );
     }
     gas = smallBlockGasLimit;
