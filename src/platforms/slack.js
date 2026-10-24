@@ -158,7 +158,7 @@ export async function handleSlashCommand({ command, ack, respond, client }) {
     chatId: command.channel_id,
     userId: command.user_id,
     args,
-    isAdmin: ADMIN_COMMANDS.has(name) ? await lookupIsAdmin(client, command.user_id) : undefined,
+    isAdmin: ADMIN_COMMANDS.has(name) || (name === "desk" && /^(pause|resume)$/i.test(args[0] ?? "")) ? await lookupIsAdmin(client, command.user_id) : undefined,
     isDirect: command.channel_name === "directmessage",
     cmd: (sub) => `${SLASH_COMMAND} ${sub}`,
   };

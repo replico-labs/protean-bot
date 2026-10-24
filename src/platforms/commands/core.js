@@ -16,13 +16,13 @@ import { getIntegrationAction, integrationUsage, IntegrationError } from "../../
 import { integrationListLines, actionInfoText } from "../../integrations/describe.js";
 import { CONFIG_DISPLAY_BY_MODEL, VOTE_CHOICES } from "../../display.js";
 import { short, stateLine, formatDate } from "../../format.js";
-import { NO_WALLETS, UserError, reply, requireDao, parseId, parseAmount, userClient, mayManageLink, callerAddress, proposalReply } from "../helpers.js";
+import { NO_WALLETS, UserError, reply, requireDao, parseId, parseAmount, userClient, mayManageLink, isCreator, callerAddress, proposalReply } from "../helpers.js";
 import { budgetLine } from "../../governance/budgetText.js";
 import { proposalPageUrl, pendingSubmitLink } from "../../proposalPages.js";
 import { proposalImage } from "../../charts.js";
 import { getUserAddress } from "../../walletResolver.js";
 import { parsePerps, perpsUsage, perpsView, perpsProposalWords, PerpsError } from "../../perps.js";
-import { deskUsage, deskStatus, applyForDesk, deskProposalWords, resignFromDesk, linkDesk, trade, DeskError } from "../../desk.js";
+import { deskUsage, deskStatus, applyForDesk, deskProposalWords, resignFromDesk, linkDesk, trade, setDeskPaused, DeskError } from "../../desk.js";
 import { link, addressLine } from "../../links.js";
 import { buttonHint as sowellianButtonHint } from "../../governance/sowellian.js";
 
@@ -360,8 +360,8 @@ export const CORE_COMMANDS = {
   },
 
   desk: {
-    description: "Trading desk: a trader appointed by proposal trades the DAO's perps collateral, never withdraws",
-    options: [{ name: "request", description: "blank, long|short|close … (trader), apply <markets> max=<size>, fund|withdraw <amt>, remove, resign", required: false, rest: true }],
+    description: "Trading desk: traders appointed by proposal trade the DAO's perps collateral, never withdraw",
+    options: [{ name: "request", description: "blank, long|short|close … (trader), apply <markets> max=<size>, fund|withdraw <amt> [for=<n>], remove [n], resign, pause, resume", required: false, rest: true }],
     async run(ctx) {
       const address = requireDao(ctx);
       const [sub = "", ...args] = ctx.args;
@@ -381,8 +381,8 @@ export const CORE_COMMANDS = {
           case "fund":
           case "withdraw":
           case "remove": {
-            const { actionId, words } = deskProposalWords(chat, sub.toLowerCase(), args);
-            return await proposeIntegration({ ...ctx, named: undefined }, address, actionId, words);
+            const { actionId, words, record } = await deskProposalWords(chat, sub.toLowerCase(), args);
+            return await proposeIntegration({ ...ctx, named: undefined }, address, actionId, words, record ? { onProposed: record } : undefined);
           }
           case "resign": {
             const { client } = await userClient(ctx);
@@ -390,6 +390,12 @@ export const CORE_COMMANDS = {
           }
           case "link":
             return reply(await linkDesk(chat, args[0]));
+          case "pause":
+          case "resume": {
+            // Fast and reversible, so chat admins and the DAO's creator may do it without a vote.
+            if (ctx.isAdmin !== true && !isCreator(ctx)) throw new DeskError("Only this chat's admins or the DAO's creator can pause or resume the desk. Anyone can propose removing the trader: `desk remove`.");
+            return reply(setDeskPaused(chat, sub.toLowerCase() === "pause", ctx.isAdmin === true ? "a chat admin" : "the DAO's creator"));
+          }
           case "long":
           case "short":
           case "buy":

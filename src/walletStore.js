@@ -198,3 +198,34 @@ export async function recordSolanaTopup(platform, platformUserId) {
   if (error) throw new Error(`Supabase update failed: ${supabaseMessage(error)}`);
   return topups;
 }
+
+/*//////////////////////////////////////////////////////////////
+                  HYPERCORE DESK AGENT KEYS
+//////////////////////////////////////////////////////////////*/
+
+/**
+ * A HyperCore trading desk trades through an API wallet ("agent") the
+ * Treasury approves by proposal (src/deskHypercore.js). Its key is made
+ * and kept here, encrypted like a user's, under platform `hl-agent` and an
+ * id per appointment - so no trader ever holds it, and every order goes
+ * through the bot's mandate checks. A fresh key per appointment: Hyperliquid
+ * advises against reusing an agent address once it's been replaced.
+ */
+const AGENT_PLATFORM = "hl-agent";
+
+/** Makes and stores a new agent key; returns its address. */
+export async function createAgentKey(id) {
+  const record = await createWalletRecord(AGENT_PLATFORM, id);
+  return record.address;
+}
+
+/** The agent's viem account, decrypted for this one use. */
+export function getAgentAccount(id) {
+  return getWalletAccount(AGENT_PLATFORM, id);
+}
+
+/** Throws the agent's key away (a trader resigning): the agent can't sign again, whatever Hyperliquid still has approved. */
+export async function deleteAgentKey(id) {
+  const { error } = await getSupabaseClient().from("wallets").delete().eq("platform", AGENT_PLATFORM).eq("platform_user_id", String(id));
+  if (error) throw new Error(`Supabase delete failed: ${supabaseMessage(error)}`);
+}

@@ -61,7 +61,7 @@ const CORE_META = {
   listactions: ["Proposing", ""],
   proposeaction: ["Proposing", "<actionId> <args...> <description>"],
   actioninfo: ["Proposing", "<actionId>"],
-  desk: ["Proposing", "[long|short <market> <size> at <price> [3x] | close <market> <size|all> at <price> | apply <markets> max=<size> [lev=2] [days=30] | fund|withdraw <amount> | remove | resign]"],
+  desk: ["Proposing", "[long|short <market> <size> at <price> [3x] | close <market> <size|all> at <price> | apply <markets> max=<size> [total=<size>] [lev=2] [days=30] | fund|withdraw <amount> [for=<n>] | remove [n] | resign | pause | resume]"],
   perps: ["Proposing", "[markets | long|short <market> <size> at <price> [3x] | close <market> <size|all> at <price> | deposit|withdraw <amount>]"],
   propose: ["Proposing", "<target> <valueWei> <data> <description>"],
   vote: ["Deciding", "<id> for|against|abstain [reason]"],

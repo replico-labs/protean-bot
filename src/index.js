@@ -2283,7 +2283,7 @@ bot.command("perps", async (ctx) => {
  * a Telegram message, so newer commands live in one place for every
  * platform. Private parts (a proposer's edit link) go by DM.
  */
-async function runSharedCommand(ctx, name) {
+async function runSharedCommand(ctx, name, extra = {}) {
   const result = await runCommand(name, {
     platform: "telegram",
     chatId: ctx.chat.id,
@@ -2291,6 +2291,7 @@ async function runSharedCommand(ctx, name) {
     args: splitArgs(ctx.match ?? ""),
     isDirect: ctx.chat.type === "private",
     cmd: TG_CMD,
+    ...extra,
   });
   const extra = { link_preview_options: { is_disabled: true }, ...(result.buttons?.length ? { reply_markup: telegramKeyboard(result.buttons) } : {}) };
   await ctx.reply(result.text, { parse_mode: "Markdown", ...extra }).catch(() => ctx.reply(result.text, extra));
@@ -2300,7 +2301,12 @@ async function runSharedCommand(ctx, name) {
   }
 }
 
-bot.command("desk", (ctx) => runSharedCommand(ctx, "desk"));
+bot.command("desk", async (ctx) => {
+  // Pausing the desk is for the group's admins (or the DAO's creator); only then is it worth asking Telegram.
+  const sub = String(ctx.match ?? "").trim().split(/\s+/)[0].toLowerCase();
+  const isAdmin = sub === "pause" || sub === "resume" ? await isGroupAdmin(ctx).catch(() => undefined) : undefined;
+  return runSharedCommand(ctx, "desk", { isAdmin });
+});
 bot.command("switchmodel", (ctx) => runSharedCommand(ctx, "switchmodel"));
 bot.command("migrate", (ctx) => runSharedCommand(ctx, "migrate"));
 

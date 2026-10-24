@@ -255,7 +255,7 @@ export function createWhatsAppBot({
     const userId = jidDecode(lid).user;
 
     let isAdmin;
-    if (ADMIN_COMMANDS.has(name) && !isDirect) {
+    if ((ADMIN_COMMANDS.has(name) || (name === "desk" && /^(pause|resume)$/i.test(args[0] ?? ""))) && !isDirect) {
       const metadata = await groupMetadata(chatId).catch(() => null);
       isAdmin = metadata ? isGroupAdmin(metadata, senderJids(key, lid)) ?? false : undefined;
     }

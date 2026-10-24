@@ -55,6 +55,24 @@ It uses the bot's `.env`: the operator key, factory addresses, `SORTITION_RANDOM
 
 It stands in for wallet storage and backs up and restores `data/chats.json`, so don't run it while another test is using that file.
 
+## HyperCore trading desk
+
+`scripts/test-hypercore-desk.mjs` runs the HyperCore desk (src/deskHypercore.js) on anvil posing as HyperEVM testnet. Setup is in its header: anvil with `--chain-id 998`, the factories deployed with `deploy-local-evm.mjs`, and the env lines given the `HYPEREVM_TESTNET_` prefix. Deploy with anvil's instant mining, then switch it to 1-second blocks (`evm_setIntervalMining`), and keep recent state with `--prune-history 300`. HyperEVM reads are pinned to the block after the bot's last transaction, so the chain has to keep making blocks and still answer for the last few.
+
+HyperCore is stood in for twice. On the chain, a CoreWriter stand-in logs each raw action, and a perp-info precompile stand-in answers for BTC and ETH. Off it, a small Hyperliquid API approves an agent when the Treasury's executed proposal logs CoreWriter action 9, and fills orders after recovering who signed each one. It checks:
+- the appointment proposal approves a fresh agent through CoreWriter action 9 (`abi(address, string)`, named `protean-desk-1`);
+- every order is signed by the bot's agent key, never by the trader's wallet;
+- the mandate holds: `max` per market, `total` across markets, leverage;
+- pausing stops new positions while closing still works;
+- removal revokes the agent and the bot destroys its key;
+- a new appointment gets a new agent;
+- resigning destroys the key at once;
+- with a second trader: an application for a market another trader has is refused, each trader signs with their own agent and can't open or close the other's markets, and `remove <n>` revokes just that one.
+
+The Perpl desk's several-desks flow (one desk per trader) has no local test: there's no Perpl stand-in on anvil.
+
+Like the buttons test, it stands in for wallet storage and backs up and restores `data/chats.json`, also when it's stopped part-way.
+
 ## Slack and links
 
 `node --experimental-test-module-mocks --test scripts/test-slack.mjs` needs no chain or workspace. It runs `/protean` with a stand-in result and a fake Slack client, and checks: labelled links and plain addresses; every model's buttons through its states, each fitting Telegram's 64 bytes; the amount and "are you sure" menus against a stand-in chain (shares of a balance, EVM trades' 1% minimum out); buttons on listener notices; the chart upload (joining the channel when needed, and the note when it can't post); and links.js's Telegram, Discord and WhatsApp forms.
@@ -113,6 +131,6 @@ Pyth Entropy calls back by itself, usually within seconds, so randomness needs n
 ## Not built yet
 
 - Group-wide gas sponsorship with spending limits
-- Phoenix perps and desks on Solana
+- Phoenix perps and desks on Solana (new Phoenix accounts need an access code, and it runs on mainnet only)
 
 [Back to the README](../README.md)

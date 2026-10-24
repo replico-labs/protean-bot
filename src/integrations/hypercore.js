@@ -25,7 +25,7 @@ import { IntegrationError, checksummed, call, approveCall, parseAmount, requireC
 const CORE_WRITER_ABI = [{ type: "function", name: "sendRawAction", inputs: [{ name: "data", type: "bytes" }], outputs: [], stateMutability: "nonpayable" }];
 const DEPOSIT_WALLET_ABI = [{ type: "function", name: "deposit", inputs: [{ name: "amount", type: "uint256" }, { name: "destinationDex", type: "uint32" }], outputs: [], stateMutability: "nonpayable" }];
 
-const ACTION = { LIMIT_ORDER: 1, USD_CLASS_TRANSFER: 7, CANCEL_BY_CLOID: 11, SEND_ASSET: 13 };
+const ACTION = { LIMIT_ORDER: 1, USD_CLASS_TRANSFER: 7, ADD_API_WALLET: 9, CANCEL_BY_CLOID: 11, SEND_ASSET: 13 };
 const TIF = { alo: 1, gtc: 2, ioc: 3 };
 const SPOT_DEX = 0xffffffff;
 const PERP_DEX = 0;
@@ -260,6 +260,24 @@ export const actions = [
     },
   },
   {
+    id: "hypercore-approve-agent",
+    label: "Approve an API wallet (agent) that may trade the Treasury's HyperCore account",
+    usage: ["address", "name"],
+    options: [],
+    help: "An agent places and cancels orders and sets leverage for the Treasury's HyperCore account. Approving another address under the same name replaces (revokes) the old one. The trading desk (`desk apply` on HyperEVM) uses this with a key the bot holds.",
+    async build(ctx) {
+      const d = deployment(ctx);
+      const agent = String(ctx.args[0] ?? "");
+      if (!/^0x[0-9a-fA-F]{40}$/.test(agent)) throw new IntegrationError(`"${agent}" isn't an address.`);
+      const name = String(ctx.args[1] ?? "");
+      if (!/^[A-Za-z0-9-]{1,32}$/.test(name)) throw new IntegrationError("Give the agent a short name: letters, digits or dashes.");
+      return {
+        calls: [coreAction(d, ACTION.ADD_API_WALLET, [{ type: "address" }, { type: "string" }], [getAddress(agent), name], "approve agent")],
+        summary: `Approve ${getAddress(agent)} as the Treasury's HyperCore agent "${name}": it can trade the Treasury's HyperCore account (orders, cancels, leverage), and replaces any earlier agent of that name.${CORE_NOTE}`,
+      };
+    },
+  },
+  {
     id: "hypercore-withdraw",
     label: "Bring HYPE or a linked token from HyperCore spot back to the Treasury on HyperEVM",
     usage: ["HYPE|token:<index>", "amount"],
@@ -320,7 +338,7 @@ async function perpIndex(ctx, name) {
   if (index < 0) throw new IntegrationError(`HyperCore has no perp market "${name}". \`perps markets\` lists them.`);
   const onchain = await precompile(ctx, PRECOMPILE.perpAssetInfo, [{ type: "uint32" }], [index], PERP_ASSET_INFO);
   if (onchain.coin !== meta.universe[index].name) throw new IntegrationError(`Hyperliquid's API and HyperCore disagree on perp ${index} (${meta.universe[index].name} vs ${onchain.coin}) - not proposing.`);
-  return { index, coin: onchain.coin };
+  return { index, coin: onchain.coin, szDecimals: Number(onchain.szDecimals), maxLeverage: Number(onchain.maxLeverage), market: `${onchain.coin} perp`, maxDecimals: 6 };
 }
 
 async function position(ctx, coin) {
@@ -384,3 +402,6 @@ export const perps = {
     return ["hypercore-order", `perp:${index}`, Number(held.szi) > 0 ? "sell" : "buy", size, t.price, "tif=ioc", "reduceonly=yes"];
   },
 };
+
+/** For src/deskHypercore.js: the pieces a desk trade is checked and built with. */
+export const deskVenue = { deployment, info, perpIndex, checkTick };
