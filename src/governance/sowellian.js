@@ -159,6 +159,20 @@ export async function getProposal(governanceAddress, proposalId) {
   };
 }
 
+/**
+ * What proposal buttons (buttons.js) need beyond phaseLabel: the contract
+ * keeps a proposal in Executed through its measurement period and after
+ * it - resolving only needs measurementDeadline passed (its
+ * ResolutionPending phase is never set) - so past the deadline, by the
+ * chain's clock, this says ResolutionPending. Plus its resolution track.
+ */
+export async function buttonHint(p) {
+  const track = Number(p.resolutionMethod) === 0 ? "oracle" : "human";
+  if (p.phaseLabel !== "Executed") return { state: p.phaseLabel, track };
+  const { timestamp } = await publicClient.getBlock({ blockTag: "latest" });
+  return { state: timestamp >= BigInt(p.measurementDeadline) ? "ResolutionPending" : "Executed", track };
+}
+
 /*//////////////////////////////////////////////////////////////
     1. PROPOSING - the real, full propose() signature
 //////////////////////////////////////////////////////////////*/

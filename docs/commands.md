@@ -40,19 +40,31 @@ Every command, and the buttons and help menu that run them. `/help` only shows t
 
 ## Buttons and the help menu
 
-- **Buttons under proposals,** on Telegram, Discord and Slack, for EVM and Solana DAOs alike.
-  - A new proposal gets the buttons its model needs:
-    - **For / Against / Abstain:** token-weighted, quadratic, liquid, and delegate and sortition councils
-    - **Challenge:** optimistic
+- **Buttons under proposals,** on Telegram, Discord and Slack, for EVM and Solana DAOs alike. They come on the proposer's reply, on `/proposal <id>`, and on the listener's notices: a new proposal, a vote closing, a proposal queued, and model events like a challenge or a resolution (see [notifications](proposals-and-notifications.md#notifications-and-vote-charts)).
+  - Each shows what fits the proposal's state at that moment:
+    - **For / Against / Abstain:** token-weighted, quadratic, liquid, delegate and sortition councils, and optimistic once challenged
+    - **Challenge:** optimistic, during its window
     - **Support:** conviction
     - **Confirm:** board
-    - **For / Against / Abstain** on the approval vote (`castapprovalvote`): Sowellian
-    - none for Decision Markets, which trade instead (`trade`)
-  - Every proposal also gets **Status** and a **Details** link to its page.
-  - `/proposal <id>` shows what fits the proposal's state now: the vote buttons while it's open, **Queue** once it has passed, **Execute** once it's queued.
+    - **Queue** once a vote has passed, **Execute** once it's queued
+  - **Sowellian,** phase by phase:
+    - approval vote: **For / Against / Abstain** (`castapprovalvote`), and **Close approval vote** once it can be
+    - positions open: **Back YES / Back NO**, which ask how much (below)
+    - once measurement is over: **Resolve from the oracle** on the oracle track, or **It worked / It didn't** on the human track to propose the outcome (asks first: it posts a bond). On EVM the contract's phase still reads Executed then, so the buttons check the measurement deadline against the chain's clock.
+    - resolution proposed: **Challenge** (asks first: it posts a bond) or **Lock it in**
+    - adjudicating: **It worked / It didn't** (`castadjudicationvote`) and **Close the vote**
+    - resolved: **Claim winnings**
+  - **Decision Markets:**
+    - while trading: **Buy pass / Buy fail / Sell pass / Sell fail**, and **Split quote / Split tokens** to get pass and fail balances to trade with, all of which ask how much
+    - once trading ends: **Settle markets**
+    - once settled: **Redeem** (EVM: tokens and quote separately)
+  - **"How much?"** A button that spends shows the presser a second message with **10% / 25% / 50% / All** of what they hold for it, read when they press, plus how to type any other amount. EVM trades carry a minimum out 1% under the pool's own quote (`getAmountOut`); Solana trades apply 1% themselves. With nothing to spend, it says how to get some (e.g. split first).
+  - **"Are you sure?"** Proposing or challenging a Sowellian resolution posts a bond, so its button first explains that and asks.
+  - These second messages go only to the presser on Discord and Slack; on Telegram they're posted in the group, addressed to the presser (a group bot can't show a message to one member).
+  - Every proposal also gets **Status** and a **Details** link to its page. Once it's over (Defeated, Executed, Expired…) only those remain.
   - A button runs the same command as typing it, as whoever pressed it, with their own wallet and the same checks; the chat sees who pressed what. On Discord and Slack, errors (already voted, no stake) go only to the presser.
-  - Only `vote`, `castapprovalvote`, `challenge`, `support`, `confirm`, `queue`, `execute`, `proposal` and `help` can come from a button.
-  - Once voting has closed (Defeated, Executed, Expired…) there's nothing left to press, so only **Status** and **Details** remain.
+  - Only the commands listed in `BUTTON_COMMANDS` (`src/buttons.js`) can come from a button, so a forged button can't run anything else.
+  - Still typed only: delegate elections (`declarecandidacy`, `voteinelection`), merging, and anything with an address.
   - Slack needs `interactivity` on in the app manifest (it is, in [`slack-app-manifest.yml`](slack-app-manifest.yml)).
 - **`/help` is a menu:**
   - It opens with a line about the chat's DAO and a button per topic (Setup, Wallet, The DAO, Proposing, Deciding, Council, …), showing only what applies to the model.

@@ -90,6 +90,7 @@ import { registerTelegramMenu } from "./telegramMenu.js";
 import { helpReply } from "./helpMenu.js";
 import { withTxTracking, trackedChatId, takeTxLinks, trackTx } from "./txLinks.js";
 import { proposalButtons, telegramKeyboard, decodeButton, BUTTON_COMMANDS } from "./buttons.js";
+import { buttonMenu } from "./buttonMenus.js";
 import { whatsappLinkConfigured, whatsappLinkRoutes } from "./platforms/whatsappLink.js";
 import { proposalImage } from "./charts.js";
 import { runCommand } from "./platforms/commands.js";
@@ -103,6 +104,7 @@ import { sendNativeSponsored } from "./gasSponsor.js";
 import { splitArgs } from "./args.js";
 import { budgetLine, assetsText } from "./governance/budgetText.js";
 import { link, telegramLinks, hasLinks, addressLine } from "./links.js";
+import { buttonHint as sowellianButtonHint } from "./governance/sowellian.js";
 
 // Checked here rather than in config.js, so the keepers and the Discord
 // and Slack entrypoints (which share config.js) don't need a Telegram token.
@@ -2000,7 +2002,7 @@ bot.command("proposal", async (ctx) => {
     const model = getChatModel(ctx.chat.id);
     const adapter = getAdapter(model);
     const p = await adapter.getProposal(address, id);
-    const stateLabel = p.stateLabel ?? p.statusLabel ?? PROPOSAL_STATE_LABELS[p.stateIndex] ?? "Unknown";
+    const stateLabel = p.stateLabel ?? p.statusLabel ?? p.phaseLabel ?? PROPOSAL_STATE_LABELS[p.stateIndex] ?? "Unknown";
 
     const lines = [
       `*Proposal #${p.id}* — ${stateLine(stateLabel)}`,
@@ -2058,7 +2060,9 @@ bot.command("proposal", async (ctx) => {
     const page = proposalPageUrl(currentNetwork().id, address, id);
     if (page) lines.push("", `📄 ${link("Proposal page: details and live status", page)}`);
 
-    await ctx.reply(lines.join("\n"), { parse_mode: "Markdown", reply_markup: telegramKeyboard(proposalButtons({ model, id, state: stateLabel, page })) });
+    const hint = model === "sowellian" ? await sowellianButtonHint(p).catch(() => ({})) : {};
+    const buttons = proposalButtons({ model, id, state: hint.state ?? stateLabel, page, track: hint.track });
+    await ctx.reply(lines.join("\n"), { parse_mode: "Markdown", reply_markup: telegramKeyboard(buttons) });
     const image = await proposalImage({ network: currentNetwork().id, chainName: currentNetwork().chain.name, model, dao: address, p, state: stateLabel });
     if (image) await ctx.replyWithPhoto(new InputFile(image.png, image.name)).catch((err) => console.warn(`Couldn't send a chart: ${err.message}`));
     await resendSubmitLink(ctx, address, id);
@@ -4412,6 +4416,16 @@ bot.callbackQuery(/^c:/, async (ctx) => {
     const { text, buttons } = await telegramHelp(message.chat, ctx.from.id, args[0]);
     const extra = { reply_markup: telegramKeyboard(buttons ?? []), link_preview_options: { is_disabled: true } };
     await ctx.editMessageText(text, { parse_mode: "Markdown", ...extra }).catch(() => ctx.editMessageText(text, extra).catch(() => {}));
+    return;
+  }
+  // A second step (buttonMenus.js): how much, or "are you sure", for whoever pressed.
+  if (name === "ask") {
+    await ctx.answerCallbackQuery().catch(() => {});
+    const who = [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" ") || ctx.from.username || "Someone";
+    const menu = await buttonMenu({ platform: "telegram", chatId: message.chat.id, userId: ctx.from.id, cmd: (n) => `/${n}` }, args).catch((err) => ({ text: err.message, buttons: [] }));
+    const extra = { reply_markup: telegramKeyboard(menu.buttons), link_preview_options: { is_disabled: true } };
+    const body = `👆 ${who}: ${menu.text}`;
+    await ctx.api.sendMessage(message.chat.id, body, { parse_mode: "Markdown", ...extra }).catch(() => ctx.api.sendMessage(message.chat.id, body, extra).catch(() => {}));
     return;
   }
   const text = `/${name}${args.length ? " " + args.join(" ") : ""}`;

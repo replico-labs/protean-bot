@@ -16,6 +16,8 @@ import { proposalPageUrl } from "./proposalPages.js";
 import { deskExecuted } from "./desk.js";
 import { detectSwitch } from "./modelSwitch.js";
 import { link } from "./links.js";
+import { proposalButtons, telegramKeyboard } from "./buttons.js";
+import { buttonHint as sowellianButtonHint } from "./governance/sowellian.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // One state file per platform process: Telegram keeps the original file
@@ -238,9 +240,11 @@ async function checkNetwork(notify, daos, currentBlock, state, save) {
         }
         if (log.eventName === "ProposalCreated" && log.args?.proposalId !== undefined) trackVote(state, w, log.args.proposalId);
         const url = log.transactionHash ? explorerTxUrl(log.transactionHash) : null;
-        const message = formatEvent(log.eventName, log.args ?? {}) + (url ? `\n🔗 ${link("View transaction", url)}` : "");
+        const id = log.args?.proposalId;
+        const page = log.eventName === "ProposalCreated" && id !== undefined ? proposalPageUrl(w.dao.network, w.dao.governanceAddress, id) : null;
+        const message = formatEvent(log.eventName, log.args ?? {}) + (url ? `\n🔗 ${link("View transaction", url)}` : "") + (page ? ` · 📄 ${link("Proposal page", page)}` : "");
         try {
-          await notify(w.dao.chatId, message);
+          await notify(w.dao.chatId, message, { buttons: await noticeButtons(w.dao, log.eventName, id) });
         } catch (sendErr) {
           console.error(`Event listener: couldn't notify chat ${w.dao.chatId}:`, sendErr.message);
         }
@@ -345,11 +349,30 @@ async function checkVoteCloses(notify, daos, currentBlock, state) {
       const page = proposalPageUrl(dao.network, dao.governanceAddress, id);
       const text = `🗳️ Voting on proposal #${id} has closed: *${label}*.${image ? "" : unchallengedNote(dao.model, label)}${page ? `\n📄 ${link("Proposal page", page)}` : ""}`;
       try {
-        await notify(dao.chatId, text, { image });
+        await notify(dao.chatId, text, { image, buttons: proposalButtons({ model: dao.model, id, state: label, page }) });
       } catch (err) {
         console.error(`Event listener: couldn't notify chat ${dao.chatId}:`, err.message);
       }
     }
+  }
+}
+
+/**
+ * The buttons under a notice about proposal `id` (buttons.js): what can be
+ * done with it now, Status and its page. A new proposal needs no read; any
+ * other event reads the proposal's current state. None for proposals that
+ * are over (executed, cancelled) or when the read fails.
+ */
+async function noticeButtons(dao, eventName, id) {
+  if (id === undefined || eventName === "ProposalExecuted" || eventName === "ProposalCancelled") return null;
+  const page = proposalPageUrl(dao.network, dao.governanceAddress, id);
+  if (eventName === "ProposalCreated") return proposalButtons({ model: dao.model, id, page });
+  try {
+    const p = await getAdapter(dao.model).getProposal(dao.governanceAddress, id);
+    const hint = dao.model === "sowellian" ? await sowellianButtonHint(p) : {};
+    return proposalButtons({ model: dao.model, id, state: hint.state ?? stateLabelOf(p), page, track: hint.track });
+  } catch {
+    return null;
   }
 }
 
@@ -399,8 +422,9 @@ function trimAmount(wei) {
  * Starts the polling loop. Call once at startup of each platform process.
  *
  * `target` is either a grammY bot (Telegram, the original behavior) or
- * `{ platform, notify }`, where notify(chatId, markdownText) posts to one
- * channel on that platform. Only DAOs linked on that platform are
+ * `{ platform, notify }`, where notify(chatId, markdownText, { image,
+ * buttons }) posts to one channel on that platform (buttons.js rows; a
+ * platform without buttons ignores them). Only DAOs linked on that platform are
  * watched, so each platform process notifies its own channels.
  */
 export function startEventListener(target, pollIntervalMs = 20_000) {
@@ -408,8 +432,8 @@ export function startEventListener(target, pollIntervalMs = 20_000) {
     target && target.api && typeof target.api.sendMessage === "function"
       ? {
           platform: "telegram",
-          notify: async (chatId, text, { image } = {}) => {
-            await target.api.sendMessage(chatId, text, { parse_mode: "Markdown" });
+          notify: async (chatId, text, { image, buttons } = {}) => {
+            await target.api.sendMessage(chatId, text, { parse_mode: "Markdown", ...(buttons?.length ? { reply_markup: telegramKeyboard(buttons) } : {}) });
             if (image) await target.api.sendPhoto(chatId, new InputFile(image.png, image.name)).catch((err) => console.warn(`Event listener: couldn't send a chart to ${chatId}: ${err.message}`));
           },
         }

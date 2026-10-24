@@ -8,6 +8,7 @@ import { proposalPageUrl } from "../proposalPages.js";
 import * as v from "./vortex.js";
 import { solanaProposalImage } from "./charts.js";
 import { link } from "../links.js";
+import { proposalButtons } from "../buttons.js";
 
 /**
  * Notifications for chats linked to a Solana DAO - the Solana side of
@@ -216,7 +217,28 @@ async function postVoteCloses(network, d, chat, open, notify) {
     const page = proposalPageUrl(chat.link.network, d.governance.toBase58(), id);
     const unchallenged = d.model === "optimistic" && !p.challenged ? " Nobody challenged it." : "";
     const text = `🗳️ Voting on proposal #${id}${d.record.name ? ` in *${plain(d.record.name)}*` : ""} has closed: *${state}*.${image ? "" : unchallenged}${page ? `\n📄 ${link("Proposal page", page)}` : ""}`;
-    await notify(chat.chatId, text, { image }).catch((err) => console.error(`[solana listener] couldn't notify ${chat.chatId}:`, err.message));
+    await notify(chat.chatId, text, { image, buttons: proposalButtons({ model: d.model, id, state, page, solana: true }) }).catch((err) => console.error(`[solana listener] couldn't notify ${chat.chatId}:`, err.message));
+  }
+}
+
+/**
+ * The buttons under a notice about a proposal (buttons.js), as on EVM: a
+ * new proposal's straight away, any other event's from the proposal's
+ * state now. None for events without a proposal, ones that are over, or
+ * when the read fails.
+ */
+async function noticeButtons(network, d, chat, ev, now) {
+  const id = ev.data?.id;
+  if (id === undefined || /executed|cancel/i.test(ev.name)) return null;
+  const page = proposalPageUrl(chat.link.network, d.governance.toBase58(), String(id));
+  if (/^proposalCreated$/i.test(ev.name)) return proposalButtons({ model: d.model, id: String(id), page, solana: true });
+  try {
+    const [g, p] = await Promise.all([v.readGovernance(network, d.model, d.governance), v.readProposal(network, d.model, d.proposal(Number(id)))]);
+    if (!p) return null;
+    const track = d.model === "sowellian" ? v.variant(p.criteria.method) : undefined;
+    return proposalButtons({ model: d.model, id: String(id), state: v.proposalState(d.model, p, g, now), page, solana: true, track });
+  } catch {
+    return null;
   }
 }
 
@@ -261,7 +283,8 @@ export function startSolanaListener({ platform, notify }, pollIntervalMs = 30_00
             // Like the EVM notices: the transaction reported, and a new proposal's page.
             const page = /^proposalCreated$/i.test(ev.name) ? proposalPageUrl(chat.link.network, d.governance.toBase58(), String(ev.data.id)) : null;
             const links = `\n🔗 ${link("View transaction", explorerUrl(network, "tx", ev.signature))}${page ? ` · 📄 ${link("Proposal page", page)}` : ""}`;
-            await notify(chat.chatId, text + links).catch((err) => console.error(`[solana listener] couldn't notify ${chat.chatId}:`, err.message));
+            const buttons = await noticeButtons(network, d, chat, ev, now);
+            await notify(chat.chatId, text + links, { buttons }).catch((err) => console.error(`[solana listener] couldn't notify ${chat.chatId}:`, err.message));
           }
         }
         if (newest) state[k] = newest;

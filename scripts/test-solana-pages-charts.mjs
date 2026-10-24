@@ -249,7 +249,7 @@ test("Solana proposal pages, charts and explorer links", { timeout: 1_200_000 },
   const statePath = path.join(root, "data", `solanaListenerState.pagestest.json`);
   fs.rmSync(statePath, { force: true });
   // Started after the DAOs exist, so its first look records where each is; these proposals open votes it sees.
-  stopListener = startSolanaListener({ platform: "telegram", notify: async (chatId, text, opts = {}) => posted.push({ chatId: String(chatId), text, image: opts.image ?? null }) }, 3_000, statePath);
+  stopListener = startSolanaListener({ platform: "telegram", notify: async (chatId, text, opts = {}) => posted.push({ chatId: String(chatId), text, image: opts.image ?? null, buttons: (opts.buttons ?? []).flat() }) }, 3_000, statePath);
   await sleep(8_000);
   await run(T, 1, `propose ${pay()} 0.01 SOL Second one`);
   await run(T, 1, "vote 2 for");
@@ -269,6 +269,7 @@ test("Solana proposal pages, charts and explorer links", { timeout: 1_200_000 },
   assert.ok(created, "the listener announced the new proposal");
   assert.match(created.text, TX_LINK, "notices link their transaction");
   assert.match(created.text, /📄 \[Proposal page\]\(https:\/\/site\.test\/p\/solana-devnet\/.+\/2\)/, "a new proposal's notice links its page");
+  assert.deepStrictEqual(created.buttons.map((b) => b.cmd ?? b.label), ["vote 2 for", "vote 2 against", "vote 2 abstain", "proposal 2", "📄 Details"], "and its vote buttons");
 
   for (const [chat, label] of [[T, "token-weighted"], [Q, "quadratic"], [D, "delegate"]]) {
     const c = closed(chat, 2);
@@ -276,6 +277,7 @@ test("Solana proposal pages, charts and explorer links", { timeout: 1_200_000 },
     assert.match(c.text, /has closed: \*Succeeded\*/, `${label}: ${c.text}`);
     assert.ok(isPng(c.image), `${label}: with a chart`);
     assert.match(c.text, /📄 \[Proposal page\]\(https:\/\/site\.test\/p\/solana-devnet\//, `${label}: and the page link`);
+    assert.strictEqual(c.buttons[0]?.cmd, "queue 2", `${label}: and a Queue button`);
   }
   const quiet = closed(O, 2);
   assert.ok(quiet, "optimistic: the unchallenged result was posted");

@@ -22,35 +22,108 @@ const voteRow = (id, command = "vote") => [
   { label: "➖ Abstain", cmd: `${command} ${id} abstain` },
 ];
 
+const b = (label, cmd) => ({ label, cmd });
+
+/**
+ * A Sowellian proposal's buttons through its phases. State names differ
+ * a little between EVM (the contract's phase) and Solana (worked out from
+ * the clock too): ApprovalVoting vs Pending/Active/ApprovalClosed,
+ * ResolutionPending vs AwaitingResolution, Finalized vs Resolved.
+ * `track` ("oracle" or "human", when known) picks how it gets resolved.
+ */
+function sowellianRows(id, state, track) {
+  const close = b("🔒 Close approval vote", `finalizeapproval ${id}`);
+  switch (state) {
+    case "new":
+    case "Pending":
+    case "Active":
+      return [voteRow(id, "castapprovalvote")];
+    case "ApprovalVoting":
+      return [voteRow(id, "castapprovalvote"), [close]];
+    case "ApprovalClosed":
+      return [[close]];
+    case "PositionsOpen":
+      return [[b("🟢 Back YES", `ask amount takeposition ${id} yes`), b("🔴 Back NO", `ask amount takeposition ${id} no`)]];
+    case "ResolutionPending":
+    case "AwaitingResolution":
+      return [
+        ...(track !== "human" ? [[b("🔮 Resolve from the oracle", `resolveviaoracle ${id}`)]] : []),
+        ...(track !== "oracle" ? [[b("📣 It worked", `ask sure proposeresolution ${id} success`), b("📣 It didn't", `ask sure proposeresolution ${id} failure`)]] : []),
+      ];
+    case "ResolutionProposed":
+      return [[b("⚔️ Challenge", `ask sure challengeresolution ${id}`), b("✅ Lock it in", `finalizeunchallenged ${id}`)]];
+    case "Adjudicating":
+      return [
+        [b("✅ It worked", `castadjudicationvote ${id} success`), b("❌ It didn't", `castadjudicationvote ${id} failure`)],
+        [b("🔒 Close the vote", `finalizeadjudication ${id}`)],
+      ];
+    case "Finalized":
+    case "Resolved":
+      return [[b("💰 Claim winnings", `claimposition ${id}`)]];
+    default:
+      return [];
+  }
+}
+
+/**
+ * A decision-markets proposal's buttons: trading while its markets are
+ * open (EVM says Open or Seeded, Solana Trading), settling once trading
+ * ends, redeeming the winning side once settled. Amounts go through a
+ * picker (buttonMenus.js).
+ */
+function marketRows(id, state, solana) {
+  const settle = b("🏁 Settle markets", `finalizeproposal ${id}`);
+  if (["new", "Open", "Seeded", "Trading"].includes(state)) {
+    return [
+      [b("🟢 Buy pass", `ask amount trade ${id} pass buy`), b("🔴 Buy fail", `ask amount trade ${id} fail buy`)],
+      [b("Sell pass", `ask amount trade ${id} pass sell`), b("Sell fail", `ask amount trade ${id} fail sell`)],
+      [b("➗ Split quote", `ask amount split ${id} quote`), b("➗ Split tokens", `ask amount split ${id} base`), ...(state === "Open" ? [settle] : [])],
+    ];
+  }
+  if (state === "TradingClosed") return [[settle]];
+  if (["Queued", "Defeated", "Failed", "Executed", "Expired"].includes(state)) {
+    return [solana ? [b("💰 Redeem", `redeem ${id}`)] : [b("💰 Redeem tokens", `redeem ${id} base`), b("💰 Redeem quote", `redeem ${id} quote`)]];
+  }
+  return [];
+}
+
 /** What a member can do with a proposal in `state` ("new" right after it's made). */
-function actionRows(model, id, state) {
-  if (state === "Queued") return [[{ label: "▶️ Execute", cmd: `execute ${id}` }]];
-  if (state === "Succeeded" && !NO_QUEUE.has(model)) return [[{ label: "⏳ Queue", cmd: `queue ${id}` }]];
+function modelRows(model, id, state, solana, track) {
   const open = state === "new" || state === "Active" || state === "Pending";
   switch (model) {
     case "optimistic":
-      if (state === "new" || state === "ChallengeWindow") return [[{ label: "⚔️ Challenge", cmd: `challenge ${id}` }]];
+      if (state === "new" || state === "ChallengeWindow") return [[b("⚔️ Challenge", `challenge ${id}`)]];
       return state === "Active" ? [voteRow(id)] : [];
     case "conviction":
-      return open ? [[{ label: "💪 Support", cmd: `support ${id}` }]] : [];
+      return open ? [[b("💪 Support", `support ${id}`)]] : [];
     case "board":
-      return open ? [[{ label: "✍️ Confirm", cmd: `confirm ${id}` }]] : [];
+      return open ? [[b("✍️ Confirm", `confirm ${id}`)]] : [];
     case "sowellian":
-      // The approval vote (whether it opens for positions); EVM labels it ApprovalVoting.
-      return open || state === "ApprovalVoting" ? [voteRow(id, "castapprovalvote")] : [];
+      return sowellianRows(id, state, track);
+    case "decisionMarkets":
+      return marketRows(id, state, solana);
     default:
       return VOTE.includes(model) && open ? [voteRow(id)] : [];
   }
 }
 
+function actionRows(model, id, state, solana, track) {
+  const rows = modelRows(model, id, state, solana, track);
+  if (state === "Queued") return [[b("▶️ Execute", `execute ${id}`)], ...rows];
+  if (state === "Succeeded" && !NO_QUEUE.has(model)) return [[b("⏳ Queue", `queue ${id}`)], ...rows];
+  return rows;
+}
+
 /**
  * The buttons for proposal `id`: what can be done with it now, then a
  * status refresh and its page. `state` is the proposal's state label
- * (Active, Succeeded, Queued, ...), or "new" for one just made.
+ * (Active, Succeeded, Queued, ...), or "new" for one just made. `solana`:
+ * a Vortexes DAO, whose few commands take different words. `track`: a
+ * Sowellian proposal's resolution track (sowellian.js buttonHint on EVM).
  */
-export function proposalButtons({ model, id, state = "new", page = null }) {
-  const rows = actionRows(model, String(id), state);
-  const last = [{ label: "🔄 Status", cmd: `proposal ${id}` }];
+export function proposalButtons({ model, id, state = "new", page = null, solana = false, track }) {
+  const rows = actionRows(model, String(id), state, solana, track);
+  const last = [b("🔄 Status", `proposal ${id}`)];
   if (page) last.push({ label: "📄 Details", url: page });
   return [...rows, last];
 }
@@ -71,12 +144,21 @@ export function decodeButton(data) {
   const words = data.slice(PREFIX.length).trim().split(/\s+/).filter(Boolean);
   const name = words.shift()?.toLowerCase();
   if (!name || !/^[a-z]+$/.test(name)) return null;
-  if (!words.every((w) => /^[a-z0-9]+$/i.test(w))) return null;
+  if (!words.every((w) => /^[a-z0-9.]+$/i.test(w))) return null;
   return [name, words];
 }
 
 /** Only these commands can come from a button - a forged payload can't run anything else. */
-export const BUTTON_COMMANDS = new Set(["vote", "castapprovalvote", "challenge", "support", "confirm", "queue", "execute", "proposal", "help"]);
+export const BUTTON_COMMANDS = new Set([
+  "vote", "challenge", "support", "confirm", "queue", "execute", "proposal", "help",
+  // Sowellian
+  "castapprovalvote", "finalizeapproval", "takeposition", "resolveviaoracle", "proposeresolution", "challengeresolution",
+  "finalizeunchallenged", "castadjudicationvote", "finalizeadjudication", "claimposition",
+  // Decision markets
+  "trade", "split", "finalizeproposal", "redeem",
+  // A second-step menu (buttonMenus.js): an amount picker or a confirmation.
+  "ask",
+]);
 
 /** Telegram's inline keyboard for `rows`. */
 export function telegramKeyboard(rows) {

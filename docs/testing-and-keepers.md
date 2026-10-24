@@ -47,9 +47,17 @@ It uses the bot's `.env`: the operator key, factory addresses, `SORTITION_RANDOM
 
 **Trying flows by hand:** `<PREFIX>_FAST_TIMINGS=true` (`FAST_TIMINGS` on Monad testnet) gives the bot's own new DAOs the same short periods. Testnets only. `<PREFIX>_FAST_SCALE` multiplies them: `0.5` gives ~1-minute votes and 30-second timelocks, `0.25` ~30 seconds and 15 seconds (`FAST_SCALE` on Monad testnet). It only affects DAOs created after it's set.
 
+## EVM buttons: Sowellian and Decision Markets
+
+`scripts/test-evm-buttons.mjs` runs on anvil, like the switching test (same setup; run it with `node --experimental-test-module-mocks --env-file=.env.local-evm scripts/test-evm-buttons.mjs`). Through the code a button press runs, against the real contracts, it checks:
+- **Decision Markets:** the trading buttons on an open proposal; the split and trade menus offering shares of the member's real balances; a sell's minimum out landing 1% under `DecisionMarketPair.getAmountOut`; pressing them splits and trades; "split first" when there's nothing to trade; Settle; then Execute and Redeem.
+- **Sowellian:** `/proposal` naming the phase; approving with the For button and closing the vote; Back YES / NO through the amount menu; once measurement is over, only the proposal's own track's resolution buttons; "are you sure" before the bond; then Challenge / Lock it in.
+
+It stands in for wallet storage and backs up and restores `data/chats.json`, so don't run it while another test is using that file.
+
 ## Slack and links
 
-`node --experimental-test-module-mocks --test scripts/test-slack.mjs` needs no chain or workspace. It runs `/protean` with a stand-in result and a fake Slack client, and checks: labelled links and plain addresses, the buttons under a proposal for every model, the chart upload (joining the channel when needed, and the note when it can't post), and links.js's Telegram, Discord and WhatsApp forms.
+`node --experimental-test-module-mocks --test scripts/test-slack.mjs` needs no chain or workspace. It runs `/protean` with a stand-in result and a fake Slack client, and checks: labelled links and plain addresses; every model's buttons through its states, each fitting Telegram's 64 bytes; the amount and "are you sure" menus against a stand-in chain (shares of a balance, EVM trades' 1% minimum out); buttons on listener notices; the chart upload (joining the channel when needed, and the note when it can't post); and links.js's Telegram, Discord and WhatsApp forms.
 
 ## Solana
 

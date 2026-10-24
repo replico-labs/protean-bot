@@ -373,7 +373,7 @@ async function nextStep(ctx, c, id) {
 async function proposalMade(ctx, c, id, text) {
   const args = { network: c.link.network, dao: c.d.governance.toBase58(), model: c.model, proposalId: id };
   const page = await proposalCreated({ ...args, platform: ctx.platform, userId: ctx.userId, cmd: ctx.cmd });
-  const buttons = proposalButtons({ model: c.model, id, page: page?.page });
+  const buttons = proposalButtons({ model: c.model, id, page: page?.page, solana: true });
   if (!page) return reply(text, { buttons });
   return { text: `${text}\n\n📄 ${linkTo("Proposal page", page.page)} - the proposer is adding the details there.`, privateFollowUp: page.editText, startPayload: proposalStartPayload(args.network, args.dao, id), buttons };
 }
@@ -872,7 +872,7 @@ const COMMANDS = {
         lines.push(at > now ? `Can run in ${duration(at - now)}: \`${ctx.cmd("execute")} ${id}\`` : `Ready to run: \`${ctx.cmd("execute")} ${id}\``);
       }
       const page = proposalPageUrl(link.network, d.governance.toBase58(), id);
-      const buttons = proposalButtons({ model, id, state, page });
+      const buttons = proposalButtons({ model, id, state, page, solana: true, track: model === "sowellian" ? v.variant(p.criteria.method) : undefined });
       const image = await solanaProposalImage({ network, networkId: link.network, model, governance: d.governance, id, p, g, now, state });
       if (!page) return reply(lines.join("\n"), { buttons, image });
       lines.push("", `📄 ${linkTo("Proposal page: details and live status", page)}`);
@@ -2075,6 +2075,45 @@ const CREATE = {
  * let the regular (EVM) handler take it. Never throws: errors become
  * replies, as in the shared registry's runCommand.
  */
+/** Whether this chat's DAO is a Solana one (so a button's amount picker reads Solana balances). */
+export function isSolanaChat(ctx) {
+  return SOLANA_ENABLED && Boolean(getChatSolana(ctx.chatId, ctx.platform));
+}
+
+/**
+ * What `name` would spend for the person pressing a button (buttonMenus.js
+ * offers shares of it): `takeposition <id> yes|no` - DAO tokens in their
+ * wallet; `split <id> base|quote` - DAO tokens, or SOL less a fee margin;
+ * `trade <id> pass|fail buy|sell` - that market's quote (buy) or token
+ * (sell) balance. { raw, decimals, unit, empty } - `empty` says how to get some.
+ */
+export async function solanaSpendable(ctx, name, args) {
+  const { network, d, model, governance: g, tok } = await loadDao(ctx);
+  const me = await getSolanaAddress(ctx.userId, ctx.platform);
+  const id = parseId(args[0], "<id>");
+  if (name === "takeposition") {
+    return { raw: me ? await v.tokenBalance(network, g.mint, me) : 0n, decimals: tok.decimals, unit: tok.symbol, empty: `You have no ${tok.symbol} in your wallet (staked tokens don't count).` };
+  }
+  const q = await quoteToken(network, g);
+  if (name === "split" && args[1] === "base") {
+    return { raw: me ? await v.tokenBalance(network, g.mint, me) : 0n, decimals: tok.decimals, unit: tok.symbol, empty: `You have no ${tok.symbol} in your wallet to split.` };
+  }
+  if (name === "split") {
+    let raw = 0n;
+    if (me) raw = v.quoteIsSol(g) ? BigInt(await network.connection.getBalance(me)) - 10_000_000n : await v.tokenBalance(network, g.quoteMint, me);
+    return { raw: raw > 0n ? raw : 0n, decimals: q.decimals, unit: q.name, empty: `You have no ${q.name} to split${v.quoteIsSol(g) && me ? `: send some to \`${me.toBase58()}\` first` : ""}.` };
+  }
+  if (name === "trade") {
+    const [, market, dir] = args;
+    const pos = me ? await v.readPosition(network, model, d.position(d.proposal(id), me)) : null;
+    const field = { pass: { buy: "passQuote", sell: "passBase" }, fail: { buy: "failQuote", sell: "failBase" } }[market]?.[dir];
+    const raw = pos && field ? BigInt(pos[field].toString()) : 0n;
+    const [decimals, unit, side] = dir === "buy" ? [q.decimals, q.name, "quote"] : [tok.decimals, tok.symbol, "base"];
+    return { raw, decimals, unit: `${market} ${unit}`, empty: `You have no ${market} ${unit} to ${dir === "buy" ? "spend" : "sell"}. Split some first: \`${ctx.cmd("split")} ${id} ${side} <amount>\`.` };
+  }
+  return null;
+}
+
 export async function runSolanaCommand(name, ctx) {
   if (!SOLANA_ENABLED) return null;
   try {

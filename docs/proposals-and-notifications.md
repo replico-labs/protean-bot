@@ -61,6 +61,8 @@ Every platform's process polls its linked DAOs and posts to the linked chat:
 
 **Solana:** polled every 30 s. Each poll reads the governance account's new transactions and decodes the program's events from their logs. A new-proposal notice also links the proposal's page.
 
+**Buttons on notices.** On Telegram, Discord and Slack, a notice about a proposal carries the same buttons as `/proposal` (see [Commands](commands.md#buttons-and-the-help-menu)): a new proposal's vote (or Challenge, Support, Confirm, approval-vote, trading) buttons, Queue or Execute on a vote that closed or a proposal that was queued, and the next step on model events. A new proposal needs no extra read; other events read the proposal's state once. Executed and cancelled proposals get none. So proposals made anywhere, through the bot or not, can be voted on from the first message the chat sees.
+
 **Vote charts.** When a vote ends, the listener posts the result with a chart (a PNG), e.g. *"Voting on proposal #3 has closed: Succeeded"*.
 - **What the chart shows:** For / Against / Abstain bars with each side's share, the votes cast and the quorum, titled with the details the proposer wrote on the page.
 - **What's tracked:** every proposal the listener saw created (token-weighted, quadratic, liquid, delegate, sortition, optimistic challenges, Sowellian approval votes, Decision Markets' pass/fail prices), up to 50 open per DAO, for 30 days.

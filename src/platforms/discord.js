@@ -8,6 +8,7 @@ import { MARKET_COMMANDS } from "./commands/markets.js";
 import { startEventListener } from "../eventListener.js";
 import { encodeButton, decodeButton, BUTTON_COMMANDS } from "../buttons.js";
 import { renderLinks } from "../links.js";
+import { buttonMenu } from "../buttonMenus.js";
 
 /**
  * Discord front-end for the shared command core (commands.js).
@@ -170,8 +171,16 @@ export function discordComponents(rows = []) {
  */
 async function handleButton(interaction) {
   const decoded = decodeButton(interaction.customId);
-  if (!decoded || !BUTTON_COMMANDS.has(decoded[0]) || !COMMANDS[decoded[0]]) return;
+  if (!decoded || !BUTTON_COMMANDS.has(decoded[0])) return;
   const [name, args] = decoded;
+  // A second step (buttonMenus.js): how much, or "are you sure", shown only to the presser.
+  if (name === "ask") {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const menu = await buttonMenu({ platform: "discord", chatId: interaction.channelId, userId: interaction.user.id, cmd: discordCommand }, args).catch((err) => ({ text: err.message, buttons: [] }));
+    await interaction.editReply({ content: toDiscordMarkdown(menu.text), components: discordComponents(menu.buttons) });
+    return;
+  }
+  if (!COMMANDS[name]) return;
   const ctx = {
     platform: "discord",
     chatId: interaction.channelId,
@@ -260,11 +269,11 @@ export async function startDiscordBot({ token, applicationId, guildId } = {}) {
     console.log(`[discord] Logged in as ${c.user.tag}`);
     startEventListener({
       platform: "discord",
-      notify: async (channelId, text, { image } = {}) => {
+      notify: async (channelId, text, { image, buttons } = {}) => {
         const channel = await client.channels.fetch(channelId);
         if (!channel?.isTextBased()) return;
         const [first, ...more] = splitForDiscord(toDiscordMarkdown(text));
-        await channel.send({ content: first, ...discordFiles(image) });
+        await channel.send({ content: first, ...(more.length === 0 ? { components: discordComponents(buttons) } : {}), ...discordFiles(image) });
         for (const content of more) await channel.send(content);
       },
     });

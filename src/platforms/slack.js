@@ -12,6 +12,7 @@ import { encodeButton, decodeButton, BUTTON_COMMANDS } from "../buttons.js";
 import { proposalApiRoutes, proposalPagesConfigured } from "../proposalPages.js";
 import { whatsappLinkConfigured, whatsappLinkRoutes } from "./whatsappLink.js";
 import { renderLinks } from "../links.js";
+import { buttonMenu } from "../buttonMenus.js";
 
 const { App } = bolt;
 
@@ -193,9 +194,17 @@ export function slackBlocks(text, rows = []) {
 export async function handleButton({ ack, body, action, respond, client }) {
   await ack();
   const decoded = decodeButton(action?.value);
-  if (!decoded || !BUTTON_COMMANDS.has(decoded[0]) || !COMMANDS[decoded[0]]) return;
+  if (!decoded || !BUTTON_COMMANDS.has(decoded[0])) return;
   const [name, args] = decoded;
   const channelId = body.channel?.id ?? body.container?.channel_id;
+  // A second step (buttonMenus.js): how much, or "are you sure", shown only to the presser.
+  if (name === "ask") {
+    const menu = await buttonMenu({ platform: "slack", chatId: channelId, userId: body.user.id, cmd: (sub) => `${SLASH_COMMAND} ${sub}` }, args).catch((err) => ({ text: err.message, buttons: [] }));
+    const text = slackText(menu.text);
+    await respond({ response_type: "ephemeral", replace_original: false, text, mrkdwn: true, ...NO_UNFURL, ...slackBlocks(text, menu.buttons) });
+    return;
+  }
+  if (!COMMANDS[name]) return;
   const ctx = {
     platform: "slack",
     chatId: channelId,
@@ -270,14 +279,15 @@ async function adoptUnassignedChannels(client, installation) {
  * comes from the channel's workspace, recorded by recordSlackTeam.
  */
 export function createSlackNotify(app, store) {
-  return async (channelId, text, { image } = {}) => {
+  return async (channelId, text, { image, buttons } = {}) => {
     let token;
     if (store) {
       const teamId = getSlackTeam(channelId);
       if (!teamId) throw new Error("workspace not known yet - run any /protean command in the channel");
       token = (await store.fetchInstallation({ teamId, isEnterpriseInstall: false })).bot.token;
     }
-    await app.client.chat.postMessage({ ...(token ? { token } : {}), channel: channelId, text: slackText(text), mrkdwn: true, ...NO_UNFURL });
+    const body = slackText(text);
+    await app.client.chat.postMessage({ ...(token ? { token } : {}), channel: channelId, text: body, mrkdwn: true, ...NO_UNFURL, ...slackBlocks(body, buttons) });
     await postSlackImage(app.client, channelId, image, token);
   };
 }

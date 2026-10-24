@@ -99,6 +99,7 @@ With "Add to Slack", proposal pages or WhatsApp's QR link page, give that servic
 ```bash
 node scripts/test-evm-models.mjs --network monad-testnet   # every EVM model's lifecycle on a live testnet
 node --env-file=local.env scripts/test-evm-switch.mjs       # model switching, on anvil
+node --experimental-test-module-mocks --env-file=local.env scripts/test-evm-buttons.mjs   # Sowellian and Decision Markets buttons, on anvil
 node --experimental-test-module-mocks --test scripts/test-solana-local.mjs   # Solana, on a local validator
 node --experimental-test-module-mocks --test scripts/test-slack.mjs        # Slack replies, buttons, charts and links; no chain needed
 ```

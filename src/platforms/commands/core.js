@@ -24,6 +24,7 @@ import { getUserAddress } from "../../walletResolver.js";
 import { parsePerps, perpsUsage, perpsView, perpsProposalWords, PerpsError } from "../../perps.js";
 import { deskUsage, deskStatus, applyForDesk, deskProposalWords, resignFromDesk, linkDesk, trade, DeskError } from "../../desk.js";
 import { link, addressLine } from "../../links.js";
+import { buttonHint as sowellianButtonHint } from "../../governance/sowellian.js";
 
 /** The everyday governance loop - linking, DAO info, wallet, staking, proposing, deciding. */
 export const CORE_COMMANDS = {
@@ -173,7 +174,7 @@ export const CORE_COMMANDS = {
       const ids = Array.from({ length: Math.min(count, 10) }, (_, i) => count - i);
       const proposals = await Promise.all(ids.map((id) => adapter.getProposal(address, id)));
       const lines = proposals.map((p) => {
-        const label = p.stateLabel ?? p.statusLabel ?? PROPOSAL_STATE_LABELS[p.stateIndex] ?? "Unknown";
+        const label = p.stateLabel ?? p.statusLabel ?? p.phaseLabel ?? PROPOSAL_STATE_LABELS[p.stateIndex] ?? "Unknown";
         return `#${p.id} — ${stateLine(label)}\n${String(p.metadataURI).slice(0, 80)}`;
       });
       return reply(`*Proposals* (showing ${ids.length} of ${count})\n\n${lines.join("\n\n")}\n\nUse \`${ctx.cmd("proposal")} <id>\` for full detail.`);
@@ -187,7 +188,7 @@ export const CORE_COMMANDS = {
       const address = requireDao(ctx);
       const id = parseId(ctx.args[0], `${ctx.cmd("proposal")} 3`);
       const p = await getAdapter(getChatModel(ctx.chatId, ctx.platform)).getProposal(address, id);
-      const label = p.stateLabel ?? p.statusLabel ?? PROPOSAL_STATE_LABELS[p.stateIndex] ?? "Unknown";
+      const label = p.stateLabel ?? p.statusLabel ?? p.phaseLabel ?? PROPOSAL_STATE_LABELS[p.stateIndex] ?? "Unknown";
 
       const lines = [`*Proposal #${p.id}* — ${stateLine(label)}`, p.metadataURI, "", `Proposer: \`${short(p.proposer)}\``];
       // Same per-model branching as Telegram's /proposal: vote shapes differ.
@@ -228,7 +229,8 @@ export const CORE_COMMANDS = {
           }).catch(() => null)
         : null;
       const model = getChatModel(ctx.chatId, ctx.platform);
-      const buttons = proposalButtons({ model, id, state: label, page });
+      const hint = model === "sowellian" ? await sowellianButtonHint(p).catch(() => ({})) : {};
+      const buttons = proposalButtons({ model, id, state: hint.state ?? label, page, track: hint.track });
       const image = await proposalImage({ network: currentNetwork().id, chainName: currentNetwork().chain.name, model, dao: address, p, state: label });
       return reply(lines.join("\n"), { buttons, image, ...(submitLink ? { privateFollowUp: submitLink } : {}) });
     },
