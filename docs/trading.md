@@ -35,7 +35,8 @@ One command for perpetuals on whichever exchange the chat's network has: **Perpl
 
 | Command | Who | What it does |
 |---|---|---|
-| `/desk` | anyone | the desk: its traders (numbered) and mandates, collateral, open positions with PnL, pending appointments |
+| `/desk` | anyone | the desk: its traders (numbered) and mandates, collateral, open positions with PnL (HyperCore: each labelled with its trader), pending appointments |
+| `/desk mine` | a trader | their own positions (Perpl: their desk; HyperCore: their markets), how much of `max` each uses, markets they hold nothing in, and the desk `total` used |
 | `/desk apply <markets\|all> max=<size> [total=<size>] [lev=2] [days=30]` | the would-be trader | proposes appointing themselves (a trader applying again proposes a new mandate for themselves), e.g. `/desk apply BTC,ETH max=500 total=800 lev=3 days=30` (max = the largest position in one market, total = all positions together, both in the collateral token) |
 | `/desk fund <amount> [for=<n>]` / `/desk withdraw <amount> [for=<n>]` | anyone | proposes moving collateral from the Treasury into a trader's desk, or back (Perpl; `for=` is needed once there are several desks. HyperCore has one account, so it's ignored) |
 | `/desk remove [n]` | anyone | proposes removing a trader (`n` is needed once there are several) |

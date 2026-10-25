@@ -8,7 +8,7 @@ import { getChatDesk, updateChatDesk, getChatDAO, getChatModel } from "./db.js";
 import { getAdapter } from "./governance/index.js";
 import { PROPOSAL_STATE_LABELS } from "./governance/common.js";
 import { parsePerps, PerpsError } from "./perps.js";
-import { DeskError, parseMandate, mandateText, checkOpen, isTrader, pickTrader, takeFor, fmt } from "./deskMandate.js";
+import { DeskError, parseMandate, mandateText, checkOpen, isTrader, pickTrader, takeFor, mineLines, fmt } from "./deskMandate.js";
 import * as hypercoreDesk from "./deskHypercore.js";
 
 export { DeskError, parseMandate, mandateText };
@@ -56,6 +56,7 @@ export function deskUsage(cmd) {
     `\`${d} remove [n]\` - propose removing a trader · \`${d} resign\` - a trader steps down`,
     `\`${d} pause\` / \`${d} resume\` - chat admins or the DAO's creator stop new positions for every trader at once (closing stays allowed)`,
     `\`${d} long|short <market> <size> at <limitPrice> [3x]\` / \`${d} close <market> <size|all> at <limitPrice>\` - a trader trades, no vote`,
+    `\`${d} mine\` - a trader's own positions, and how much of their limits they use`,
     "Traders can trade the desk's collateral but never withdraw it - only the Treasury can, by proposal.",
   ].join("\n");
 }
@@ -341,6 +342,28 @@ export async function deskStatus(chat, cmd) {
     const pending = Object.entries(rec.pending);
     if (pending.length) lines.push("");
     for (const [id, a] of pending) lines.push(`Proposed: \`${a.address}\` (proposal #${id}) - ${mandateText(a.mandate)}${a.desk ? ` on desk \`${a.desk}\`` : ", on a new desk"}`);
+    return lines.join("\n");
+  });
+}
+
+/** /desk mine, either venue: the caller's own desk (Perpl) or markets (HyperCore), and how much of their mandate they use. */
+export async function deskMine(chat, client, cmd) {
+  if (onHypercore()) return hypercoreDesk.deskMine(chat, client, cmd);
+  return wrap(async () => {
+    const ctx = await venueCtx(chat);
+    await refreshDesk(chat);
+    const rec = recordOf(chat);
+    const desks = desksOf(rec);
+    const n = desks.findIndex((x) => isTrader(x.trader, chat, client.account.address));
+    if (n < 0) throw new DeskError(`You aren't one of the desk's traders - \`${cmd("desk")}\` shows who is.`);
+    const desk = desks[n];
+    const d = deskVenue.deployment(ctx);
+    const state = await deskVenue.exchangeState(ctx, d, desk.address);
+    const positions = state.accountId === 0n ? [] : await deskVenue.openPositions(ctx, d, state.accountId);
+    // A Perpl desk is the trader's own account, so every position on it is theirs.
+    const deskNotional = positions.reduce((sum, p) => sum + p.size * p.mark, 0);
+    const lines = mineLines(rec, desk.trader, { venue: "Perpl", n: desks.length > 1 ? n + 1 : null, positions, deskNotional, symbol: state.symbol, cmd });
+    lines.splice(1, 0, `Desk: \`${desk.address}\` · collateral ${state.accountId === 0n ? "none yet" : `${formatUnits(state.balance, state.decimals)} ${state.symbol}${state.locked ? ` (${formatUnits(state.locked, state.decimals)} in positions)` : ""}`}`);
     return lines.join("\n");
   });
 }

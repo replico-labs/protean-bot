@@ -304,6 +304,10 @@ async function main() {
   check(/Filled 0.3 ETH/.test(r.text), "ETH 900 fills (total 1400 of 1500)", r.text);
   r = await run("A", "desk long BTC 0.004 at 50000");
   check(/1500 in all/.test(r.text), "BTC to 700 would make 1600 in all: refused by total", r.text);
+  r = await run("A", "desk mine");
+  check(/BTC long 0\.01 .*500 of 1000 USDC used/.test(r.text) && /ETH long 0\.3 .*900 of 1000 USDC used/.test(r.text) && /Desk total: 1,400 of 1500 USDC used \(room for 100\)/.test(r.text), "desk mine shows A's positions, what each uses of max, and the desk total", r.text);
+  r = await run("B", "desk mine");
+  check(/aren't one of the desk's traders/.test(r.text), "desk mine for a non-trader says so", r.text);
   r = await run("B", "desk long BTC 0.001 at 50000");
   check(/Only the desk's appointed traders/.test(r.text), "B can't trade", r.text);
 
@@ -350,6 +354,12 @@ async function main() {
   check(/1\. `0x/.test(r.text) && /2\. `0x/.test(r.text), "/desk lists both traders, numbered", r.text);
   r = await run("C", "desk long BTC 0.01 at 50000 2x");
   check(/Filled 0.01 BTC/.test(r.text) && getAddress(lastOrder().signer) === getAddress(cApp.agent), "C trades BTC, signed by C's own agent", r.text);
+  r = await run("C", "desk mine");
+  check(/trader 2/.test(r.text) && /BTC long 0\.01/.test(r.text) && !/ETH/.test(r.text.split("\n").slice(2).join("\n")), "C's desk mine shows only C's BTC, not A's ETH", r.text);
+  r = await run("A", "desk mine");
+  check(/trader 1/.test(r.text) && /ETH long/.test(r.text) && !/BTC long/.test(r.text), "A's desk mine shows only A's ETH", r.text);
+  r = await run("B", "desk");
+  check(/ETH long .*· trader 1/.test(r.text) && /BTC long .*· trader 2/.test(r.text), "/desk labels each position with its trader", r.text);
   r = await run("C", "desk long ETH 0.01 at 3000");
   check(/isn't one of your markets/.test(r.text), "C can't open ETH, A's market", r.text);
   r = await run("C", "desk close ETH all at 2000");

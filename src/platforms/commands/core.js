@@ -22,7 +22,7 @@ import { proposalPageUrl, pendingSubmitLink } from "../../proposalPages.js";
 import { proposalImage } from "../../charts.js";
 import { getUserAddress } from "../../walletResolver.js";
 import { parsePerps, perpsUsage, perpsView, perpsProposalWords, PerpsError } from "../../perps.js";
-import { deskUsage, deskStatus, applyForDesk, deskProposalWords, resignFromDesk, linkDesk, trade, setDeskPaused, DeskError } from "../../desk.js";
+import { deskUsage, deskStatus, deskMine, applyForDesk, deskProposalWords, resignFromDesk, linkDesk, trade, setDeskPaused, DeskError } from "../../desk.js";
 import { link, addressLine } from "../../links.js";
 import { buttonHint as sowellianButtonHint } from "../../governance/sowellian.js";
 
@@ -361,7 +361,7 @@ export const CORE_COMMANDS = {
 
   desk: {
     description: "Trading desk: traders appointed by proposal trade the DAO's perps collateral, never withdraw",
-    options: [{ name: "request", description: "blank, long|short|close … (trader), apply <markets> max=<size>, fund|withdraw <amt> [for=<n>], remove [n], resign, pause, resume", required: false, rest: true }],
+    options: [{ name: "request", description: "blank, long|short|close … (trader), mine, apply <markets> max=<size>, fund|withdraw <amt> [for=<n>], remove [n], resign, pause, resume", required: false, rest: true }],
     async run(ctx) {
       const address = requireDao(ctx);
       const [sub = "", ...args] = ctx.args;
@@ -373,6 +373,11 @@ export const CORE_COMMANDS = {
             return reply(await deskStatus(chat, ctx.cmd));
           case "help":
             return reply(deskUsage(ctx.cmd));
+          case "mine":
+          case "me": {
+            const { client } = await userClient(ctx);
+            return reply(await deskMine(chat, client, ctx.cmd));
+          }
           case "apply": {
             const { account } = await userClient(ctx);
             const plan = await applyForDesk(chat, account, args);

@@ -105,4 +105,29 @@ export function takeFor(words) {
   return [words[at].slice(4), [...words.slice(0, at), ...words.slice(at + 1)]];
 }
 
+/**
+ * What `trader` sees in `desk mine`: their mandate, then each of their
+ * positions with how much of `max` it uses, markets they hold nothing in,
+ * and the desk-wide `total` if their mandate sets one. `positions` are
+ * theirs alone, [{ symbol, side, size, entry, mark, pnl, extra? }];
+ * `deskNotional` is every position `total` counts.
+ */
+export function mineLines(desk, trader, { venue, n, positions, deskNotional, symbol, cmd }) {
+  const unit = symbol ? ` ${symbol}` : "";
+  const m = trader.mandate;
+  const expired = Date.now() > trader.expiresAt;
+  const lines = [`*Your trading* (${venue}${n ? `, trader ${n}` : ""})`, `Mandate: ${mandateText(m, symbol)}${expired ? " - ⏰ ended: you can only close" : `, until ${new Date(trader.expiresAt).toISOString().slice(0, 10)}`}`];
+  if (desk.paused) lines.push(`⏸️ The desk is paused: no new positions until \`${cmd("desk")} resume\`. Closing still works.`);
+  for (const p of positions) {
+    const notional = p.size * p.mark;
+    lines.push(`• ${p.symbol} ${p.side} ${fmt(p.size)} @ ${fmt(p.entry, 2)} · mark ${fmt(p.mark, 2)} · PnL ${p.pnl >= 0 ? "+" : ""}${fmt(p.pnl, 2)}${unit}${p.extra ? ` · ${p.extra}` : ""} · ${fmt(notional, 2)} of ${m.max}${unit} used`);
+  }
+  const held = new Set(positions.map((p) => p.symbol.toUpperCase()));
+  const idle = m.markets === "all" ? [] : m.markets.filter((x) => !held.has(x));
+  if (!positions.length) lines.push("No open positions.");
+  if (idle.length) lines.push(`Nothing open in ${idle.join(", ")} (up to ${m.max}${unit} each).`);
+  if (m.total) lines.push(`Desk total: ${fmt(deskNotional, 2)} of ${m.total}${unit} used (room for ${fmt(Math.max(0, Number(m.total) - deskNotional), 2)}).`);
+  return lines;
+}
+
 export const fmt = (n, digits = 4) => (Number.isFinite(n) ? n.toLocaleString("en-US", { maximumFractionDigits: digits }) : "?");

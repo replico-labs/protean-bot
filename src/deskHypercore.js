@@ -11,7 +11,7 @@ import { getAdapter } from "./governance/index.js";
 import { PROPOSAL_STATE_LABELS } from "./governance/common.js";
 import { parsePerps, PerpsError } from "./perps.js";
 import { createAgentKey, getAgentAccount, deleteAgentKey } from "./walletStore.js";
-import { DeskError, parseMandate, mandateText, checkOpen, covers, isTrader, pickTrader, takeFor, fmt } from "./deskMandate.js";
+import { DeskError, parseMandate, mandateText, checkOpen, covers, isTrader, pickTrader, takeFor, mineLines, fmt } from "./deskMandate.js";
 
 /**
  * Trading desk on HyperCore (HyperEVM): the same /desk as on Perpl
@@ -306,8 +306,36 @@ export async function deskStatus(chat, cmd) {
     if (!open.length) lines.push(Number(state.marginSummary.accountValue) === 0 ? `No collateral yet - \`${cmd("desk")} fund <amount>\` proposes moving USDC to HyperCore.` : "No open positions.");
     for (const p of open) {
       const size = Math.abs(Number(p.szi));
-      lines.push(`• ${p.coin} ${Number(p.szi) > 0 ? "long" : "short"} ${fmt(size)} @ ${fmt(Number(p.entryPx), 2)} · mark ${fmt(Number(p.positionValue) / size, 2)} · PnL ${Number(p.unrealizedPnl) >= 0 ? "+" : ""}${fmt(Number(p.unrealizedPnl), 2)} USDC · ${p.leverage.value}x`);
+      // Each market belongs to one trader, so the position in it is theirs.
+      const owner = traders.findIndex((t) => covers(t.mandate, p.coin));
+      const whose = owner >= 0 ? `trader ${owner + 1}` : "no trader";
+      lines.push(`• ${p.coin} ${Number(p.szi) > 0 ? "long" : "short"} ${fmt(size)} @ ${fmt(Number(p.entryPx), 2)} · mark ${fmt(Number(p.positionValue) / size, 2)} · PnL ${Number(p.unrealizedPnl) >= 0 ? "+" : ""}${fmt(Number(p.unrealizedPnl), 2)} USDC · ${p.leverage.value}x · ${whose}`);
     }
+    return lines.join("\n");
+  });
+}
+
+/** /desk mine: the caller's own positions (those in their markets) and how much of their mandate they use. */
+export async function deskMine(chat, client, cmd) {
+  return wrap(async () => {
+    const ctx = await venueCtx(chat);
+    await refreshDesk(chat);
+    const desk = deskOf(chat);
+    const traders = tradersOf(desk);
+    const n = traders.findIndex((x) => isTrader(x, chat, client.account.address));
+    if (n < 0) throw new DeskError(`You aren't one of the desk's traders - \`${cmd("desk")}\` shows who is.`);
+    const t = traders[n];
+    const state = await deskVenue.info(ctx, { type: "clearinghouseState", user: ctx.treasury });
+    const open = positionsOf(state);
+    const positions = open
+      .filter((p) => covers(t.mandate, p.coin))
+      .map((p) => {
+        const size = Math.abs(Number(p.szi));
+        return { symbol: p.coin, side: Number(p.szi) > 0 ? "long" : "short", size, entry: Number(p.entryPx), mark: Number(p.positionValue) / size, pnl: Number(p.unrealizedPnl), extra: `${p.leverage.value}x` };
+      });
+    const deskNotional = open.reduce((sum, p) => sum + Math.abs(Number(p.positionValue)), 0);
+    const lines = mineLines(desk, t, { venue: "HyperCore", n: traders.length > 1 ? n + 1 : null, positions, deskNotional, symbol: COLLATERAL, cmd });
+    if (!(await isApproved(ctx, t.agent, t.agentName))) lines.push("⚠️ Your agent is no longer approved on HyperCore, so you can't trade.");
     return lines.join("\n");
   });
 }

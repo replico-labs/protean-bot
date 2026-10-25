@@ -67,6 +67,7 @@ HyperCore is stood in for twice. On the chain, a CoreWriter stand-in logs each r
 - removal revokes the agent and the bot destroys its key;
 - a new appointment gets a new agent;
 - resigning destroys the key at once;
+- `desk mine` shows a trader only their own positions, with how much of `max` and `total` they use, and `/desk` labels each position with its trader;
 - with a second trader: an application for a market another trader has is refused, each trader signs with their own agent and can't open or close the other's markets, and `remove <n>` revokes just that one.
 
 The Perpl desk's several-desks flow (one desk per trader) has no local test: there's no Perpl stand-in on anvil.
