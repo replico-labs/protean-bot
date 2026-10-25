@@ -2283,7 +2283,7 @@ bot.command("perps", async (ctx) => {
  * a Telegram message, so newer commands live in one place for every
  * platform. Private parts (a proposer's edit link) go by DM.
  */
-async function runSharedCommand(ctx, name, extra = {}) {
+async function runSharedCommand(ctx, name, ctxExtra = {}) {
   const result = await runCommand(name, {
     platform: "telegram",
     chatId: ctx.chat.id,
@@ -2291,7 +2291,7 @@ async function runSharedCommand(ctx, name, extra = {}) {
     args: splitArgs(ctx.match ?? ""),
     isDirect: ctx.chat.type === "private",
     cmd: TG_CMD,
-    ...extra,
+    ...ctxExtra,
   });
   const extra = { link_preview_options: { is_disabled: true }, ...(result.buttons?.length ? { reply_markup: telegramKeyboard(result.buttons) } : {}) };
   await ctx.reply(result.text, { parse_mode: "Markdown", ...extra }).catch(() => ctx.reply(result.text, extra));
