@@ -65,11 +65,13 @@ Every platform's process polls its linked DAOs and posts to the linked chat:
 
 **Vote charts.** When a vote ends, the listener posts the result with a chart (a PNG), e.g. *"Voting on proposal #3 has closed: Succeeded"*.
 - **What the chart shows:** For / Against / Abstain bars with each side's share, the votes cast and the quorum, titled with the details the proposer wrote on the page.
+- **Sowellian:** the approval vote, then the YES and NO backing (tokens on each side, and what each pays per token if it wins), then the adjudication vote once there is one. Its phase notices carry it: approval closed, resolution proposed, challenged, locked in unchallenged, resolved by oracle, adjudicated.
+- **Decision Markets:** the pass and fail markets' average price so far (the time-weighted price that decides it) with a marker on the pass bar at what it has to beat (fail × (1 + threshold)), their prices now, and the gap: *"Pass vs fail: +X%, needs more than +3.0%. Passing if trading ended now."* Once settled it shows the averages the contract stored. When trading closes the listener posts *"Trading on proposal #id has closed. Settle the markets to decide it."* with the chart, and the outcome notice carries it too.
 - **What's tracked:** every proposal the listener saw created (token-weighted, quadratic, liquid, delegate, sortition, optimistic challenges, Sowellian approval votes, Decision Markets' pass/fail prices), up to 50 open per DAO, for 30 days.
 - **Cost:** a proposal is read only once its end has passed (its end block on EVM, its end time on Solana; once a minute where the end isn't known), so open votes cost almost no RPC.
 - **`/proposal <id>`** sends the same chart with its answer, for every model that has one. Conviction shows its progress toward the threshold; Board has none.
 - **Same on both chains:** EVM and Solana proposals get the same charts (`src/solana/charts.js` hands Vortexes proposals to `src/charts.js`).
 - **Sending:** Telegram, Discord and WhatsApp send the chart as a photo. Slack uploads it, which needs the `files:write` scope (in the manifest). An existing install must be reinstalled to get that scope; without it the text still goes out and the chart is skipped, logged once.
-- **Drawing:** charts are SVG rendered with resvg, with fonts bundled in `assets/fonts`, so there's nothing to install on the server. `barChartPng()` is general, for future market, futarchy and PnL cards.
+- **Drawing:** charts are SVG rendered with resvg, with fonts bundled in `assets/fonts`, so there's nothing to install on the server. The same drawing makes the trading desk's PnL cards (`/desk`, `/desk mine`: see [Trading](trading.md#trading-desk-desk)).
 
 [Back to the README](../README.md)

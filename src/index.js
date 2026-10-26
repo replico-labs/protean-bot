@@ -2295,6 +2295,7 @@ async function runSharedCommand(ctx, name, ctxExtra = {}) {
   });
   const extra = { link_preview_options: { is_disabled: true }, ...(result.buttons?.length ? { reply_markup: telegramKeyboard(result.buttons) } : {}) };
   await ctx.reply(result.text, { parse_mode: "Markdown", ...extra }).catch(() => ctx.reply(result.text, extra));
+  if (result.image) await ctx.replyWithPhoto(new InputFile(result.image.png, result.image.name)).catch((err) => console.warn(`Couldn't send an image: ${err.message}`));
   if (result.privateFollowUp) {
     const delivered = await ctx.api.sendMessage(ctx.from.id, result.privateFollowUp, { link_preview_options: { is_disabled: true } }).then(() => true, () => false);
     if (!delivered && ctx.chat.type !== "private") await ctx.reply(`I couldn't message you privately - start a chat with @${ctx.me.username}, then run \`/proposal <id>\` to get your link.`).catch(() => {});

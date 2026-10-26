@@ -1,4 +1,4 @@
-import { proposalButtons } from "../../buttons.js";
+import { proposalButtons, DESK_BUTTONS } from "../../buttons.js";
 import { takeModelOptions, checkModelOptions, modelOptionsUsage, proposeForModel, proposalNextStep, oracleFeedLine } from "../../modelProposal.js";
 import { feedsText } from "../../governance/sowellian.js";
 import { solanaWalletLine } from "../../solana/commands.js";
@@ -370,13 +370,13 @@ export const CORE_COMMANDS = {
         switch (sub.toLowerCase()) {
           case "":
           case "status":
-            return reply(await deskStatus(chat, ctx.cmd));
+            return deskReply(await deskStatus(chat, ctx.cmd));
           case "help":
             return reply(deskUsage(ctx.cmd));
           case "mine":
           case "me": {
             const { client } = await userClient(ctx);
-            return reply(await deskMine(chat, client, ctx.cmd));
+            return deskReply(await deskMine(chat, client, ctx.cmd));
           }
           case "apply": {
             const { account } = await userClient(ctx);
@@ -399,7 +399,7 @@ export const CORE_COMMANDS = {
           case "resume": {
             // Fast and reversible, so chat admins and the DAO's creator may do it without a vote.
             if (ctx.isAdmin !== true && !isCreator(ctx)) throw new DeskError("Only this chat's admins or the DAO's creator can pause or resume the desk. Anyone can propose removing the trader: `desk remove`.");
-            return reply(setDeskPaused(chat, sub.toLowerCase() === "pause", ctx.isAdmin === true ? "a chat admin" : "the DAO's creator"));
+            return reply(setDeskPaused(chat, sub.toLowerCase() === "pause", ctx.isAdmin === true ? "a chat admin" : "the DAO's creator"), { buttons: DESK_BUTTONS });
           }
           case "long":
           case "short":
@@ -541,6 +541,9 @@ export const CORE_COMMANDS = {
 };
 
 /** proposeaction for an external-protocol action: several Treasury calls in one proposal. */
+/** /desk status and mine answer with text and, when there's anything to draw, a PnL card. */
+const deskReply = (r) => (typeof r === "string" ? reply(r) : reply(r.text, r.image ? { image: r.image } : {}));
+
 async function proposeIntegration(ctx, address, actionId, rest, { onProposed, note } = {}) {
   const model = getChatModel(ctx.chatId, ctx.platform);
   // Discord passes args and description as separate fields; join them so

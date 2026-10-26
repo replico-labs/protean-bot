@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { getAllRegisteredDaos, followGovernanceSwitch } from "./db.js";
+import { getAllRegisteredDaos, followGovernanceSwitch, getChatDesk } from "./db.js";
 import { formatEther, parseEventLogs, toEventSelector, toHex } from "viem";
 import { InputFile } from "grammy";
 import { publicClient, walletClient } from "./config.js";
@@ -13,10 +13,10 @@ import { getAdapter } from "./governance/index.js";
 import { PROPOSAL_STATE_LABELS } from "./governance/common.js";
 import { proposalImage } from "./charts.js";
 import { proposalPageUrl } from "./proposalPages.js";
-import { deskExecuted } from "./desk.js";
+import { deskExecuted, refreshDesk } from "./desk.js";
 import { detectSwitch } from "./modelSwitch.js";
 import { link } from "./links.js";
-import { proposalButtons, telegramKeyboard } from "./buttons.js";
+import { proposalButtons, telegramKeyboard, DESK_BUTTONS } from "./buttons.js";
 import { buttonHint as sowellianButtonHint } from "./governance/sowellian.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -37,6 +37,17 @@ function statePathFor(platform) {
 // below filters this against each model's own real ABI, so a model
 // missing one of these names simply isn't watched for it, instead of
 // crashing or requiring a per-model special case.
+// Events whose notice carries the proposal's chart (src/charts.js), as the line to post.
+const CHART_EVENTS = {
+  ApprovalFinalized: (a) => (a.approved ? `✅ Proposal #${a.proposalId} was approved: positions are open. Back YES or NO.` : `❌ Proposal #${a.proposalId} wasn't approved.`),
+  ResolutionProposed: (a) => `📣 \`${short(a.resolver)}\` proposes that proposal #${a.proposalId} ${Number(a.outcome) === 1 ? "met its goal" : "didn't meet its goal"}. It can be challenged until the window closes.`,
+  ResolutionChallenged: (a) => `⚔️ \`${short(a.challenger)}\` challenged the proposed outcome of proposal #${a.proposalId}: members now vote on what really happened.`,
+  ResolutionFinalizedUnchallenged: (a) => `🔒 Proposal #${a.proposalId}'s outcome is locked in, unchallenged: ${Number(a.outcome) === 1 ? "it met its goal" : "it didn't meet its goal"}. Winners can claim.`,
+  ResolvedViaOracle: (a) => `🔮 The oracle resolved proposal #${a.proposalId}: ${Number(a.outcome) === 1 ? "it met its goal" : "it didn't meet its goal"}. Winners can claim.`,
+  AdjudicationFinalized: (a) => `⚖️ The vote on proposal #${a.proposalId} is over: ${Number(a.finalOutcome) === 1 ? "it met its goal" : "it didn't meet its goal"}. Winners can claim.`,
+  ProposalFinalized: (a) => `📊 Proposal #${a.proposalId}'s markets are settled: it ${a.passed ? "passed" : "failed"}.`,
+};
+
 const INTERESTING_EVENT_NAMES = [
   "ProposalCreated",
   "ProposalQueued",
@@ -45,6 +56,8 @@ const INTERESTING_EVENT_NAMES = [
   "ElectionStarted",
   "CandidateRegistered",
   "WinningTotalRevealRequested",
+  // Sowellian's phases and Decision Markets' settlement: notices with the proposal's chart.
+  ...Object.keys(CHART_EVENTS),
 ];
 
 function modelToAbiName(model) {
@@ -102,6 +115,14 @@ function formatEvent(eventName, args) {
       return `🙋 \`${short(args.candidate)}\` declared candidacy.`;
     case "WinningTotalRevealRequested":
       return `🔓 The winning total reveal was requested.`;
+    case "ApprovalFinalized":
+    case "ResolutionProposed":
+    case "ResolutionChallenged":
+    case "ResolutionFinalizedUnchallenged":
+    case "ResolvedViaOracle":
+    case "AdjudicationFinalized":
+    case "ProposalFinalized":
+      return CHART_EVENTS[eventName](args);
     default:
       return `📣 ${eventName} event fired.`;
   }
@@ -243,8 +264,9 @@ async function checkNetwork(notify, daos, currentBlock, state, save) {
         const id = log.args?.proposalId;
         const page = log.eventName === "ProposalCreated" && id !== undefined ? proposalPageUrl(w.dao.network, w.dao.governanceAddress, id) : null;
         const message = formatEvent(log.eventName, log.args ?? {}) + (url ? `\n🔗 ${link("View transaction", url)}` : "") + (page ? ` · 📄 ${link("Proposal page", page)}` : "");
+        const image = CHART_EVENTS[log.eventName] && id !== undefined ? await chartFor(w.dao, id) : null;
         try {
-          await notify(w.dao.chatId, message, { buttons: await noticeButtons(w.dao, log.eventName, id) });
+          await notify(w.dao.chatId, message, { image, buttons: await noticeButtons(w.dao, log.eventName, id) });
         } catch (sendErr) {
           console.error(`Event listener: couldn't notify chat ${w.dao.chatId}:`, sendErr.message);
         }
@@ -254,7 +276,7 @@ async function checkNetwork(notify, daos, currentBlock, state, save) {
             console.error(`Event listener: desk update for ${w.dao.governanceAddress} failed:`, err.shortMessage ?? err.message);
             return [];
           });
-          if (news.length) await notify(w.dao.chatId, news.join("\n")).catch(() => {});
+          if (news.length) await notify(w.dao.chatId, news.join("\n"), { buttons: DESK_BUTTONS }).catch(() => {});
           await followSwitch(notify, w.dao);
         }
       }
@@ -335,7 +357,12 @@ async function checkVoteCloses(notify, daos, currentBlock, state) {
         t.next = Date.now() + RECHECK_MS;
         continue;
       }
-      const label = stateLabelOf(p);
+      let label = stateLabelOf(p);
+      // A decision market stays "Open" until someone settles it; its trading closes at the deadline.
+      if (dao.model === "decisionMarkets" && label === "Open" && p.tradingDeadline > 0n) {
+        const { timestamp } = await publicClient.getBlock({ blockTag: "latest" }).catch(() => ({ timestamp: 0n }));
+        if (timestamp >= p.tradingDeadline) label = "TradingClosed";
+      }
       if (STILL_OPEN.has(label)) {
         // Block-based votes: sleep until the end block; others: recheck later.
         if ((label === "Active" || label === "Pending") && p.endBlock > 0n) t.endBlock = String(p.endBlock);
@@ -347,7 +374,8 @@ async function checkVoteCloses(notify, daos, currentBlock, state) {
       if (label === "Cancelled") continue; // already announced by ProposalCancelled
       const image = await proposalImage({ network: dao.network, chainName: currentNetwork().chain.name, model: dao.model, dao: dao.governanceAddress, p, state: label, skipEmpty: true }).catch(() => null);
       const page = proposalPageUrl(dao.network, dao.governanceAddress, id);
-      const text = `🗳️ Voting on proposal #${id} has closed: *${label}*.${image ? "" : unchallengedNote(dao.model, label)}${page ? `\n📄 ${link("Proposal page", page)}` : ""}`;
+      const closed = label === "TradingClosed" ? `📉 Trading on proposal #${id} has closed. Settle the markets to decide it.` : `🗳️ Voting on proposal #${id} has closed: *${label}*.${image ? "" : unchallengedNote(dao.model, label)}`;
+      const text = `${closed}${page ? `\n📄 ${link("Proposal page", page)}` : ""}`;
       try {
         await notify(dao.chatId, text, { image, buttons: proposalButtons({ model: dao.model, id, state: label, page }) });
       } catch (err) {
@@ -371,6 +399,44 @@ async function noticeButtons(dao, eventName, id) {
     const p = await getAdapter(dao.model).getProposal(dao.governanceAddress, id);
     const hint = dao.model === "sowellian" ? await sowellianButtonHint(p) : {};
     return proposalButtons({ model: dao.model, id, state: hint.state ?? stateLabelOf(p), page, track: hint.track });
+  } catch {
+    return null;
+  }
+}
+
+/*//////////////////////////////////////////////////////////////
+                    TRADING DESK NOTICES
+//////////////////////////////////////////////////////////////*/
+
+// How often a chat's desk is re-read: often while an appointment or
+// removal is waiting (HyperCore applies an approved agent only after the
+// EVM block, so the executed proposal alone doesn't settle it), rarely
+// otherwise (a Perpl trader removed or resigned on-chain).
+const DESK_RECHECK_MS = { pending: 60_000, idle: 600_000 };
+const deskChecked = new Map();
+
+/** Posts what changed on each chat's trading desk (src/desk.js refreshDesk): traders appointed or removed. */
+export async function checkDesks(notify, daos) {
+  for (const dao of daos) {
+    const desk = getChatDesk(dao.chatId, dao.platform);
+    if (!desk) continue;
+    const key = `${dao.platform}:${dao.chatId}`;
+    const every = Object.keys(desk.pending ?? {}).length ? DESK_RECHECK_MS.pending : DESK_RECHECK_MS.idle;
+    if (Date.now() - (deskChecked.get(key) ?? 0) < every) continue;
+    deskChecked.set(key, Date.now());
+    const news = await refreshDesk(dao).catch((err) => {
+      console.error(`Event listener: desk check for ${dao.governanceAddress} failed:`, err.shortMessage ?? err.message);
+      return [];
+    });
+    if (news.length) await notify(dao.chatId, news.join("\n"), { buttons: DESK_BUTTONS }).catch((err) => console.error(`Event listener: couldn't notify chat ${dao.chatId}:`, err.message));
+  }
+}
+
+/** The chart for proposal `id` as it is now, or null. Never throws: a chart is an extra. */
+async function chartFor(dao, id) {
+  try {
+    const p = await getAdapter(dao.model).getProposal(dao.governanceAddress, id);
+    return await proposalImage({ network: dao.network, chainName: currentNetwork().chain.name, model: dao.model, dao: dao.governanceAddress, p, state: stateLabelOf(p), skipEmpty: true });
   } catch {
     return null;
   }
@@ -462,6 +528,7 @@ export function startEventListener(target, pollIntervalMs = 20_000) {
             // Progress is saved after every range, so it survives a restart mid-pass.
             await checkNetwork(notify, networkDaos, currentBlock, state, () => writeState(statePath, state));
             await checkVoteCloses(notify, networkDaos, currentBlock, state);
+            await checkDesks(notify, networkDaos);
           });
         } catch (err) {
           // One unreachable network must not stop notifications for the others.

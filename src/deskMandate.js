@@ -9,6 +9,9 @@
  * - total: optional, the largest sum of all open positions (cross margin
  *   means one market's loss eats every market's collateral)
  * - lev: the most leverage
+ * - loss: optional, the most the trader may lose in a day (UTC) before the
+ *   bot stops their new positions; a stand-in for the vault's drawdown
+ *   backstop (see dayOf)
  * - days: how long the mandate lasts from the proposal's execution
  *
  * Closing is never limited: it only reduces what's at risk. Pausing
@@ -23,7 +26,7 @@ export class DeskError extends Error {}
 
 const MAX_DAYS = 365;
 
-/** `apply` words -> mandate: { markets: [..] | "all", max, total?, lev, days }. */
+/** `apply` words -> mandate: { markets: [..] | "all", max, total?, loss?, lev, days }. */
 export function parseMandate(words) {
   const w = words.filter(Boolean);
   const opts = Object.fromEntries(w.filter((x) => x.includes("=")).map((x) => [x.split("=")[0].toLowerCase(), x.slice(x.indexOf("=") + 1)]));
@@ -37,19 +40,21 @@ export function parseMandate(words) {
   if (opts.max === undefined) throw new DeskError("Set the largest position the trader may hold: `max=<size>` in the collateral token (e.g. `max=500`).");
   const max = num(opts.max, "max");
   const total = opts.total === undefined ? undefined : num(opts.total, "total");
+  const loss = opts.loss === undefined ? undefined : num(opts.loss, "loss");
   const lev = num((opts.lev ?? opts.leverage ?? "2").replace(/x$/i, ""), "lev");
   const days = Number(num(opts.days ?? "30", "days"));
   if (Number(max) <= 0) throw new DeskError("max must be more than 0.");
   if (total !== undefined && Number(total) < Number(max)) throw new DeskError("total is the limit for all positions together, so it can't be less than max.");
+  if (loss !== undefined && Number(loss) <= 0) throw new DeskError("loss must be more than 0.");
   if (Number(lev) < 1) throw new DeskError("lev must be at least 1.");
   if (!Number.isInteger(days) || days < 1 || days > MAX_DAYS) throw new DeskError(`days must be a whole number from 1 to ${MAX_DAYS}.`);
-  return { markets, max, ...(total !== undefined ? { total } : {}), lev, days };
+  return { markets, max, ...(total !== undefined ? { total } : {}), ...(loss !== undefined ? { loss } : {}), lev, days };
 }
 
 export function mandateText(m, symbol = "") {
   const markets = m.markets === "all" ? "any market" : m.markets.join(", ");
   const unit = symbol ? ` ${symbol}` : "";
-  return `${markets}; positions up to ${m.max}${unit}${m.total ? ` each, ${m.total}${unit} in all` : ""}; up to ${m.lev}x leverage; for ${m.days} day${m.days === 1 ? "" : "s"}`;
+  return `${markets}; positions up to ${m.max}${unit}${m.total ? ` each, ${m.total}${unit} in all` : ""}; up to ${m.lev}x leverage${m.loss ? `; at most ${m.loss}${unit} lost a day` : ""}; for ${m.days} day${m.days === 1 ? "" : "s"}`;
 }
 
 /**
@@ -58,10 +63,13 @@ export function mandateText(m, symbol = "") {
  * limit price), `othersNotional` every other open position's value that
  * `total` counts.
  */
-export function checkOpen(desk, trader, { market, leverage, notional, othersNotional = 0, symbol = "" }) {
+export function checkOpen(desk, trader, { market, leverage, notional, othersNotional = 0, symbol = "", dayPnl = 0 }) {
   if (desk.paused) throw new DeskError(`The desk is paused${desk.paused.by ? ` (by ${desk.paused.by})` : ""}: no new positions until it's resumed. You can still close positions.`);
   if (Date.now() > trader.expiresAt) throw new DeskError("Your mandate has ended - the DAO needs to appoint you again to open positions. You can still close them.");
   const { mandate } = trader;
+  if (mandate.loss && -dayPnl >= Number(mandate.loss)) {
+    throw new DeskError(`You've lost ${fmt(-dayPnl, 2)}${symbol ? ` ${symbol}` : ""} today; your mandate stops new positions at ${mandate.loss}. You can still close positions, and it resets at 00:00 UTC.`);
+  }
   if (!covers(mandate, market)) throw new DeskError(`Your mandate covers ${mandate.markets.join(", ")}, not ${market}.`);
   if (Number(leverage) > Number(mandate.lev)) throw new DeskError(`Your mandate allows up to ${mandate.lev}x, not ${leverage}x.`);
   const unit = symbol ? ` ${symbol}` : "";
@@ -70,6 +78,26 @@ export function checkOpen(desk, trader, { market, leverage, notional, othersNoti
     throw new DeskError(`That makes the desk's positions ${fmt(notional + othersNotional, 2)}${unit} in all; your mandate allows up to ${mandate.total} in all.`);
   }
 }
+
+/**
+ * A trader's result today (UTC), for the daily loss limit: what the bot
+ * recorded closing today (`realized`), plus the change in their open
+ * positions' unrealized PnL since the first time the bot looked today.
+ * Returns { day, pnl }; save `day` on the trader when it isn't theirs yet.
+ *
+ * Counted by the bot, not the venue: realized PnL is what its own closes
+ * made (HyperCore: at the fill price; Perpl: at the trader's limit price,
+ * which errs toward more loss), and a liquidation or funding payment isn't
+ * seen. A stand-in for the vault's on-chain drawdown backstop, not that.
+ */
+export function dayOf(trader, unrealized, now = Date.now()) {
+  const key = new Date(now).toISOString().slice(0, 10);
+  const day = trader.day?.key === key ? trader.day : { key, startUnrealized: unrealized, realized: 0 };
+  return { day, pnl: day.realized + unrealized - day.startUnrealized };
+}
+
+/** `day` after a close the bot made that realized `amount`. */
+export const addRealized = (day, amount) => ({ ...day, realized: day.realized + amount });
 
 /** Whether `mandate` lets its trader trade `market`. */
 export const covers = (mandate, market) => mandate.markets === "all" || mandate.markets.includes(String(market).toUpperCase());
@@ -112,7 +140,7 @@ export function takeFor(words) {
  * theirs alone, [{ symbol, side, size, entry, mark, pnl, extra? }];
  * `deskNotional` is every position `total` counts.
  */
-export function mineLines(desk, trader, { venue, n, positions, deskNotional, symbol, cmd }) {
+export function mineLines(desk, trader, { venue, n, positions, deskNotional, symbol, cmd, dayPnl }) {
   const unit = symbol ? ` ${symbol}` : "";
   const m = trader.mandate;
   const expired = Date.now() > trader.expiresAt;
@@ -127,6 +155,10 @@ export function mineLines(desk, trader, { venue, n, positions, deskNotional, sym
   if (!positions.length) lines.push("No open positions.");
   if (idle.length) lines.push(`Nothing open in ${idle.join(", ")} (up to ${m.max}${unit} each).`);
   if (m.total) lines.push(`Desk total: ${fmt(deskNotional, 2)} of ${m.total}${unit} used (room for ${fmt(Math.max(0, Number(m.total) - deskNotional), 2)}).`);
+  if (dayPnl !== undefined) {
+    const stopped = m.loss && -dayPnl >= Number(m.loss);
+    lines.push(`Today (UTC): ${dayPnl >= 0 ? "+" : ""}${fmt(dayPnl, 2)}${unit}${m.loss ? (stopped ? ` - ⛔ past your ${m.loss}${unit} daily loss limit: closing only until 00:00 UTC` : `; new positions stop at -${m.loss}${unit}`) : ""}.`);
+  }
   return lines;
 }
 

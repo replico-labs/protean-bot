@@ -158,7 +158,12 @@ export const BUTTON_COMMANDS = new Set([
   "trade", "split", "finalizeproposal", "redeem",
   // A second-step menu (buttonMenus.js): an amount picker or a confirmation.
   "ask",
+  // The trading desk's notices: its status, and a trader's own view.
+  "desk",
 ]);
+
+/** The buttons under a trading desk notice. */
+export const DESK_BUTTONS = [[{ label: "📈 Desk", cmd: "desk" }, { label: "👤 My trading", cmd: "desk mine" }]];
 
 /** Telegram's inline keyboard for `rows`. */
 export function telegramKeyboard(rows) {

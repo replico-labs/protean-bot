@@ -82,7 +82,7 @@ const MARKETS = [
   { name: "BTC", szDecimals: 5, maxLeverage: 40 },
   { name: "ETH", szDecimals: 4, maxLeverage: 25 },
 ];
-const core = { agents: new Map(), positions: new Map(), exchange: [] }; // agents: principal -> [{ address, name }]
+const core = { agents: new Map(), positions: new Map(), exchange: [], marks: new Map() }; // marks: coin -> a mark price that differs from entry // agents: principal -> [{ address, name }]
 const principalOf = (agent) => [...core.agents].find(([, list]) => list.some((a) => getAddress(a.address) === getAddress(agent)))?.[0];
 
 async function signerOf({ action, nonce, signature, vaultAddress, expiresAfter }) {
@@ -103,7 +103,7 @@ async function answer(path, body) {
     if (body.type === "clearinghouseState") {
       const assetPositions = [...core.positions].map(([coin, p]) => ({
         type: "oneWay",
-        position: { coin, szi: String(p.szi), entryPx: String(p.px), positionValue: String(Math.abs(p.szi) * p.px), unrealizedPnl: "0", marginUsed: "0", leverage: { type: "cross", value: p.lev ?? 1 } },
+        position: { coin, szi: String(p.szi), entryPx: String(p.px), positionValue: String(Math.abs(p.szi) * (core.marks.get(coin) ?? p.px)), unrealizedPnl: String(((core.marks.get(coin) ?? p.px) - p.px) * p.szi), marginUsed: "0", leverage: { type: "cross", value: p.lev ?? 1 } },
       }));
       return { marginSummary: { accountValue: "2000" }, withdrawable: "1500", assetPositions };
     }
@@ -123,7 +123,8 @@ async function answer(path, body) {
     const held = core.positions.get(coin) ?? { szi: 0, px: Number(o.p) };
     const szi = held.szi + (o.b ? 1 : -1) * Number(o.s);
     if (Math.abs(szi) < 1e-12) core.positions.delete(coin);
-    else core.positions.set(coin, { szi, px: Number(o.p), lev: core.lev });
+    // Adding keeps the size-weighted entry; reducing keeps the entry.
+    else core.positions.set(coin, { szi, px: o.r ? held.px : (held.szi * held.px + (o.b ? 1 : -1) * Number(o.s) * Number(o.p)) / szi, lev: core.lev });
     return { status: "ok", response: { type: "order", data: { statuses: [{ filled: { totalSz: o.s, avgPx: o.p, oid: core.exchange.length } }] } } };
   }
   throw new Error(`exchange ${body.action.type} isn't stood in for`);
@@ -164,6 +165,7 @@ const { registerChat, getChatDesk } = await import("../src/db.js");
 const { runCommand } = await import("../src/platforms/commands.js");
 const { splitArgs } = await import("../src/args.js");
 const { parseMandate, mandateText } = await import("../src/desk.js");
+const { checkDesks } = await import("../src/eventListener.js");
 
 // Compiled from (solc 0.8.28):
 //   contract CoreWriterStub { event RawAction(address indexed user, bytes data);
@@ -305,6 +307,7 @@ async function main() {
   r = await run("A", "desk long BTC 0.004 at 50000");
   check(/1500 in all/.test(r.text), "BTC to 700 would make 1600 in all: refused by total", r.text);
   r = await run("A", "desk mine");
+  check(r.image?.png?.length > 1000, "desk mine comes with a PnL card");
   check(/BTC long 0\.01 .*500 of 1000 USDC used/.test(r.text) && /ETH long 0\.3 .*900 of 1000 USDC used/.test(r.text) && /Desk total: 1,400 of 1500 USDC used \(room for 100\)/.test(r.text), "desk mine shows A's positions, what each uses of max, and the desk total", r.text);
   r = await run("B", "desk mine");
   check(/aren't one of the desk's traders/.test(r.text), "desk mine for a non-trader says so", r.text);
@@ -345,11 +348,16 @@ async function main() {
 
   r = await run("B", "desk apply ETH max=100");
   check(/already trades .*ETH/.test(r.text), "B can't apply for ETH: it's A's market (one position per market on the shared account)", r.text);
-  r = await run("C", "desk apply BTC max=1000 lev=2");
+  r = await run("C", "desk apply BTC max=1000 lev=2 loss=5");
   const cId = idIn(r.text);
   const cApp = getChatDesk(CHAT, "slack")?.pending?.[cId];
   check(Boolean(cId) && cApp?.agentName !== second.agentName, `C applies for BTC, with an agent name of its own (${cApp?.agentName} vs ${second.agentName})`, r.text);
   await pass(cId);
+  // The listener's desk check (eventListener.js) posts the appointment once HyperCore lists the agent.
+  const notices = [];
+  await checkDesks(async (chatId, text, extra) => notices.push({ chatId, text, extra }), [{ chatId: CHAT, platform: "slack", governanceAddress: dao.governance, model: "tokenWeighted", network: "hyperevm-testnet" }]);
+  check(notices.length === 1 && notices[0].text.includes(C.account.address) && /now trades the desk/.test(notices[0].text), "the listener posts that C now trades the desk", JSON.stringify(notices));
+  check(JSON.stringify(notices[0]?.extra?.buttons ?? []).includes('"desk mine"'), "with Desk and My trading buttons");
   r = await run("B", "desk");
   check(/1\. `0x/.test(r.text) && /2\. `0x/.test(r.text), "/desk lists both traders, numbered", r.text);
   r = await run("C", "desk long BTC 0.01 at 50000 2x");
@@ -360,8 +368,22 @@ async function main() {
   check(/trader 1/.test(r.text) && /ETH long/.test(r.text) && !/BTC long/.test(r.text), "A's desk mine shows only A's ETH", r.text);
   r = await run("B", "desk");
   check(/ETH long .*· trader 1/.test(r.text) && /BTC long .*· trader 2/.test(r.text), "/desk labels each position with its trader", r.text);
+  check(r.image?.png?.length > 1000, "/desk comes with a PnL card");
   r = await run("C", "desk long ETH 0.01 at 3000");
   check(/isn't one of your markets/.test(r.text), "C can't open ETH, A's market", r.text);
+  check(cApp.mandate.loss === "5", "C's mandate has a daily loss limit of 5");
+  core.marks.set("BTC", 49000); // BTC drops: C's long is down 10 USDC
+  r = await run("C", "desk mine");
+  check(/Today \(UTC\): -10 USDC - ⛔ past your 5 USDC daily loss limit/.test(r.text), "desk mine shows C down 10 today, past the 5 limit", r.text);
+  r = await run("C", "desk long BTC 0.001 at 49000");
+  check(/You've lost 10 USDC today; your mandate stops new positions at 5/.test(r.text), "the daily loss limit stops C's new positions", r.text);
+  r = await run("C", "desk close BTC all at 49000");
+  check(/Filled 0.01 BTC/.test(r.text), "closing still works past the limit", r.text);
+  core.marks.delete("BTC");
+  r = await run("C", "desk mine");
+  check(/Today \(UTC\): -10 USDC/.test(r.text), "the realized 10 USDC loss still counts once the position is closed", r.text);
+  r = await run("C", "desk long BTC 0.01 at 50000");
+  check(/You've lost 10 USDC today/.test(r.text), "so C stays stopped for the day", r.text);
   r = await run("C", "desk close ETH all at 2000");
   check(/isn't one of your markets/.test(r.text), "nor close A's ETH position", r.text);
   r = await run("A", "desk long ETH 0.01 at 3000");

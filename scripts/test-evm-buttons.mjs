@@ -41,6 +41,9 @@ mock.module(new URL("../src/walletStore.js", import.meta.url).href, {
     findSolanaWallet: async () => null,
     storeSolanaWallet: async () => null,
     recordSolanaTopup: async () => 0,
+    createAgentKey: async () => null,
+    getAgentAccount: async () => null,
+    deleteAgentKey: async () => {},
   },
 });
 mock.module(new URL("../src/walletResolver.js", import.meta.url).href, {
@@ -61,6 +64,8 @@ const { registerChat } = await import("../src/db.js");
 const { runCommand } = await import("../src/platforms/commands.js");
 const { buttonMenu } = await import("../src/buttonMenus.js");
 const { splitArgs } = await import("../src/args.js");
+const { marketsSnapshot } = await import("../src/governance/decisionMarkets.js");
+const { proposalChart } = await import("../src/charts.js");
 
 const anvil = await fetch(process.env.RPC_URL ?? "http://127.0.0.1:8545", {
   method: "POST",
@@ -157,9 +162,24 @@ try {
   menu = await press(DM, "A", `ask amount split ${id} quote`);
   check(/You have no .+ to split/.test(menu.text), "splitting quote with no quote token says so", menu.text);
 
+  // The chart's prices (charts.js, marketsSnapshot): spot from the pools' reserves, the TWAP as finalizeProposal computes it.
+  const RESERVES = parseAbi(["function getReserves() view returns (uint112, uint112, uint32)"]);
+  let snap = await marketsSnapshot(dmDao.governance, await dm.getProposal(dmDao.governance, id));
+  const [fr0, fr1] = await publicClient.readContract({ address: p.failPool, abi: RESERVES, functionName: "getReserves" });
+  check(snap && Math.abs(snap.fail.spot - Number(fr1) / Number(fr0)) < 1e-12 && snap.fail.spot < snap.pass.spot, `chart: fail market's spot is its pool's reserve ratio (${snap?.fail.spot}), below pass (${snap?.pass.spot}) after the sell`);
+  check(snap.thresholdBps > 0 && !snap.settled, `chart: the governance's threshold (${snap.thresholdBps} bps), not settled yet`);
+  const open = proposalChart({ p: { ...(await dm.getProposal(dmDao.governance, id)), markets: snap }, state: "Open" });
+  check(open.bars.some((b) => b.heading === "Price now") && open.bars.find((b) => b.label === "If it passes")?.marker > 0, "chart: average and current prices, with the pass market's bar to beat marked");
+
   await warp(Number(p.tradingDeadline - (await now())) + 5);
+  const before = await marketsSnapshot(dmDao.governance, await dm.getProposal(dmDao.governance, id));
   r = await press(DM, "A", `finalizeproposal ${id}`);
   check(/✅ Proposal #\d+ finalized/.test(r.text), "Settle markets finalizes", r.text);
+  const fin = await dm.getProposal(dmDao.governance, id);
+  snap = await marketsSnapshot(dmDao.governance, fin);
+  check(snap.settled && Math.abs(snap.pass.twap - Number(fin.passTWAP) / 2 ** 112) < 1e-12, `chart: once settled, the TWAP the contract stored (${snap.pass.twap})`);
+  const close = (a, b) => Math.abs(a - b) <= Math.abs(b) * 0.01;
+  check(close(before.pass.twap, snap.pass.twap) && close(before.fail.twap, snap.fail.twap), `chart: the average just before settling matches the settled TWAPs within 1% (pass ${before.pass.twap} vs ${snap.pass.twap}, fail ${before.fail.twap} vs ${snap.fail.twap})`);
   r = await run(DM, "A", `proposal ${id}`);
   const settled = cmdsOf(r.buttons);
   check(settled.includes(`redeem ${id} base`) && settled.includes(`redeem ${id} quote`), `once settled: Redeem buttons (${settled.join(", ")})`);
@@ -210,6 +230,9 @@ try {
   menu = await press(SW, "C", `ask amount takeposition ${s} no`);
   r = await press(SW, "C", cmdsOf(menu.buttons).find((c) => c.startsWith("takeposition ")));
   check(/✅/.test(r.text), "C backs NO the same way", r.text);
+  const swChart = proposalChart({ p: await sw.getProposal(swDao.governance, s), state: "PositionsOpen" });
+  const yesBar = swChart?.bars.find((b) => b.label === "YES (it works)");
+  check(yesBar?.value > 0 && swChart.bars.find((b) => b.label === "NO (it doesn't)")?.value > 0 && swChart.bars.some((b) => b.label === "For"), "chart: Sowellian shows the approval vote and the YES/NO backing");
 
   sp = await sw.getProposal(swDao.governance, s);
   await warp(Number(sp.positionsDeadline - (await now())) + 2);

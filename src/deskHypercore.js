@@ -11,7 +11,8 @@ import { getAdapter } from "./governance/index.js";
 import { PROPOSAL_STATE_LABELS } from "./governance/common.js";
 import { parsePerps, PerpsError } from "./perps.js";
 import { createAgentKey, getAgentAccount, deleteAgentKey } from "./walletStore.js";
-import { DeskError, parseMandate, mandateText, checkOpen, covers, isTrader, pickTrader, takeFor, mineLines, fmt } from "./deskMandate.js";
+import { deskCardImage } from "./charts.js";
+import { DeskError, parseMandate, mandateText, checkOpen, covers, isTrader, pickTrader, takeFor, mineLines, dayOf, addRealized, fmt } from "./deskMandate.js";
 
 /**
  * Trading desk on HyperCore (HyperEVM): the same /desk as on Perpl
@@ -90,6 +91,17 @@ function updateDesk(chat, change) {
 
 /** The desk's traders in the order /desk numbers them (longest-serving first). */
 const tradersOf = (desk) => Object.values(desk.traders ?? {}).sort((a, b) => (a.since ?? 0) - (b.since ?? 0));
+
+/** Saves `day` (deskMandate.dayOf) on the trader with agent key `agentKey`. */
+function saveDay(chat, agentKey, day) {
+  updateDesk(chat, (cur) => {
+    if (cur.traders[agentKey]) cur.traders[agentKey].day = day;
+    return cur;
+  });
+}
+
+/** A trader's unrealized PnL now: their markets' positions on the shared account. */
+const unrealizedOf = (t, open) => open.filter((p) => covers(t.mandate, p.coin)).reduce((sum, p) => sum + Number(p.unrealizedPnl), 0);
 
 /** The agents the Treasury's HyperCore account has approved: [{ address, name, validUntil }]. */
 const agentsOf = (ctx) => deskVenue.info(ctx, { type: "extraAgents", user: ctx.treasury });
@@ -303,6 +315,7 @@ export async function deskStatus(chat, cmd) {
     const state = await deskVenue.info(ctx, { type: "clearinghouseState", user: ctx.treasury });
     lines.push(`Collateral: ${fmt(Number(state.marginSummary.accountValue), 2)} USDC on HyperCore perps (withdrawable ${fmt(Number(state.withdrawable), 2)})`);
     const open = positionsOf(state);
+    const card = [];
     if (!open.length) lines.push(Number(state.marginSummary.accountValue) === 0 ? `No collateral yet - \`${cmd("desk")} fund <amount>\` proposes moving USDC to HyperCore.` : "No open positions.");
     for (const p of open) {
       const size = Math.abs(Number(p.szi));
@@ -310,8 +323,10 @@ export async function deskStatus(chat, cmd) {
       const owner = traders.findIndex((t) => covers(t.mandate, p.coin));
       const whose = owner >= 0 ? `trader ${owner + 1}` : "no trader";
       lines.push(`• ${p.coin} ${Number(p.szi) > 0 ? "long" : "short"} ${fmt(size)} @ ${fmt(Number(p.entryPx), 2)} · mark ${fmt(Number(p.positionValue) / size, 2)} · PnL ${Number(p.unrealizedPnl) >= 0 ? "+" : ""}${fmt(Number(p.unrealizedPnl), 2)} USDC · ${p.leverage.value}x · ${whose}`);
+      card.push({ symbol: p.coin, side: Number(p.szi) > 0 ? "long" : "short", size, mark: Number(p.positionValue) / size, pnl: Number(p.unrealizedPnl), owner: whose });
     }
-    return lines.join("\n");
+    const image = deskCardImage({ title: "Trading desk", subtitle: `HyperCore · ${traders.length} trader${traders.length === 1 ? "" : "s"}`, positions: card, symbol: COLLATERAL, collateral: `${fmt(Number(state.marginSummary.accountValue), 2)} USDC` });
+    return { text: lines.join("\n"), image };
   });
 }
 
@@ -334,9 +349,12 @@ export async function deskMine(chat, client, cmd) {
         return { symbol: p.coin, side: Number(p.szi) > 0 ? "long" : "short", size, entry: Number(p.entryPx), mark: Number(p.positionValue) / size, pnl: Number(p.unrealizedPnl), extra: `${p.leverage.value}x` };
       });
     const deskNotional = open.reduce((sum, p) => sum + Math.abs(Number(p.positionValue)), 0);
-    const lines = mineLines(desk, t, { venue: "HyperCore", n: traders.length > 1 ? n + 1 : null, positions, deskNotional, symbol: COLLATERAL, cmd });
+    const { day, pnl } = dayOf(t, unrealizedOf(t, open));
+    if (day !== t.day) saveDay(chat, t.agentKey, day);
+    const lines = mineLines(desk, t, { venue: "HyperCore", n: traders.length > 1 ? n + 1 : null, positions, deskNotional, symbol: COLLATERAL, cmd, dayPnl: pnl });
     if (!(await isApproved(ctx, t.agent, t.agentName))) lines.push("⚠️ Your agent is no longer approved on HyperCore, so you can't trade.");
-    return lines.join("\n");
+    const image = deskCardImage({ title: "Your trading", subtitle: `HyperCore · ${t.address.slice(0, 6)}…${t.address.slice(-4)}`, positions, symbol: COLLATERAL, mandate: t.mandate, deskNotional, collateral: `${fmt(Number(state.marginSummary.accountValue), 2)} USDC on the shared account` });
+    return { text: lines.join("\n"), image };
   });
 }
 
@@ -369,8 +387,13 @@ export async function trade(chat, client, words) {
     if (!covers(t.mandate, m.coin)) throw new DeskError(`${m.coin} isn't one of your markets (${t.mandate.markets.join(", ")}).`);
     const state = await deskVenue.info(ctx, { type: "clearinghouseState", user: ctx.treasury });
     const open = positionsOf(state);
-    const held = Number(open.find((p) => p.coin === m.coin)?.szi ?? 0);
+    const position = open.find((p) => p.coin === m.coin);
+    const held = Number(position?.szi ?? 0);
     const price = wire(request.price);
+    // The daily loss limit counts from the first look each day (deskMandate.dayOf).
+    const today = dayOf(t, unrealizedOf(t, open));
+    let day = today.day;
+    if (day !== t.day) saveDay(chat, t.agentKey, day);
     let order;
     let leverage;
     let what;
@@ -385,7 +408,7 @@ export async function trade(chat, client, words) {
       // This market's position after the order at the limit price; other markets (every trader's: one cross margin) at their current value.
       const notional = (Math.abs(held) + Number(size)) * Number(price);
       const others = open.filter((p) => p.coin !== m.coin).reduce((sum, p) => sum + Math.abs(Number(p.positionValue)), 0);
-      checkOpen(desk, t, { market: m.coin.toUpperCase(), leverage: lev, notional, othersNotional: others, symbol: COLLATERAL });
+      checkOpen(desk, t, { market: m.coin.toUpperCase(), leverage: lev, notional, othersNotional: others, symbol: COLLATERAL, dayPnl: today.pnl });
       leverage = Number(lev);
       order = { a: m.index, b: isBuy, p: price, s: size, r: false, t: { limit: { tif: "Ioc" } } };
       what = `${request.side} ${size} ${m.coin} at ${price} or better, ${lev}x`;
@@ -406,6 +429,12 @@ export async function trade(chat, client, words) {
       const response = await exchange.order({ orders: [order], grouping: "na" });
       const filled = response.response?.data?.statuses?.[0]?.filled;
       result = filled ? `Filled ${filled.totalSz} ${m.coin} at an average ${filled.avgPx}.` : "Nothing filled at that price (immediate-or-cancel) - no change.";
+      // A close realizes PnL at the fill price; the daily loss limit counts it.
+      if (filled && request.kind === "close") {
+        const realized = (Number(filled.avgPx) - Number(position.entryPx)) * Number(filled.totalSz) * (held > 0 ? 1 : -1);
+        day = addRealized(day, realized);
+        saveDay(chat, t.agentKey, day);
+      }
     } catch (err) {
       if (err?.name !== "ApiRequestError") throw err;
       result = `Hyperliquid didn't take it: ${err.message}`;

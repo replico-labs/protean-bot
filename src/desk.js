@@ -8,8 +8,9 @@ import { getChatDesk, updateChatDesk, getChatDAO, getChatModel } from "./db.js";
 import { getAdapter } from "./governance/index.js";
 import { PROPOSAL_STATE_LABELS } from "./governance/common.js";
 import { parsePerps, PerpsError } from "./perps.js";
-import { DeskError, parseMandate, mandateText, checkOpen, isTrader, pickTrader, takeFor, mineLines, fmt } from "./deskMandate.js";
+import { DeskError, parseMandate, mandateText, checkOpen, isTrader, pickTrader, takeFor, mineLines, dayOf, addRealized, fmt } from "./deskMandate.js";
 import * as hypercoreDesk from "./deskHypercore.js";
+import { deskCardImage } from "./charts.js";
 
 export { DeskError, parseMandate, mandateText };
 
@@ -51,7 +52,7 @@ export function deskUsage(cmd) {
   const d = cmd("desk");
   return [
     `\`${d}\` - the DAO's trading desk: its traders, their limits, collateral, positions`,
-    `\`${d} apply <markets|all> max=<size> [total=<size>] [lev=2] [days=30]\` - propose yourself as a trader (e.g. \`${d} apply BTC,ETH max=500 total=800 lev=3 days=30\`; max is the largest position in one market, total all of them together, in the collateral token)`,
+    `\`${d} apply <markets|all> max=<size> [total=<size>] [loss=<size>] [lev=2] [days=30]\` - propose yourself as a trader (e.g. \`${d} apply BTC,ETH max=500 total=800 loss=50 lev=3 days=30\`; max is the largest position in one market, total all of them together, loss the most to lose in a day, in the collateral token)`,
     `\`${d} fund <amount> [for=<n>]\` / \`${d} withdraw <amount> [for=<n>]\` - propose moving collateral between the Treasury and a trader's desk (n: its number in \`${d}\`, or the trader's address)`,
     `\`${d} remove [n]\` - propose removing a trader · \`${d} resign\` - a trader steps down`,
     `\`${d} pause\` / \`${d} resume\` - chat admins or the DAO's creator stop new positions for every trader at once (closing stays allowed)`,
@@ -107,6 +108,14 @@ function pickDesk(rec, word) {
     return hit;
   }
   return pickTrader(list, word, "desk");
+}
+
+/** Saves `day` (deskMandate.dayOf) on desk `address`'s trader. */
+function saveDay(chat, address, day) {
+  updateRecord(chat, (cur) => {
+    if (cur.desks[address]?.trader) cur.desks[address].trader.day = day;
+    return cur;
+  });
 }
 
 const stateLabelOf = (p) => p.stateLabel ?? p.statusLabel ?? p.phaseLabel ?? PROPOSAL_STATE_LABELS[p.stateIndex] ?? "Unknown";
@@ -322,7 +331,12 @@ export async function deskStatus(chat, cmd) {
     if (rec.paused) lines.push(`⏸️ Paused${rec.paused.by ? ` by ${rec.paused.by}` : ""}: no new positions until \`${cmd("desk")} resume\`.`);
     const d = deskVenue.deployment(ctx);
     const desks = desksOf(rec);
-    if (!desks.length) lines.push(`No desk yet. A would-be trader starts with \`${cmd("desk")} apply <markets> max=<size>\`.`);
+    const card = [];
+    let symbol = "";
+    let collateral = 0;
+    if (!desks.length) {
+      lines.push(`No desk yet. A would-be trader starts with \`${cmd("desk")} apply <markets> max=<size>\`.`);
+    }
     for (const [i, desk] of desks.entries()) {
       const state = await deskVenue.exchangeState(ctx, d, desk.address);
       lines.push("", `*${i + 1}.* Desk \`${desk.address}\``);
@@ -335,14 +349,18 @@ export async function deskStatus(chat, cmd) {
         continue;
       }
       lines.push(`Collateral: ${formatUnits(state.balance, state.decimals)} ${state.symbol}${state.locked ? ` (${formatUnits(state.locked, state.decimals)} in positions)` : ""}`);
+      symbol = state.symbol;
+      collateral += Number(formatUnits(state.balance, state.decimals));
       const positions = await deskVenue.openPositions(ctx, d, state.accountId);
+      card.push(...positions.map((p) => ({ ...p, owner: desks.length > 1 ? `desk ${i + 1}` : null })));
       if (!positions.length) lines.push("No open positions.");
       for (const p of positions) lines.push(`• ${p.symbol} ${p.side} ${fmt(p.size)} @ ${fmt(p.entry, 2)} · mark ${fmt(p.mark, 2)} · PnL ${p.pnl >= 0 ? "+" : ""}${fmt(p.pnl, 2)} ${state.symbol}`);
     }
     const pending = Object.entries(rec.pending);
     if (pending.length) lines.push("");
     for (const [id, a] of pending) lines.push(`Proposed: \`${a.address}\` (proposal #${id}) - ${mandateText(a.mandate)}${a.desk ? ` on desk \`${a.desk}\`` : ", on a new desk"}`);
-    return lines.join("\n");
+    const image = deskCardImage({ title: "Trading desk", subtitle: `Perpl · ${desks.length} desk${desks.length === 1 ? "" : "s"}`, positions: card, symbol, collateral: collateral ? `${fmt(collateral, 2)} ${symbol}${desks.length > 1 ? " across the desks" : ""}` : null });
+    return { text: lines.join("\n"), image };
   });
 }
 
@@ -362,9 +380,13 @@ export async function deskMine(chat, client, cmd) {
     const positions = state.accountId === 0n ? [] : await deskVenue.openPositions(ctx, d, state.accountId);
     // A Perpl desk is the trader's own account, so every position on it is theirs.
     const deskNotional = positions.reduce((sum, p) => sum + p.size * p.mark, 0);
-    const lines = mineLines(rec, desk.trader, { venue: "Perpl", n: desks.length > 1 ? n + 1 : null, positions, deskNotional, symbol: state.symbol, cmd });
-    lines.splice(1, 0, `Desk: \`${desk.address}\` · collateral ${state.accountId === 0n ? "none yet" : `${formatUnits(state.balance, state.decimals)} ${state.symbol}${state.locked ? ` (${formatUnits(state.locked, state.decimals)} in positions)` : ""}`}`);
-    return lines.join("\n");
+    const { day, pnl } = dayOf(desk.trader, positions.reduce((sum, p) => sum + p.pnl, 0));
+    if (day !== desk.trader.day) saveDay(chat, desk.address, day);
+    const lines = mineLines(rec, desk.trader, { venue: "Perpl", n: desks.length > 1 ? n + 1 : null, positions, deskNotional, symbol: state.symbol, cmd, dayPnl: pnl });
+    const collateral = state.accountId === 0n ? "none yet" : `${formatUnits(state.balance, state.decimals)} ${state.symbol}${state.locked ? ` (${formatUnits(state.locked, state.decimals)} in positions)` : ""}`;
+    lines.splice(1, 0, `Desk: \`${desk.address}\` · collateral ${collateral}`);
+    const image = deskCardImage({ title: "Your trading", subtitle: `Perpl · desk ${desk.address.slice(0, 6)}…${desk.address.slice(-4)}`, positions, symbol: state.symbol, mandate: desk.trader.mandate, deskNotional, collateral: state.accountId === 0n ? null : collateral });
+    return { text: lines.join("\n"), image };
   });
 }
 
@@ -398,6 +420,11 @@ export async function trade(chat, client, words) {
     const held = position.lotLNS;
     const heldLong = Number(position.positionType) === 0;
     const pricePNS = deskVenue.scaled(request.price, m.priceDecimals, "Limit price");
+    // The daily loss limit counts from the first look each day (deskMandate.dayOf).
+    const openNow = await deskVenue.openPositions(ctx, d, state.accountId);
+    const today = dayOf(t, openNow.reduce((sum, p) => sum + p.pnl, 0));
+    let day = today.day;
+    if (day !== t.day) saveDay(chat, desk.address, day);
 
     let desc;
     let what;
@@ -409,8 +436,8 @@ export async function trade(chat, client, words) {
       const lotLNS = deskVenue.scaled(request.size, m.lotDecimals, "Size");
       // Position size in collateral at the limit price, including what's already held; the desk's other markets at their mark.
       const notional = Number(formatUnits(held + lotLNS, m.lotDecimals)) * Number(request.price);
-      const others = t.mandate.total ? (await deskVenue.openPositions(ctx, d, state.accountId)).filter((p) => BigInt(p.id) !== m.perpId).reduce((sum, p) => sum + p.size * p.mark, 0) : 0;
-      checkOpen(rec, t, { market: request.market, leverage: lev, notional, othersNotional: others, symbol: state.symbol });
+      const others = openNow.filter((p) => BigInt(p.id) !== m.perpId).reduce((sum, p) => sum + p.size * p.mark, 0);
+      checkOpen(rec, t, { market: request.market, leverage: lev, notional, othersNotional: others, symbol: state.symbol, dayPnl: today.pnl });
       desc = deskVenue.orderDesc({ perpId: m.perpId, orderType: request.side === "long" ? deskVenue.ORDER.OpenLong : deskVenue.ORDER.OpenShort, pricePNS, lotLNS, leverageHdths });
       what = `${request.side} ${request.size} ${m.symbol} at ${request.price} or better, ${lev}x`;
     } else {
@@ -428,6 +455,12 @@ export async function trade(chat, client, words) {
     const [after] = await deskVenue.read(ctx, d, "getPosition", [m.perpId, state.accountId]);
     const filled = after.lotLNS > held ? after.lotLNS - held : held - after.lotLNS;
     const size = (v) => formatUnits(v, m.lotDecimals);
+    // A close realizes PnL; the bot can't see Perpl's fill price, so it counts the limit price, the worst the close could fill at.
+    if (filled > 0n && request.kind === "close") {
+      const entry = Number(formatUnits(position.pricePNS, m.priceDecimals));
+      day = addRealized(day, (Number(request.price) - entry) * Number(formatUnits(filled, m.lotDecimals)) * (heldLong ? 1 : -1));
+      saveDay(chat, desk.address, day);
+    }
     const result = filled === 0n ? "Nothing filled at that price (immediate-or-cancel) - no change." : `Filled ${size(filled)} ${m.symbol}; the desk's ${m.symbol} position is now ${after.lotLNS === 0n ? "closed" : `${size(after.lotLNS)} ${Number(after.positionType) === 0 ? "long" : "short"}`}.`;
     return `📈 Trader \`${me}\`: ${what}.\n${result}`;
   });

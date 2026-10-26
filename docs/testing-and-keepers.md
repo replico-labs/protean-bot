@@ -55,7 +55,9 @@ It uses the bot's `.env`: the operator key, factory addresses, `SORTITION_RANDOM
 
 It stands in for wallet storage and backs up and restores `data/chats.json`, so don't run it while another test is using that file.
 
-## HyperCore trading desk
+## Trading desks
+
+### HyperCore
 
 `scripts/test-hypercore-desk.mjs` runs the HyperCore desk (src/deskHypercore.js) on anvil posing as HyperEVM testnet. Setup is in its header: anvil with `--chain-id 998`, the factories deployed with `deploy-local-evm.mjs`, and the env lines given the `HYPEREVM_TESTNET_` prefix. Deploy with anvil's instant mining, then switch it to 1-second blocks (`evm_setIntervalMining`), and keep recent state with `--prune-history 300`. HyperEVM reads are pinned to the block after the bot's last transaction, so the chain has to keep making blocks and still answer for the last few.
 
@@ -67,12 +69,25 @@ HyperCore is stood in for twice. On the chain, a CoreWriter stand-in logs each r
 - removal revokes the agent and the bot destroys its key;
 - a new appointment gets a new agent;
 - resigning destroys the key at once;
-- `desk mine` shows a trader only their own positions, with how much of `max` and `total` they use, and `/desk` labels each position with its trader;
-- with a second trader: an application for a market another trader has is refused, each trader signs with their own agent and can't open or close the other's markets, and `remove <n>` revokes just that one.
+- `desk mine` shows a trader only their own positions, with how much of `max` and `total` they use, and `/desk` labels each position with its trader; both come with a PnL card;
+- with a second trader: an application for a market another trader has is refused, each trader signs with their own agent and can't open or close the other's markets, and `remove <n>` revokes just that one;
+- the listener's desk check posts the new trader, with the Desk and My trading buttons;
+- `loss=5`: once the trader is 10 down for the day, new positions are refused, closing still works, and the realized loss keeps counting after the close.
 
-The Perpl desk's several-desks flow (one desk per trader) has no local test: there's no Perpl stand-in on anvil.
+### Perpl
 
-Like the buttons test, it stands in for wallet storage and backs up and restores `data/chats.json`, also when it's stopped part-way.
+`scripts/test-perpl-desk.mjs` runs the Perpl desk (src/desk.js) on anvil as Monad testnet (chain id 10143, set up like the buttons test). Perpl is stood in for by small contracts (`scripts/fixtures/perpl-stubs.sol`, compiled with solc 0.8.28 into `perpl-stubs.json`) placed at the addresses the bot pins for Monad testnet: the collateral token, an exchange whose immediate-or-cancel orders fill at the limit price when the mark allows, and a DelegatedAccount factory whose desks are owned by the Treasury, let operators call only `execOrders`, and pay withdrawals to the owner. Recompile `perpl-stubs.json` whenever the `.sol` changes. It checks:
+- an appointment creates a desk, and the listener's execution step learns its address from the factory's event;
+- funding and withdrawing are proposals that move AUSD between the Treasury and the desk;
+- orders reach the exchange from the desk; the trader's wallet can't withdraw or call anything but `execOrders` through it;
+- the mandate holds (`max`, `total`, markets, leverage), and an order past the mark doesn't fill;
+- pausing stops new positions while closing works, and the pause reply has the desk buttons;
+- a second trader gets a desk of their own; `fund` and `remove` then ask which; `desk mine` shows each trader only their own desk, with a PnL card;
+- `loss=5` stops new positions after a 10 loss, closing still works, and the realized loss keeps counting;
+- removal by proposal, noticed by the listener's desk check with the desk buttons;
+- resigning, then a new trader appointed onto the free desk (`perpl-desk-appoint`), who can close what the last one left.
+
+Like the buttons test, both stand in for wallet storage and back up and restore `data/chats.json`, also when stopped part-way.
 
 ## Slack and links
 

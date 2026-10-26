@@ -475,7 +475,7 @@ async function openPositions(ctx, d, accountId) {
       const pd = Number(info.priceDecimals), ld = Number(info.lotDecimals);
       const long = Number(p.position.positionType) === 0;
       const size = num(p.position.lotLNS, ld), entry = num(p.position.pricePNS, pd), mark = num(p.mark || info.markPNS, pd);
-      return { symbol: p.symbol, side: long ? "long" : "short", size, entry, mark, pnl: (mark - entry) * size * (long ? 1 : -1), margin: p.position.depositCNS };
+      return { symbol: p.symbol, id: p.id, side: long ? "long" : "short", size, entry, mark, pnl: (mark - entry) * size * (long ? 1 : -1), margin: p.position.depositCNS };
     })
   );
 }

@@ -429,3 +429,53 @@ export async function unwrapWmon(client, governanceAddress, amountWhole) {
   await publicClient.waitForTransactionReceipt({ hash });
   return { hash };
 }
+/*//////////////////////////////////////////////////////////////
+    PRICES FOR CHARTS
+//////////////////////////////////////////////////////////////*/
+
+// From Spaces' DecisionMarketPair.sol: token0 is the base side, token1 the
+// quote side; price0CumulativeLast sums reserve1/reserve0 as UQ112x112 over
+// time, and finalizeProposal divides it by the time since createdAt.
+const PAIR_ABI = [
+  { type: "function", name: "token0", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
+  { type: "function", name: "token1", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
+  { type: "function", name: "getReserves", stateMutability: "view", inputs: [], outputs: [{ type: "uint112" }, { type: "uint112" }, { type: "uint32" }] },
+  { type: "function", name: "price0CumulativeLast", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
+];
+const DECIMALS_ABI = [{ type: "function", name: "decimals", stateMutability: "view", inputs: [], outputs: [{ type: "uint8" }] }];
+const Q112 = 2n ** 112n;
+
+/**
+ * Both markets' prices for a chart, in quote per base token:
+ * { pass: { spot, twap }, fail: { spot, twap }, thresholdBps, settled }.
+ * Before settlement `twap` is the average so far, computed as
+ * finalizeProposal will (the accumulator brought up to now, over the time
+ * since createdAt); after, the TWAPs the proposal was settled on. Null while
+ * the markets aren't open.
+ */
+export async function marketsSnapshot(governanceAddress, p) {
+  if (!p.passPool || p.passPool === zeroAddress) return null;
+  const gov = contractFor(governanceAddress);
+  const [config, block] = await Promise.all([publicClient.readContract({ ...gov, functionName: "config" }), publicClient.getBlock({ blockTag: "latest" })]);
+  const pool = async (address, settledTwap) => {
+    const read = (functionName) => publicClient.readContract({ address, abi: PAIR_ABI, functionName });
+    const [token0, token1, [r0, r1, last], cumulative] = await Promise.all([read("token0"), read("token1"), read("getReserves"), read("price0CumulativeLast")]);
+    const [d0, d1] = await Promise.all([token0, token1].map((t) => publicClient.readContract({ address: t, abi: DECIMALS_ABI, functionName: "decimals" }).catch(() => 18)));
+    // Raw quote-per-base units to whole tokens.
+    const unit = 10 ** (Number(d0) - Number(d1));
+    const spot = r0 > 0n ? (Number(r1) / Number(r0)) * unit : 0;
+    let twapQ;
+    if (p.finalized) twapQ = settledTwap;
+    else {
+      const now = block.timestamp;
+      const elapsed = now - BigInt(p.createdAt);
+      let since = (now % 2n ** 32n) - BigInt(last); // the pair keeps a 32-bit timestamp
+      if (since < 0n) since += 2n ** 32n;
+      const running = r0 > 0n && since > 0n ? cumulative + ((r1 * Q112) / r0) * since : cumulative;
+      twapQ = elapsed > 0n ? running / elapsed : 0n;
+    }
+    return { spot, twap: (Number(twapQ) / Number(Q112)) * unit };
+  };
+  const [pass, fail] = await Promise.all([pool(p.passPool, p.passTWAP), pool(p.failPool, p.failTWAP)]);
+  return { pass, fail, thresholdBps: Number(config.thresholdBps), settled: Boolean(p.finalized) };
+}

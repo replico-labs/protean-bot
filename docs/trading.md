@@ -35,9 +35,9 @@ One command for perpetuals on whichever exchange the chat's network has: **Perpl
 
 | Command | Who | What it does |
 |---|---|---|
-| `/desk` | anyone | the desk: its traders (numbered) and mandates, collateral, open positions with PnL (HyperCore: each labelled with its trader), pending appointments |
-| `/desk mine` | a trader | their own positions (Perpl: their desk; HyperCore: their markets), how much of `max` each uses, markets they hold nothing in, and the desk `total` used |
-| `/desk apply <markets\|all> max=<size> [total=<size>] [lev=2] [days=30]` | the would-be trader | proposes appointing themselves (a trader applying again proposes a new mandate for themselves), e.g. `/desk apply BTC,ETH max=500 total=800 lev=3 days=30` (max = the largest position in one market, total = all positions together, both in the collateral token) |
+| `/desk` | anyone | the desk: its traders (numbered) and mandates, collateral, open positions with PnL (HyperCore: each labelled with its trader), pending appointments; with a PnL card (an image of each position's PnL) |
+| `/desk mine` | a trader | their own positions (Perpl: their desk; HyperCore: their markets), how much of `max` each uses, markets they hold nothing in, the desk `total` used, and today's PnL against `loss`; with a PnL card of their own |
+| `/desk apply <markets\|all> max=<size> [total=<size>] [loss=<size>] [lev=2] [days=30]` | the would-be trader | proposes appointing themselves (a trader applying again proposes a new mandate for themselves), e.g. `/desk apply BTC,ETH max=500 total=800 loss=50 lev=3 days=30` (max = the largest position in one market, total = all positions together, loss = the most they may lose in a day; all in the collateral token) |
 | `/desk fund <amount> [for=<n>]` / `/desk withdraw <amount> [for=<n>]` | anyone | proposes moving collateral from the Treasury into a trader's desk, or back (Perpl; `for=` is needed once there are several desks. HyperCore has one account, so it's ignored) |
 | `/desk remove [n]` | anyone | proposes removing a trader (`n` is needed once there are several) |
 | `/desk long\|short <market> <size> at <limitPrice> [3x]` | the trader | opens or adds to a position, straight away |
@@ -51,15 +51,18 @@ One command for perpetuals on whichever exchange the chat's network has: **Perpl
 - **The new desk is picked up automatically.** When the proposal executes, the listener reads the desk's address from the receipt (the factory's `DelegatedAccountCreated` event, with this Treasury as owner and the trader as operator) and announces the trader. `/desk link <address>` links a desk by hand; it only accepts a Perpl-factory desk on this exchange owned by this Treasury.
 - **Funding, withdrawing and removing** are ordinary proposals (`perpl-desk-fund`, `-withdraw`, `-remove`). The bot checks every desk address it puts into a proposal against Perpl's beacon, this exchange, and this Treasury as owner.
 
-**The mandate** (markets, largest position, optional total, leverage, days) is written into the appointment proposal, so voters see what they agree to. Its clock starts when the proposal executes. On every trade the bot checks that:
+**The mandate** (markets, largest position, optional total, optional daily loss, leverage, days) is written into the appointment proposal, so voters see what they agree to. Its clock starts when the proposal executes. On every trade the bot checks that:
 - the trader is still the operator on-chain (HyperCore: their agent is still approved)
 - the desk isn't paused, and the mandate hasn't ended (closing stays allowed either way)
 - the market is in the mandate
 - the leverage is within it
 - the whole position, at the limit price, is within `max`
 - with `total`, all positions together are within it: cross margin means a loss in one market eats every market's collateral
+- with `loss`, the trader hasn't lost that much today (UTC): what the bot's own closes realized today, plus the change in their open positions' PnL since the bot first looked today. Past it, they can only close until 00:00 UTC. The bot counts this itself: a Perpl close counts at the trader's limit price (the worst it could fill at), a HyperCore close at its fill price, and liquidations and funding payments aren't seen. It's a stand-in for an on-chain drawdown limit, not one.
 
 Orders are immediate-or-cancel at the limit price, signed by the trader's own wallet. Every trade is posted in the chat with what filled.
+
+**Notices in the chat.** The listener posts when a trader is appointed (the proposal executed and the trader is the operator on-chain, or on HyperCore their agent is listed) and when one is removed, each with **📈 Desk** and **👤 My trading** buttons; `desk pause` and `resume` reply with the same buttons. Pending appointments are rechecked every minute, a desk with none every ten.
 
 **What is enforced where:**
 - **The mandate is enforced by the bot,** not by Perpl's contract, which has no such limits. It holds because the trader's key stays in the bot's KMS wallet store and is never handed out, so every trade goes through these checks.
@@ -77,9 +80,9 @@ Hyperliquid has no trade-only account a contract can own, and its API wallets ("
 - **The bot holds the agent key.** `desk apply` makes a fresh agent key for the appointment, stored encrypted with KMS like a member's wallet (platform `hl-agent`). The appointment proposal has the Treasury approve that agent through CoreWriter (`hypercore-approve-agent`, action 9), with the mandate in its description. Each trader's agent has a name of its own (`protean-desk-1`, `-2`, ...); a trader applying again keeps theirs.
 - **The trader trades from the chat,** and the bot signs each order with the agent key only after the mandate checks above. Orders are immediate-or-cancel at the trader's limit price; leverage is set per order (cross margin), which an agent can do and a contract can't.
 - **Replacing, removing, resigning.** Approving a new agent under the same name replaces the old one on HyperCore, so a trader's new appointment revokes their previous agent. `desk remove <n>` proposes approving a throwaway address under that trader's agent name. In both cases the bot destroys the old key once the proposal executes. `desk resign` destroys the key straight away.
-- **What a breach could cost:** if the bot's keys leaked, or `agentSendAsset` turns out to let an agent move funds, what's exposed is what the Treasury holds on HyperCore, not the Treasury on HyperEVM, which HyperCore can't reach. Keep on HyperCore only what the desk (and `/perps`) need. `HL_TESTNET_KEY=0x... node scripts/hl-agent-check.mjs` checks on Hyperliquid testnet whether an agent can move its principal's funds, and whether replacing it stops it.
+- **What a breach could cost:** if the bot's keys leaked, or `agentSendAsset` turns out to let an agent move funds, what's exposed is what the Treasury holds on HyperCore, not the Treasury on HyperEVM, which HyperCore can't reach. Keep on HyperCore only what the desk (and `/perps`) need. `HL_TESTNET_KEY=0x... node scripts/hl-agent-check.mjs` checks on Hyperliquid testnet whether an agent can move its principal's funds; whether it can trade, or move funds out of, the principal's sub-accounts; whether approving a new agent under the same name (what the bot does to replace or remove a trader) cuts the old one off; and whether revoking with the zero address stops it. It hasn't been run yet.
 - **Hyperliquid limits how many named agents an account can have.** An appointment past that limit would execute on HyperEVM but not take effect on HyperCore; `/desk` then keeps showing it as proposed. The exact limit isn't checked here.
-- **Not live-tested yet:** the CoreWriter encoding is from hyper-evm-lib (`CoreWriterLib.addApiWallet`), and orders are signed by Hyperliquid's own SDK (`@nktkas/hyperliquid`), but no desk has run against Hyperliquid itself. `scripts/test-hypercore-desk.mjs` runs the whole flow on a local chain against a stand-in Hyperliquid API.
+- **Not live-tested yet:** the CoreWriter encoding is from hyper-evm-lib (`CoreWriterLib.addApiWallet`), and orders are signed by Hyperliquid's own SDK (`@nktkas/hyperliquid`), but no desk has run against Hyperliquid itself. `scripts/test-hypercore-desk.mjs` runs the whole flow on a local chain against a stand-in Hyperliquid API; `scripts/test-perpl-desk.mjs` does the same for Perpl against stand-in Perpl contracts.
 
 Phoenix (Solana) desks aren't built yet.
 

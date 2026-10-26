@@ -65,6 +65,10 @@ const rows = new Map();
 const keyOf = (p, u) => `${p}:${u}`;
 mock.module(new URL("../src/walletStore.js", import.meta.url).href, {
   namedExports: {
+    // The trading desk's agent keys (deskHypercore.js); unused here.
+    createAgentKey: async () => null,
+    getAgentAccount: async () => null,
+    deleteAgentKey: async () => {},
     isWalletStoreConfigured: () => true,
     // The EVM side's, loaded alongside but never used here.
     createWalletRecord: async () => null,

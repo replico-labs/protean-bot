@@ -101,6 +101,7 @@ node scripts/test-evm-models.mjs --network monad-testnet   # every EVM model's l
 node --env-file=local.env scripts/test-evm-switch.mjs       # model switching, on anvil
 node --experimental-test-module-mocks --env-file=local.env scripts/test-evm-buttons.mjs   # Sowellian and Decision Markets buttons, on anvil
 node --experimental-test-module-mocks --env-file=.env.local-hyperevm scripts/test-hypercore-desk.mjs   # the HyperCore trading desk, on anvil as HyperEVM
+node --experimental-test-module-mocks --env-file=.env.local-evm scripts/test-perpl-desk.mjs           # the Perpl trading desk, on anvil as Monad with stand-in Perpl contracts
 node --experimental-test-module-mocks --test scripts/test-solana-local.mjs   # Solana, on a local validator
 node --experimental-test-module-mocks --test scripts/test-slack.mjs        # Slack replies, buttons, charts and links; no chain needed
 ```

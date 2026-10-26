@@ -770,6 +770,12 @@ export function poolPrice(pool, baseDecimals, quoteDecimals) {
   return base === 0 ? 0 : quote / base;
 }
 
+/** A pool's price as the program keeps it: quote per base in raw units, ×1e12 (decision-markets PRICE_SCALE). */
+export function rawPrice(pool) {
+  const base = big(pool.base);
+  return base === 0n ? 0n : (big(pool.quote) * 1_000_000_000_000n) / base;
+}
+
 /** A TWAP (quote per base in raw units, ×1e12) as quote per whole token, for display. */
 export function twapPrice(twap, baseDecimals, quoteDecimals) {
   return (Number(big(twap)) / 1e12) * 10 ** (baseDecimals - quoteDecimals);

@@ -45,15 +45,26 @@ export async function chartShape(network, model, id, p, g, now) {
         approvalForVotes: to18(p.approval.forVotes, decimals),
         approvalAgainstVotes: to18(p.approval.againstVotes, decimals),
         approvalAbstainVotes: to18(p.approval.abstainVotes, decimals),
+        yesPool: to18(p.yesPool, decimals),
+        noPool: to18(p.noPool, decimals),
         adjudicateSuccessVotes: to18(p.successVotes, decimals),
         adjudicateFailureVotes: to18(p.failureVotes, decimals),
       };
     case "decisionMarkets": {
       const quote = (await v.mintInfo(network, g.quoteMint)).decimals;
-      // Once settled, the averages that decided it; before, the pools' prices.
       const settled = p.finalized && !p.cancelled;
-      const price = (pool, twap) => (settled ? v.twapPrice(twap, decimals, quote) : v.poolPrice(pool, decimals, quote));
-      return { id, passTWAP: price(p.passPool, p.passTwap), failTWAP: price(p.failPool, p.failTwap) };
+      // Before settlement, the average so far as the program's finalize will
+      // compute it: the accumulators brought up to now (at most the deadline),
+      // over the time since the markets opened.
+      const until = Math.min(now, Number(p.tradingDeadline));
+      const elapsed = Math.max(1, until - Number(p.createdAt));
+      const dt = BigInt(Math.max(0, until - Number(p.lastUpdate)));
+      const running = (cumulative, pool) => (big(cumulative) + v.rawPrice(pool) * dt) / BigInt(elapsed);
+      const side = (pool, cumulative, twap) => ({ spot: v.poolPrice(pool, decimals, quote), twap: v.twapPrice(settled ? twap : running(cumulative, pool), decimals, quote) });
+      return {
+        id,
+        markets: { pass: side(p.passPool, p.passCumulative, p.passTwap), fail: side(p.failPool, p.failCumulative, p.failTwap), thresholdBps: Number(g.config.thresholdBps), settled },
+      };
     }
     case "conviction":
       return { id, currentConviction: to18(v.convictionAt(p, g.config.growthRate, now), decimals), requiredConviction: to18(p.requiredConviction, decimals) };
