@@ -99,7 +99,7 @@ async function signerOf({ action, nonce, signature, vaultAddress, expiresAfter }
 async function answer(path, body) {
   if (path === "/info") {
     if (body.type === "meta") return { universe: MARKETS };
-    if (body.type === "extraAgents") return (core.agents.get(getAddress(body.user)) ?? []).map((a) => ({ ...a, validUntil: null }));
+    if (body.type === "extraAgents") return (core.agents.get(getAddress(body.user)) ?? []).map((a) => ({ validUntil: null, ...a }));
     if (body.type === "clearinghouseState") {
       const assetPositions = [...core.positions].map(([coin, p]) => ({
         type: "oneWay",
@@ -161,7 +161,7 @@ const { publicClient, walletClient } = await import("../src/config.js");
 const { stakeTokens, walletClientFor } = await import("../src/governance/common.js");
 const { getAdapter } = await import("../src/governance/index.js");
 const { createDaoOnChain } = await import("../src/contracts.js");
-const { registerChat, getChatDesk } = await import("../src/db.js");
+const { registerChat, getChatDesk, updateChatDesk } = await import("../src/db.js");
 const { runCommand } = await import("../src/platforms/commands.js");
 const { splitArgs } = await import("../src/args.js");
 const { parseMandate, mandateText } = await import("../src/desk.js");
@@ -237,8 +237,11 @@ async function main() {
   const C = await member("C"); // a second trader, later
   await mine(2);
 
-  /** Votes a proposal through and executes it; then HyperCore applies the Treasury's CoreWriter actions. Returns those actions. */
-  async function pass(id) {
+  /**
+   * Votes a proposal through and executes it; then HyperCore applies the Treasury's CoreWriter actions
+   * (unless `refuse`, as when a removal is still pending; `validUntil` sets the agents' expiry). Returns those actions.
+   */
+  async function pass(id, { refuse = false, validUntil } = {}) {
     // Voting windows and the timelock are counted in blocks.
     // The bot's reads use a block number viem caches for a few seconds: let it see new blocks before going on.
     const settle = () => new Promise((r) => setTimeout(r, 5000));
@@ -263,11 +266,11 @@ async function main() {
     const { hash } = await adapter.execute(A.client, dao.governance, id);
     const receipt = await publicClient.getTransactionReceipt({ hash });
     const actions = parseEventLogs({ abi: RAW_ACTION, logs: receipt.logs }).filter((l) => getAddress(l.address) === getAddress(CORE_WRITER) && getAddress(l.args.user) === getAddress(dao.treasury)).map((l) => l.args.data);
-    for (const data of actions) {
+    for (const data of refuse ? [] : actions) {
       if (hexToNumber(slice(data, 0, 1)) !== 1 || hexToNumber(slice(data, 1, 4)) !== 9) continue;
       const [agent, name] = decodeAbiParameters([{ type: "address" }, { type: "string" }], slice(data, 4));
       const list = (core.agents.get(getAddress(dao.treasury)) ?? []).filter((a) => a.name !== name);
-      core.agents.set(getAddress(dao.treasury), [...list, { address: getAddress(agent), name }]);
+      core.agents.set(getAddress(dao.treasury), [...list, { address: getAddress(agent), name, ...(validUntil ? { validUntil } : {}) }]);
     }
     return actions;
   }
@@ -402,6 +405,37 @@ async function main() {
 
   r = await run("A", "desk resign");
   check(/destroyed your agent key/.test(r.text) && !agentKeys.has(second.agentKey), "resigning destroys the key at once", r.text);
+
+  console.log("What HyperCore decides: agent expiry, and a refused approval…");
+  r = await run("B", "desk apply BTC max=100 days=120");
+  const bId = idIn(r.text);
+  check(/about 90 days/.test(r.text), "a mandate over 90 days is told HyperCore's agent expiry may end it sooner", r.text);
+  const soon = Date.now() + 2 * 86_400_000;
+  await pass(bId, { validUntil: soon });
+  r = await run("B", "desk");
+  const bLine = r.text.split("\n").find((l) => /^\d+\. /.test(l) && l.includes(B.account.address)) ?? "";
+  check(bLine.includes(`until ${new Date(soon).toISOString().slice(0, 10)} (when its HyperCore agent expires)`), "/desk shows B's mandate ending when the agent expires, not after 120 days", r.text);
+  r = await run("B", "desk mine");
+  check(/Your HyperCore agent expires on/.test(r.text), "desk mine says so too", r.text);
+  r = await run("B", "desk long BTC 0.001 at 50000");
+  check(/Filled 0.001 BTC/.test(r.text), "B trades before the expiry", r.text);
+  const bAgent = (core.agents.get(getAddress(dao.treasury)) ?? []).find((a) => a.validUntil === soon);
+  bAgent.validUntil = Date.now() - 1000; // HyperCore reports the agent expired
+  r = await run("B", "desk long BTC 0.001 at 50000");
+  check(/Your HyperCore agent expired on/.test(r.text), "after it expires the bot refuses, saying why", r.text);
+
+  r = await run("C", "desk apply ETH max=100");
+  const refused = idIn(r.text);
+  const cAgain = getChatDesk(CHAT, "slack")?.pending?.[refused];
+  await pass(refused, { refuse: true });
+  r = await run("C", "desk");
+  check(new RegExp(`proposal #${refused}\\) .*executed, waiting for HyperCore`).test(r.text), "an executed appointment HyperCore hasn't listed shows as waiting", r.text);
+  updateChatDesk(CHAT, (cur) => ({ ...cur, pending: { ...cur.pending, [refused]: { ...cur.pending[refused], executedSeenAt: Date.now() - 11 * 60_000 } } }), "slack");
+  r = await run("C", "desk");
+  check(r.text.includes(`Proposal #${refused} executed, but HyperCore didn't approve`) && !getChatDesk(CHAT, "slack")?.pending?.[refused], "after 10 minutes the bot drops it and tells the chat to propose it again", r.text);
+  check(!agentKeys.has(cAgain.agentKey), "and destroys the unused agent key");
+  r = await run("C", "desk long ETH 0.01 at 3000");
+  check(/Only the desk's appointed traders/.test(r.text), "C doesn't trade", r.text);
 
   r = await run("B", "desk withdraw 100");
   check(/hypercore-usd-transfer/.test(r.text) && /perp to spot/.test(r.text), "desk withdraw proposes moving USDC out of the perps balance", r.text);

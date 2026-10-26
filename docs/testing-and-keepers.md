@@ -72,7 +72,9 @@ HyperCore is stood in for twice. On the chain, a CoreWriter stand-in logs each r
 - `desk mine` shows a trader only their own positions, with how much of `max` and `total` they use, and `/desk` labels each position with its trader; both come with a PnL card;
 - with a second trader: an application for a market another trader has is refused, each trader signs with their own agent and can't open or close the other's markets, and `remove <n>` revokes just that one;
 - the listener's desk check posts the new trader, with the Desk and My trading buttons;
-- `loss=5`: once the trader is 10 down for the day, new positions are refused, closing still works, and the realized loss keeps counting after the close.
+- `loss=5`: once the trader is 10 down for the day, new positions are refused, closing still works, and the realized loss keeps counting after the close;
+- HyperCore's agent expiry: a 120-day mandate whose agent expires in 2 days ends then (shown in `/desk` and `/desk mine`), and trading stops once it has expired;
+- an appointment HyperCore refuses: it shows as waiting, then after 10 minutes is dropped with a notice and its key destroyed.
 
 ### Perpl
 

@@ -50,13 +50,15 @@ const asPrincipal = new ExchangeClient({ transport, wallet: principal, signature
 const asAgent = new ExchangeClient({ transport, wallet: agent, signatureChainId });
 const asReplacement = new ExchangeClient({ transport, wallet: replacement, signatureChainId });
 
+let lastRefusal = "";
 async function attempt(label, fn) {
   try {
     const res = await fn();
     console.log(`  ${label}: SUCCEEDED ${JSON.stringify(res).slice(0, 300)}`);
     return true;
   } catch (err) {
-    console.log(`  ${label}: refused - ${String(err.message ?? err).slice(0, 300)}`);
+    lastRefusal = String(err.message ?? err);
+    console.log(`  ${label}: refused - ${lastRefusal.slice(0, 300)}`);
     return false;
   }
 }
@@ -150,9 +152,18 @@ const newTrades = await attempt("order by the replacement", async () => {
 if (newOid) await attempt("cancel", () => asReplacement.cancel({ cancels: [{ a: btc, o: newOid }] }));
 
 console.log("\n5. Principal revokes the name (zero address, same name)");
-await attempt("approveAgent(0x0)", () => asPrincipal.approveAgent({ agentAddress: "0x0000000000000000000000000000000000000000", agentName: NAME }));
+const revoked = await attempt("approveAgent(0x0)", () => asPrincipal.approveAgent({ agentAddress: "0x0000000000000000000000000000000000000000", agentName: NAME }));
+// HyperCore refuses another agent change while step 4's replacement is still being processed.
+const revokeBlocked = !revoked && /pending agent removal/i.test(lastRefusal);
 console.log(`  userRole(replacement): ${JSON.stringify(await info.userRole({ user: replacement.address }))}`);
-const stillTrades = await attempt("order by the replacement after revoking", () => asReplacement.order(farOrder));
+let leftOid;
+const stillTrades = await attempt("order by the replacement after revoking", async () => {
+  const r = await asReplacement.order(farOrder);
+  leftOid = restingOid(r);
+  return r;
+});
+// Never leave the test's order resting.
+if (leftOid) await attempt("cancel (principal)", () => asPrincipal.cancel({ cancels: [{ a: btc, o: leftOid }] }));
 
 console.log("\nVerdict:");
 console.log(moved.some(Boolean) ? "  ✗ An API wallet CAN move the principal's funds - a HyperCore desk can't promise the trader never withdraws." : "  ✓ The API wallet couldn't move funds by any of the three routes.");
@@ -162,4 +173,7 @@ if (sub) {
 }
 console.log(oldStillTrades ? "  ✗ Approving a new API wallet under the same name did NOT cut off the old one - the bot's replace/remove doesn't work." : "  ✓ Approving a new API wallet under the same name cuts off the old one.");
 console.log(newTrades ? "  ✓ The replacement trades." : "  ✗ The replacement couldn't trade.");
-console.log(stillTrades ? "  ✗ Revoking with the zero address did NOT stop the API wallet." : "  ✓ Revoking with the zero address stops the API wallet.");
+if (revokeBlocked) console.log("  • Not tested: HyperCore refused the zero-address revoke while step 4's replacement was still pending (one agent change at a time). Run the script again later to test it on its own.");
+else if (!revoked) console.log("  • Not tested: the zero-address revoke was refused (see step 5).");
+else console.log(stillTrades ? "  ✗ Revoking with the zero address did NOT stop the API wallet." : "  ✓ Revoking with the zero address stops the API wallet.");
+console.log("  • HyperCore gives each agent an expiry: see validUntil in extraAgents above.");

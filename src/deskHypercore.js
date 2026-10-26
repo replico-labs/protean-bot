@@ -38,11 +38,19 @@ import { DeskError, parseMandate, mandateText, checkOpen, covers, isTrader, pick
  *   trader can only open or close in their own markets. `total` counts the
  *   whole desk's positions, since they share one cross margin.
  *
- * What a breach could cost: Hyperliquid agents may be able to move their
- * principal's funds (scripts/hl-agent-check.mjs checks), so if the bot's
- * keys leaked, what's at risk is what the Treasury holds on HyperCore - not
- * the Treasury on HyperEVM, which HyperCore can't reach. Keep only what the
- * desk needs on HyperCore.
+ * What a breach could cost: on Hyperliquid testnet (scripts/hl-agent-check.mjs)
+ * an agent couldn't send its principal's funds to anyone else (only within
+ * the account and its sub-accounts) or withdraw them, so leaked keys could
+ * trade the desk badly but not take it. Even so, keep only what the desk
+ * needs on HyperCore: the Treasury on HyperEVM is out of HyperCore's reach.
+ *
+ * What HyperCore decides, which the bot follows:
+ * - Each agent has an expiry (validUntil; about 90 days after approval on
+ *   testnet). A mandate ends then if that comes first (endsAt).
+ * - It refuses an agent change while another is still being processed
+ *   ("pending agent removal"), and CoreWriter actions fail silently. An
+ *   executed appointment whose agent still isn't listed after
+ *   UNAPPLIED_AFTER_MS is dropped, and the chat is told to propose it again.
  *
  * Record per chat (db.js getChatDesk): { venue: "hypercore", traders:
  * { [agentKey]: trader }, pending: { [proposalId]: appointment or removal },
@@ -54,6 +62,8 @@ export const VENUE_NETWORKS = new Set(["hyperevm", "hyperevm-testnet"]);
 export const AGENT_NAME = "protean-desk";
 const CLOSED = new Set(["Defeated", "Cancelled", "Expired", "Rejected", "Failed"]);
 const COLLATERAL = "USDC";
+// HyperCore applies a CoreWriter action just after the EVM block; one it refused is never listed.
+const UNAPPLIED_AFTER_MS = 10 * 60_000;
 
 export const isHypercoreNetwork = (network = currentNetwork()) => VENUE_NETWORKS.has(network.id);
 
@@ -106,8 +116,28 @@ const unrealizedOf = (t, open) => open.filter((p) => covers(t.mandate, p.coin)).
 /** The agents the Treasury's HyperCore account has approved: [{ address, name, validUntil }]. */
 const agentsOf = (ctx) => deskVenue.info(ctx, { type: "extraAgents", user: ctx.treasury });
 
-const listed = (agents, agent, name) => agents.some((a) => a.name === name && getAddress(a.address) === getAddress(agent));
-const isApproved = async (ctx, agent, name) => listed(await agentsOf(ctx), agent, name);
+const entryOf = (agents, agent, name) => agents.find((a) => a.name === name && getAddress(a.address) === getAddress(agent));
+const listed = (agents, agent, name) => Boolean(entryOf(agents, agent, name));
+
+/** When a trader's mandate ends: its own days, or its HyperCore agent's expiry if that's sooner. */
+const endsAt = (t) => Math.min(t.expiresAt, t.agentUntil ?? Infinity);
+const agentEndsFirst = (t) => t.agentUntil !== undefined && t.agentUntil !== null && t.agentUntil < t.expiresAt;
+/** `t` as the mandate checks (deskMandate.js) see it: ending at endsAt. */
+const asChecked = (t) => ({ ...t, expiresAt: endsAt(t) });
+const dateOf = (ms) => new Date(ms).toISOString().slice(0, 10);
+
+/** Saves each listed trader's agent expiry (validUntil) when HyperCore reports a new one. */
+function noteAgentExpiry(chat, desk, agents) {
+  const changed = tradersOf(desk)
+    .map((t) => [t.agentKey, entryOf(agents, t.agent, t.agentName)?.validUntil])
+    .filter(([key, until]) => until !== undefined && until !== desk.traders[key].agentUntil);
+  if (!changed.length) return;
+  updateDesk(chat, (cur) => {
+    for (const [key, until] of changed) if (cur.traders[key]) cur.traders[key].agentUntil = until;
+    return cur;
+  });
+  for (const [key, until] of changed) desk.traders[key].agentUntil = until;
+}
 
 /** Another trader's mandate that shares a market with `mandate`, or null: on one account a market has one position. */
 function overlap(mandate, others) {
@@ -163,11 +193,32 @@ export async function refreshDesk(chat) {
       if (t) news.push(`📉 \`${t.address}\` is no longer one of the desk's traders (proposal #${id}).`);
       continue;
     }
-    if (!listed(agents, a.agent, a.agentName)) continue; // HyperCore hasn't applied it yet, or rejected it: /desk shows it as waiting
-    updates[id] = { drop: true, activate: { ...a, since: Date.now(), expiresAt: Date.now() + a.mandate.days * 86_400_000 } };
-    news.push(`📈 \`${a.address}\` now trades the desk: ${mandateText(a.mandate, COLLATERAL)}.`);
+    const entry = entryOf(agents, a.agent, a.agentName);
+    if (!entry) {
+      // Not applied yet (/desk shows it as waiting), or refused - HyperCore doesn't say which.
+      if (a.kind !== "appoint") continue;
+      if (!a.executedSeenAt) updates[id] = { seen: Date.now() };
+      else if (Date.now() - a.executedSeenAt > UNAPPLIED_AFTER_MS) {
+        updates[id] = { drop: true };
+        await forget(a.agentKey);
+        news.push(
+          `⚠️ Proposal #${id} executed, but HyperCore didn't approve \`${a.address}\`'s agent, so nothing changed. HyperCore refuses an agent change while another is still being processed, or when the account has too many agents. \`${a.address}\` can apply again (\`desk apply\`) for a new proposal.`
+        );
+      }
+      continue;
+    }
+    const trader = { ...a, since: Date.now(), expiresAt: Date.now() + a.mandate.days * 86_400_000, agentUntil: entry.validUntil ?? null };
+    updates[id] = { drop: true, activate: trader };
+    news.push(`📈 \`${a.address}\` now trades the desk: ${mandateText(a.mandate, COLLATERAL)}${agentEndsFirst(trader) ? `. Its HyperCore agent expires on ${dateOf(trader.agentUntil)}, so the mandate ends then` : ""}.`);
   }
   if (!Object.keys(updates).length) return news;
+  if (Object.values(updates).every((u) => u.seen)) {
+    updateDesk(chat, (next) => {
+      for (const [id, u] of Object.entries(updates)) if (next.pending[id]) next.pending[id].executedSeenAt = u.seen;
+      return next;
+    });
+    return news;
+  }
   // A replaced or removed trader's agent is gone on HyperCore, so their key can never trade again: destroy it.
   const gone = new Set();
   for (const u of Object.values(updates)) {
@@ -177,6 +228,10 @@ export async function refreshDesk(chat) {
   for (const key of gone) await forget(key);
   updateDesk(chat, (next) => {
     for (const [id, u] of Object.entries(updates)) {
+      if (u.seen) {
+        if (next.pending[id]) next.pending[id].executedSeenAt = u.seen;
+        continue;
+      }
       delete next.pending[id];
       if (u.activate) {
         for (const [key, t] of Object.entries(next.traders)) if (t.agentName === u.activate.agentName) delete next.traders[key];
@@ -223,11 +278,17 @@ export async function applyForDesk(chat, account, words) {
     return {
       actionId: "hypercore-approve-agent",
       words: [agent, agentName, ...description.split(" ")],
-      note: mine
-        ? "Once it executes, this mandate replaces your current one (and its agent)."
-        : tradersOf(desk).length
-          ? `Once it executes, they trade alongside the desk's ${tradersOf(desk).length} other trader${tradersOf(desk).length === 1 ? "" : "s"}.`
-          : "Once it executes, fund the desk with a `desk fund` proposal if the Treasury has no USDC on HyperCore yet.",
+      note: [
+        mine
+          ? "Once it executes, this mandate replaces your current one (and its agent)."
+          : tradersOf(desk).length
+            ? `Once it executes, they trade alongside the desk's ${tradersOf(desk).length} other trader${tradersOf(desk).length === 1 ? "" : "s"}.`
+            : "Once it executes, fund the desk with a `desk fund` proposal if the Treasury has no USDC on HyperCore yet.",
+        // HyperCore, not the vote, sets when the agent expires.
+        mandate.days > 90 ? "HyperCore gives each agent an expiry date (about 90 days after approval on testnet); if that comes before the mandate's last day, the mandate ends then. `desk` shows the date once the agent is approved." : "",
+      ]
+        .filter(Boolean)
+        .join(" "),
       record: (proposalId) =>
         updateDesk(chat, (cur) => ({
           ...cur,
@@ -301,16 +362,19 @@ export async function deskStatus(chat, cmd) {
     const lines = [...news, ...(news.length ? [""] : []), "*Trading desk* (HyperCore)", `Account: the Treasury's HyperCore account \`${ctx.treasury}\``];
     if (desk.paused) lines.push(`⏸️ Paused${desk.paused.by ? ` by ${desk.paused.by}` : ""}: no new positions until \`${cmd("desk")} resume\`.`);
     const agents = await agentsOf(ctx).catch(() => null);
+    if (agents) noteAgentExpiry(chat, desk, agents);
     const traders = tradersOf(desk);
     if (!traders.length) lines.push(`Traders: none. A would-be trader starts with \`${cmd("desk")} apply <markets> max=<size>\`.`);
     traders.forEach((t, i) => {
-      const expired = Date.now() > t.expiresAt;
+      const expired = Date.now() > endsAt(t);
       const lost = agents && !listed(agents, t.agent, t.agentName) ? " - ⚠️ its agent is no longer approved on HyperCore" : "";
-      lines.push(`${i + 1}. \`${t.address}\` - ${mandateText(t.mandate, COLLATERAL)}${expired ? " - ⏰ mandate ended" : `, until ${new Date(t.expiresAt).toISOString().slice(0, 10)}`}${lost}`);
+      const why = agentEndsFirst(t) ? " (when its HyperCore agent expires)" : "";
+      lines.push(`${i + 1}. \`${t.address}\` - ${mandateText(t.mandate, COLLATERAL)}${expired ? ` - ⏰ mandate ended${why}` : `, until ${dateOf(endsAt(t))}${why}`}${lost}`);
     });
     for (const [id, a] of Object.entries(desk.pending)) {
       const t = a.kind === "remove" ? desk.traders[a.agentKey] : null;
-      lines.push(a.kind === "remove" ? `Proposed: remove \`${t?.address ?? "a trader"}\` (proposal #${id})` : `Proposed: \`${a.address}\` (proposal #${id}) - ${mandateText(a.mandate, COLLATERAL)}`);
+      const waiting = a.executedSeenAt ? " - executed, waiting for HyperCore to approve the agent" : "";
+      lines.push(a.kind === "remove" ? `Proposed: remove \`${t?.address ?? "a trader"}\` (proposal #${id})` : `Proposed: \`${a.address}\` (proposal #${id}) - ${mandateText(a.mandate, COLLATERAL)}${waiting}`);
     }
     const state = await deskVenue.info(ctx, { type: "clearinghouseState", user: ctx.treasury });
     lines.push(`Collateral: ${fmt(Number(state.marginSummary.accountValue), 2)} USDC on HyperCore perps (withdrawable ${fmt(Number(state.withdrawable), 2)})`);
@@ -339,6 +403,8 @@ export async function deskMine(chat, client, cmd) {
     const traders = tradersOf(desk);
     const n = traders.findIndex((x) => isTrader(x, chat, client.account.address));
     if (n < 0) throw new DeskError(`You aren't one of the desk's traders - \`${cmd("desk")}\` shows who is.`);
+    const agents = await agentsOf(ctx);
+    noteAgentExpiry(chat, desk, agents);
     const t = traders[n];
     const state = await deskVenue.info(ctx, { type: "clearinghouseState", user: ctx.treasury });
     const open = positionsOf(state);
@@ -351,8 +417,9 @@ export async function deskMine(chat, client, cmd) {
     const deskNotional = open.reduce((sum, p) => sum + Math.abs(Number(p.positionValue)), 0);
     const { day, pnl } = dayOf(t, unrealizedOf(t, open));
     if (day !== t.day) saveDay(chat, t.agentKey, day);
-    const lines = mineLines(desk, t, { venue: "HyperCore", n: traders.length > 1 ? n + 1 : null, positions, deskNotional, symbol: COLLATERAL, cmd, dayPnl: pnl });
-    if (!(await isApproved(ctx, t.agent, t.agentName))) lines.push("⚠️ Your agent is no longer approved on HyperCore, so you can't trade.");
+    const lines = mineLines(desk, asChecked(t), { venue: "HyperCore", n: traders.length > 1 ? n + 1 : null, positions, deskNotional, symbol: COLLATERAL, cmd, dayPnl: pnl });
+    if (agentEndsFirst(t)) lines.splice(2, 0, `Your HyperCore agent expires on ${dateOf(t.agentUntil)}, before the mandate's own last day, so the mandate ends then.`);
+    if (!listed(agents, t.agent, t.agentName)) lines.push("⚠️ Your agent is no longer approved on HyperCore, so you can't trade.");
     const image = deskCardImage({ title: "Your trading", subtitle: `HyperCore · ${t.address.slice(0, 6)}…${t.address.slice(-4)}`, positions, symbol: COLLATERAL, mandate: t.mandate, deskNotional, collateral: `${fmt(Number(state.marginSummary.accountValue), 2)} USDC on the shared account` });
     return { text: lines.join("\n"), image };
   });
@@ -378,7 +445,11 @@ export async function trade(chat, client, words) {
     const me = getAddress(client.account.address);
     const t = tradersOf(desk).find((x) => isTrader(x, chat, me));
     if (!t) throw new DeskError("Only the desk's appointed traders can trade.");
-    if (!(await isApproved(ctx, t.agent, t.agentName))) throw new DeskError("The Treasury's HyperCore account no longer approves your agent - you've been removed or replaced.");
+    const agents = await agentsOf(ctx);
+    noteAgentExpiry(chat, desk, agents);
+    // An expired agent may drop off HyperCore's list, so say it expired rather than that it was removed.
+    if (agentEndsFirst(t) && Date.now() > t.agentUntil) throw new DeskError(`Your HyperCore agent expired on ${dateOf(t.agentUntil)}, so your mandate has ended - the DAO needs to appoint you again (a new agent) for you to trade. Closing needs the agent too, so until then the DAO can close positions by proposal (\`perps close\`).`);
+    if (!listed(agents, t.agent, t.agentName)) throw new DeskError("The Treasury's HyperCore account no longer approves your agent - you've been removed or replaced.");
     const request = parsePerps(words);
     if (request.kind !== "open" && request.kind !== "close") throw new DeskError("Use `desk long|short <market> <size> at <price> [3x]` or `desk close <market> <size|all> at <price>`.");
 
@@ -408,7 +479,7 @@ export async function trade(chat, client, words) {
       // This market's position after the order at the limit price; other markets (every trader's: one cross margin) at their current value.
       const notional = (Math.abs(held) + Number(size)) * Number(price);
       const others = open.filter((p) => p.coin !== m.coin).reduce((sum, p) => sum + Math.abs(Number(p.positionValue)), 0);
-      checkOpen(desk, t, { market: m.coin.toUpperCase(), leverage: lev, notional, othersNotional: others, symbol: COLLATERAL, dayPnl: today.pnl });
+      checkOpen(desk, asChecked(t), { market: m.coin.toUpperCase(), leverage: lev, notional, othersNotional: others, symbol: COLLATERAL, dayPnl: today.pnl });
       leverage = Number(lev);
       order = { a: m.index, b: isBuy, p: price, s: size, r: false, t: { limit: { tif: "Ioc" } } };
       what = `${request.side} ${size} ${m.coin} at ${price} or better, ${lev}x`;
