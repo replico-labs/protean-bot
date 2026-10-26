@@ -31,7 +31,8 @@
 import { ExchangeClient, HttpTransport, InfoClient } from "@nktkas/hyperliquid";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 
-const key = process.env.HL_TESTNET_KEY;
+// Wallets often export the key without its 0x.
+const key = process.env.HL_TESTNET_KEY && (process.env.HL_TESTNET_KEY.startsWith("0x") ? process.env.HL_TESTNET_KEY : `0x${process.env.HL_TESTNET_KEY}`);
 if (!key) {
   console.error("Set HL_TESTNET_KEY to a throwaway Hyperliquid TESTNET wallet's private key (with a few testnet USDC).");
   process.exit(1);
