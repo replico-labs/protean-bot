@@ -15,11 +15,17 @@
   "dependencies": {
     "@aws-sdk/client-kms": "^3.1131.0",
     "@coral-xyz/anchor": "0.32.1",
+    "@ellipsis-labs/rise": "0.6.2",
     "@flaunch/sdk": "0.17.1",
     "@grammyjs/runner": "^2.0.3",
+    "@jup-ag/lend": "0.4.0",
+    "@marinade.finance/marinade-ts-sdk": "6.1.0",
     "@nktkas/hyperliquid": "^0.33.3",
+    "@pump-fun/pump-sdk": "4.0.0",
     "@resvg/resvg-js": "^2.6.2",
     "@slack/bolt": "^5.1.0",
+    "@solana/kit": "8.5.0",
+    "@solana/spl-stake-pool": "1.1.8",
     "@solana/spl-token": "0.4.14",
     "@solana/web3.js": "1.98.4",
     "@supabase/supabase-js": "^2.116.0",
@@ -31,5 +37,8 @@
     "pino": "^9.14.0",
     "qrcode": "^1.5.4",
     "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "litesvm": "1.6.0"
   }
 }

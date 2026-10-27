@@ -29,6 +29,7 @@ const { AnchorProvider, Program, BN } = anchor;
 export { BN };
 import { IDLS, GOV_ERRORS, getSolanaOperator, explorerUrl } from "./config.js";
 import { trackTx } from "../txLinks.js";
+import { legacySize, sendV1, LEGACY_TRANSACTION_SIZE_LIMIT, V1_TRANSACTION_SIZE_LIMIT } from "./v1.js";
 
 /**
  * Talks to the Vortexes programs: the hub (DAO records, treasuries,
@@ -82,9 +83,26 @@ function clients(network) {
   const made = {};
   for (const [name, idl] of Object.entries(IDLS)) {
     made[name] = new Program({ ...idl, address: network.programs[name].toBase58() }, provider);
+    roomyEncoder(made[name].coder.instruction);
   }
   programs.set(network, made);
   return made;
+}
+
+/**
+ * Anchor's JS coder encodes every instruction into a fixed 1,000-byte buffer,
+ * which a proposal carrying a protocol's larger instructions (sent as a v1
+ * transaction, up to 4,096 bytes) overflows. Same encoding, a buffer the
+ * size of the largest transaction.
+ */
+function roomyEncoder(coder) {
+  coder.encode = (ixName, ix) => {
+    const encoder = coder.ixLayouts.get(ixName);
+    if (!encoder) throw new Error(`Unknown method: ${ixName}`);
+    const buffer = Buffer.alloc(V1_TRANSACTION_SIZE_LIMIT);
+    const len = encoder.layout.encode(ix, buffer);
+    return Buffer.concat([Buffer.from(encoder.discriminator), buffer.subarray(0, len)]);
+  };
 }
 
 /** The Anchor client for `model` (or "hub"), for decoding events and instructions. */
@@ -166,13 +184,21 @@ export function tokenAccount(mint, owner, tokenProgram = TOKEN_PROGRAM_ID) {
  * Sends `ixs` signed by `signers` (the first pays); returns the signature.
  * Every Vortexes transaction leaves the bot here, so this is where its
  * explorer link is recorded for the command's reply (txLinks.js).
+ *
+ * A legacy transaction where it fits; one too big for legacy (a proposal
+ * carrying a protocol's larger instructions, or running them) goes as a v1
+ * transaction (src/solana/v1.js) on networks where those are enabled.
  */
 export async function send(network, ixs, signers, { computeUnits } = {}) {
   const tx = new Transaction();
   if (computeUnits) tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: computeUnits }));
   tx.add(...ixs);
+  const tooBig = legacySize(tx.instructions, signers[0].publicKey) > LEGACY_TRANSACTION_SIZE_LIMIT;
+  if (tooBig && !network.v1Transactions) {
+    throw userError(`That's too big for a Solana transaction on ${network.name}: it needs v1 transactions, which aren't enabled there (${network.envPrefix}_V1_TRANSACTIONS=true turns them on once the cluster supports them).`);
+  }
   try {
-    const sig = await sendAndConfirmTransaction(network.connection, tx, signers, { commitment: "confirmed" });
+    const sig = tooBig ? await sendV1(network.connection, ixs, signers, { computeUnits }) : await sendAndConfirmTransaction(network.connection, tx, signers, { commitment: "confirmed" });
     trackTx(explorerUrl(network, "tx", sig));
     return sig;
   } catch (err) {
@@ -883,7 +909,7 @@ export async function withdraw(network, model, member, d, governance, raw) {
 // ---------------------------------------------------------------
 
 /** Rent the treasury pays for a recipient's new token account (Token-2022 accounts can be a little larger). */
-async function tokenAccountRent(network) {
+export async function tokenAccountRent(network) {
   return BigInt(await network.connection.getMinimumBalanceForRentExemption(200));
 }
 
@@ -915,6 +941,20 @@ export async function paymentInstructions(network, d, { recipient, raw, mint }) 
       { mint: SOL_ASSET, amount: await tokenAccountRent(network) },
     ],
   };
+}
+
+/**
+ * Opens `owner`'s token account for `mint` (paid by the operator) unless it
+ * exists. A proposal that would otherwise create it carries ~245 bytes less,
+ * which some integrations need to fit a legacy propose transaction. Anyone
+ * may open a token account for anyone; only `owner` can use it.
+ */
+export async function openTokenAccount(network, owner, mint, programId = TOKEN_PROGRAM_ID) {
+  const account = tokenAccount(mint, owner, programId);
+  if (await network.connection.getAccountInfo(account)) return account;
+  const operator = requireOperator();
+  await send(network, [createAssociatedTokenAccountIdempotentInstruction(operator.publicKey, account, owner, mint, programId)], [operator]);
+  return account;
 }
 
 /** Instructions minting `raw` new DAO tokens to `recipient` (the treasury must be the mint authority). */

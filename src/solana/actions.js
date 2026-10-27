@@ -1,5 +1,6 @@
 import { PublicKey } from "@solana/web3.js";
 import * as v from "./vortex.js";
+import { INTEGRATION_ACTIONS } from "./integrations/index.js";
 
 /**
  * Verified actions a Solana DAO can propose with /proposeaction - the
@@ -257,17 +258,24 @@ export const ACTIONS = {
       return { instructions: [await v.cancelSwitchIx(c.network, c.d)], summary: "call off the pending model switch" };
     },
   },
+
+  // Protocol integrations (src/solana/integrations): staking, lending, trading.
+  ...INTEGRATION_ACTIONS,
 };
 
-export function actionApplies(action, model) {
+/** Whether `action` applies to a `model` DAO, on `network` if given (protocol actions exist only where the protocol is). */
+export function actionApplies(action, model, network) {
+  if (network && action.networks && !action.networks.includes(network.id)) return false;
+  if (network && action.needsV1Transactions && !network.v1Transactions) return false;
+  if (network && action.needsFillProgram && !network.fillProgram) return false;
   return action.models === "all" || action.models.includes(model);
 }
 
 /** `/listactions` for a Solana DAO of `model`. */
-export function listActionsText(model, cmd) {
+export function listActionsText(model, cmd, network) {
   const lines = [`*Actions for this ${LABEL[model]} DAO on Solana*`, ""];
   for (const [id, a] of Object.entries(ACTIONS)) {
-    if (!actionApplies(a, model)) continue;
+    if (!actionApplies(a, model, network)) continue;
     lines.push(`\`${id}${a.args.length ? " " + a.args.map((x) => x.name).join(" ") : ""}\` — ${a.about}`);
   }
   lines.push(
@@ -279,11 +287,11 @@ export function listActionsText(model, cmd) {
 }
 
 /** `/actioninfo <id>`, or null for an unknown action. */
-export function actionInfoText(id, model, cmd) {
+export function actionInfoText(id, model, cmd, network) {
   const a = ACTIONS[id];
   if (!a) return null;
   const lines = [`*${id}* — ${a.about}`];
-  if (!actionApplies(a, model)) lines.push(`(Not available for this ${LABEL[model]} DAO.)`);
+  if (!actionApplies(a, model, network)) lines.push(`(Not available for this ${LABEL[model]} DAO${network && a.networks && !a.networks.includes(network.id) ? ` on ${network.name}` : ""}.)`);
   if (a.args.length) lines.push("", ...a.args.map((x) => `\`${x.name}\` — ${x.about}`));
   lines.push("", `\`${cmd("proposeaction")} ${id}${a.args.length ? " " + a.args.map((x) => x.name).join(" ") : ""} <description>\``);
   return lines.join("\n");

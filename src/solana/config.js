@@ -10,7 +10,10 @@ import anchor from "@coral-xyz/anchor";
  *
  * Solana DAOs run on the Vortexes programs (github.com/replico-labs/
  * Vortexes): one hub per cluster holds every DAO's treasury, and the DAO's
- * governance program decides. Only devnet is deployed so far.
+ * governance program decides. Only devnet is deployed so far. Mainnet is
+ * defined for the integrations that only exist there (Pump.fun, Phoenix),
+ * but stays off until SOLANA_MAINNET_ENABLED=true, set once Vortexes is
+ * deployed on mainnet (its program IDs then come from SOLANA_MAINNET_*_PROGRAM_ID).
  */
 
 export const SOLANA_ENABLED = process.env.SOLANA_ENABLED === "true";
@@ -32,17 +35,36 @@ export const IDLS = {
 /** vortex-core's GovError, by code: { "6000": { name, msg } }. */
 export const GOV_ERRORS = require("./idl/gov_errors.json");
 
+/** Vortexes' fill program (swaps through fill orders): not a governance model, and deployed only where a network sets it. */
+export const FILL_IDL = require("./idl/vortex_fill.json");
+
 const DEFINITIONS = {
   "solana-devnet": {
     name: "Solana devnet",
     envPrefix: "SOLANA_DEVNET",
     defaultRpc: clusterApiUrl("devnet"),
     explorerCluster: "devnet",
+    // v1 transactions: off until devnet is confirmed to run them (SOLANA_DEVNET_V1_TRANSACTIONS=true).
+    v1Transactions: false,
   },
+  ...(process.env.SOLANA_MAINNET_ENABLED === "true"
+    ? {
+        "solana-mainnet": {
+          name: "Solana",
+          envPrefix: "SOLANA_MAINNET",
+          defaultRpc: clusterApiUrl("mainnet-beta"),
+          explorerCluster: "mainnet-beta",
+          // v1 transactions were reported active on mainnet from epoch 1035 (2026-09-15).
+          v1Transactions: true,
+          // No Vortexes deployment to default to: every program ID must be set.
+          requireProgramIds: true,
+        },
+      }
+    : {}),
 };
 
 /** Words people can type for a Solana network. Only devnet exists so far. */
-const ALIASES = { solana: "solana-devnet", sol: "solana-devnet", "solana-dev": "solana-devnet", soldevnet: "solana-devnet" };
+const ALIASES = { solana: "solana-devnet", sol: "solana-devnet", "solana-dev": "solana-devnet", soldevnet: "solana-devnet", ...(DEFINITIONS["solana-mainnet"] ? { "solana-mainnet-beta": "solana-mainnet", "sol-mainnet": "solana-mainnet" } : {}) };
 
 export const SOLANA_NETWORK_IDS = Object.keys(DEFINITIONS);
 
@@ -68,13 +90,20 @@ export function getSolanaNetwork(id) {
   const def = DEFINITIONS[id];
   const rpcUrl = env(id, "RPC_URL") || def.defaultRpc;
   // Program IDs default to the Vortexes devnet deployment (its README).
-  const pid = (name, fallback) => new PublicKey(env(id, `${name}_PROGRAM_ID`) || fallback);
+  const pid = (name, fallback) => {
+    const set = env(id, `${name}_PROGRAM_ID`);
+    if (!set && def.requireProgramIds) throw new Error(`${def.name}: set ${def.envPrefix}_${name}_PROGRAM_ID (Vortexes has no default deployment there)`);
+    return new PublicKey(set || fallback);
+  };
   const network = {
     id,
     name: def.name,
     rpcUrl,
     connection: new Connection(rpcUrl, "confirmed"),
     explorerCluster: def.explorerCluster,
+    envPrefix: def.envPrefix,
+    /** Whether transactions too big for legacy may go as v1 (src/solana/v1.js). */
+    v1Transactions: env(id, "V1_TRANSACTIONS") ? env(id, "V1_TRANSACTIONS") === "true" : Boolean(def.v1Transactions),
     programs: {
       hub: pid("HUB", IDLS.hub.address),
       tokenWeighted: pid("TOKEN_WEIGHTED", IDLS.tokenWeighted.address),
@@ -88,6 +117,14 @@ export function getSolanaNetwork(id) {
       sowellian: pid("SOWELLIAN", IDLS.sowellian.address),
       decisionMarkets: pid("DECISION_MARKETS", IDLS.decisionMarkets.address),
     },
+    /**
+     * Vortexes' fill program, for swaps (src/solana/fill.js), or null:
+     * it isn't deployed anywhere yet, so there's no default. Swap actions
+     * are offered only where it's set.
+     */
+    fillProgram: env(id, "FILL_PROGRAM_ID") ? new PublicKey(env(id, "FILL_PROGRAM_ID")) : null,
+    /** Whether this process fills and expires fill orders (src/solana/fillKeeper.js). */
+    fillKeeper: env(id, "FILL_KEEPER") === "true",
     /** SOL top-ups for user wallets, in lamports. */
     topup: {
       min: sol(env(id, "TOPUP_MIN") ?? "0.01"),

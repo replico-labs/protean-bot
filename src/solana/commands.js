@@ -1723,8 +1723,8 @@ const COMMANDS = {
     usage: "",
     description: "Actions this DAO can propose (mint, signers, switch model, ...)",
     async run(ctx) {
-      const { model } = await loadDao(ctx);
-      return reply(listActionsText(model, ctx.cmd));
+      const { model, network } = await loadDao(ctx);
+      return reply(listActionsText(model, ctx.cmd, network));
     },
   },
 
@@ -1732,8 +1732,8 @@ const COMMANDS = {
     usage: "<action>",
     description: "What an action does and its arguments",
     async run(ctx) {
-      const { model } = await loadDao(ctx);
-      const text = actionInfoText(ctx.args[0], model, ctx.cmd);
+      const { model, network } = await loadDao(ctx);
+      const text = actionInfoText(ctx.args[0], model, ctx.cmd, network);
       if (!text) fail(`Usage: \`${ctx.cmd("actioninfo")} <action>\` — see \`${ctx.cmd("listactions")}\`.`);
       return reply(text);
     },
@@ -1747,7 +1747,7 @@ const COMMANDS = {
       const action = ACTIONS[actionId];
       if (!action) fail(`Usage: \`${ctx.cmd("proposeaction")} <action> <args...> <description>\` — see \`${ctx.cmd("listactions")}\`.`);
       const c = await loadDao(ctx);
-      if (!actionApplies(action, c.model)) fail(`\`${actionId}\` doesn't apply to this ${MODEL_LABEL[c.model]} DAO. See \`${ctx.cmd("listactions")}\`.`);
+      if (!actionApplies(action, c.model, c.network)) fail(`\`${actionId}\` doesn't apply to this ${MODEL_LABEL[c.model]} DAO on ${c.network.name}. See \`${ctx.cmd("listactions")}\`.`);
       // Discord passes the arguments and description as separate fields.
       // Sowellian and decision markets settings (name=value) can be anywhere.
       const named = ctx.named;
@@ -1760,7 +1760,7 @@ const COMMANDS = {
       const description = named ? strip((named.description ?? "").trim().split(/\s+/).filter(Boolean)).join(" ") : plainRest.slice(count).join(" ");
       if (args.length !== count || !description) fail(`Usage: \`${ctx.cmd("proposeaction")} ${actionId}${count ? " " + action.args.map((a) => a.name).join(" ") : ""} <description>\`${optionsUsage(c.model)}`);
       if (Buffer.byteLength(description) > 200) fail("Keep the description to 200 characters.");
-      const built = await action.build({ ...c, args });
+      const built = await action.build({ ...c, args, openTokenAccount: (mint, programId) => v.openTokenAccount(c.network, c.d.treasury, mint, programId) });
       const kp = await member(ctx, c.network, proposalBytes(built.instructions, description));
       if (COUNCIL.includes(c.model)) requireCouncil(c.governance, kp);
       if (c.model === "board") requireSigner(c.governance, kp);

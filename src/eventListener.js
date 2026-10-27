@@ -9,6 +9,7 @@ import { resolveDelegationsBehind, activeProposalIds, queueSweep } from "./gover
 import { runOnNetwork, explorerTxUrl, currentNetwork, networkEnv } from "./networks.js";
 import { readJson, writeJsonAtomic } from "./jsonFile.js";
 import { startSolanaListener } from "./solana/listener.js";
+import { startFillKeeper } from "./solana/fillKeeper.js";
 import { getAdapter } from "./governance/index.js";
 import { PROPOSAL_STATE_LABELS } from "./governance/common.js";
 import { proposalImage } from "./charts.js";
@@ -549,4 +550,5 @@ export function startEventListener(target, pollIntervalMs = 20_000) {
   setInterval(pollOnce, pollIntervalMs);
   // Chats linked to Solana DAOs (src/solana; nothing unless SOLANA_ENABLED).
   startSolanaListener({ platform, notify });
+  startFillKeeper({ platform, notify });
 }
