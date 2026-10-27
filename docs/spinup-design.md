@@ -10,7 +10,7 @@ does all the setup; the person does at most one or two clicks.
 
 | Type | What the group is for | What the bot links it to |
 |---|---|---|
-| **Escrow** | The two (or more) parties to a deal | The escrow (no escrow contract yet: see open decisions) |
+| **Escrow** | The two sides of a deal and their arbitrators (at most 8 people) | The escrow ([escrow design](escrow-design.md)) |
 | **Survey** | A private opportunity market among invited people | A private Opportunity Market (the private survey mode isn't built yet) |
 | **Launch** | A whole community: a prop firm or a business | A new DAO, or a prop-firm DAO, through `/createdao` |
 
@@ -108,8 +108,9 @@ door.
 
 ## Open decisions
 
-1. **What an escrow links to.** There's no escrow contract yet: a Board DAO
-   between the parties for now, or wait for its own contract?
+1. ~~**What an escrow links to.**~~ Decided: a multisig escrow of its own,
+   with the bot as the last signer and arbitrators ruling through it. See
+   [escrow design](escrow-design.md).
 2. **Who can spin up.** Anyone, or only verified escrow agents and launch
    partners? Setup costs gas, and on Telegram anyone can tap a link.
 3. **Whether a public Slack lobby is worth it** for these users, given the
