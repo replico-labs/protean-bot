@@ -7,6 +7,7 @@ import { helpReply } from "../helpMenu.js";
 import { SOLANA_ENABLED, SOLANA_MODELS, getSolanaNetwork, resolveSolanaNetwork, explorerUrl, getSolanaOperator } from "./config.js";
 import { getOrCreateSolanaKeypair, getSolanaAddress, ensureSolFunded } from "./wallets.js";
 import { ACTIONS, MODEL_WORDS, actionApplies, listActionsText, actionInfoText } from "./actions.js";
+import { runPhoenixDesk } from "./deskPhoenix.js";
 import * as v from "./vortex.js";
 import { proposalCreated, proposalPageUrl, pendingSubmitLink, proposalStartPayload } from "../proposalPages.js";
 import { takeModelOptions, oracleGoalValue, oracleFeedLine } from "../modelProposal.js";
@@ -40,7 +41,7 @@ const PASS_THROUGH = new Set([
   "analytics", "fundrewardpool", "cancelmarket", "resolve", "revealwinningtotal", "reclaimstake", "computereward", "withdraw", "withdrawreward",
 ]);
 
-const SLOW = new Set(["createdao", "createboarddao", "execute", "proposeaction", "startsortition"]);
+const SLOW = new Set(["createdao", "createboarddao", "execute", "proposeaction", "startsortition", "desk"]);
 
 /** Whether a command may take a while (Telegram shows a "working" note first). */
 export function isSlowSolanaCommand(name) {
@@ -488,13 +489,28 @@ const HELP_SECTIONS = [
   ["council", "Council", ["council", "startelection", "declarecandidacy", "voteinelection", "finalizeelection", "initiaterecall", "voterecall", "finalizerecall", "registereligible", "withdraweligibility", "startsortition", "finalizesortition"]],
   ["sowellian", "Sowellian", ["castapprovalvote", "finalizeapproval", "takeposition", "resolveviaoracle", "proposeresolution", "challengeresolution", "finalizeunchallenged", "castadjudicationvote", "finalizeadjudication", "claimposition"]],
   ["markets", "Markets", ["split", "trade", "merge", "finalizeproposal", "redeem", "reclaimliquidity"]],
+  ["desk", "Trading desk", ["desk"]],
 ];
 
 const COMMANDS = {
   perps: {
     description: "Perpetuals for Solana DAOs",
-    async run() {
-      return reply("Perps for Solana DAOs will use Phoenix - not available yet. Perpl (Monad) and HyperCore (HyperEVM) DAOs can use it now.");
+    async run(ctx) {
+      return reply(`Solana DAOs trade perps through the trading desk on Phoenix (mainnet): \`${ctx.cmd("desk")}\`. Traders appointed by proposal trade their own isolated subaccount, without a vote per trade.`);
+    },
+  },
+  desk: {
+    usage: "[register | apply <markets> max=<size> | fund|withdraw <amount> [for=<n>] | remove [n] | resign | pause | resume | mine | long|short|close …]",
+    description: "Trading desk on Phoenix perps: traders appointed by proposal trade the Treasury's subaccounts, never withdraw",
+    async run(ctx) {
+      const c = await loadDao(ctx);
+      return runPhoenixDesk(ctx, c, {
+        propose: (actionId, args, description) => proposeAction(ctx, c, actionId, args, description, description.split(/\s+/)),
+        isCreator: async () => {
+          const me = await getSolanaAddress(ctx.userId, ctx.platform);
+          return Boolean(me && c.d.record.creator.equals(me));
+        },
+      });
     },
   },
   help: {
@@ -1759,14 +1775,7 @@ const COMMANDS = {
       const args = named ? strip((named.args ?? "").split(/\s+/).filter(Boolean)) : plainRest.slice(0, count);
       const description = named ? strip((named.description ?? "").trim().split(/\s+/).filter(Boolean)).join(" ") : plainRest.slice(count).join(" ");
       if (args.length !== count || !description) fail(`Usage: \`${ctx.cmd("proposeaction")} ${actionId}${count ? " " + action.args.map((a) => a.name).join(" ") : ""} <description>\`${optionsUsage(c.model)}`);
-      if (Buffer.byteLength(description) > 200) fail("Keep the description to 200 characters.");
-      const built = await action.build({ ...c, args, openTokenAccount: (mint, programId) => v.openTokenAccount(c.network, c.d.treasury, mint, programId) });
-      const kp = await member(ctx, c.network, proposalBytes(built.instructions, description));
-      if (COUNCIL.includes(c.model)) requireCouncil(c.governance, kp);
-      if (c.model === "board") requireSigner(c.governance, kp);
-      const { opts, notes } = await proposalOptions(ctx, c, allWords, kp);
-      const { id } = await v.propose(c.network, kp, c.d, c.model, built.instructions, description, { budget: built.budget ?? [], ...opts });
-      return proposalMade(ctx, c, id, [`✅ Proposal *#${id}*: ${built.summary}`, `_${description}_`, ...notes, "", await nextStep(ctx, c, id)].join("\n"));
+      return (await proposeAction(ctx, c, actionId, args, description, allWords)).reply;
     },
   },
 
@@ -1780,6 +1789,26 @@ const COMMANDS = {
     },
   },
 };
+
+/**
+ * Builds action `actionId` with `args` and proposes it with `description`
+ * from the caller's wallet (proposeaction, and the Phoenix desk's
+ * proposals). `allWords` carries any model settings (name=value). Returns
+ * { id, reply }.
+ */
+export async function proposeAction(ctx, c, actionId, args, description, allWords = []) {
+  const action = ACTIONS[actionId];
+  if (!actionApplies(action, c.model, c.network)) fail(`\`${actionId}\` doesn't apply to this ${MODEL_LABEL[c.model]} DAO on ${c.network.name}. See \`${ctx.cmd("listactions")}\`.`);
+  if (Buffer.byteLength(description) > 200) fail("Keep the description to 200 characters.");
+  const built = await action.build({ ...c, args, openTokenAccount: (mint, programId) => v.openTokenAccount(c.network, c.d.treasury, mint, programId) });
+  const kp = await member(ctx, c.network, proposalBytes(built.instructions, description));
+  if (COUNCIL.includes(c.model)) requireCouncil(c.governance, kp);
+  if (c.model === "board") requireSigner(c.governance, kp);
+  const { opts, notes } = await proposalOptions(ctx, c, allWords, kp);
+  const { id } = await v.propose(c.network, kp, c.d, c.model, built.instructions, description, { budget: built.budget ?? [], ...opts });
+  const reply = await proposalMade(ctx, c, id, [`✅ Proposal *#${id}*: ${built.summary}`, `_${description}_`, ...notes, "", await nextStep(ctx, c, id)].join("\n"));
+  return { id, reply };
+}
 
 /** What a Sowellian proposal is waiting for, and its pot, criteria and the member's position. */
 async function sowellianLines(ctx, network, d, g, p, id, state, now, tok, me) {

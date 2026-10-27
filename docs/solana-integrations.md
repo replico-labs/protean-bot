@@ -212,7 +212,7 @@ if they swap.
 | Jupiter Lend | `juplend-deposit`, `juplend-withdraw` | v1 | mainnet simulation |
 | Pump.fun | `pumpfun-buy`, `pumpfun-sell` | legacy (the operator opens the coin account first) | mainnet simulation |
 | Jupiter (fill orders) | `jup-swap`, `jup-cancel` | legacy (v1 when selling SOL, which is wrapped first) | instruction builders against the IDL; program tests written, not run |
-| Phoenix perps | desk (in progress) | v1 for fund, open, withdraw | LiteSVM with Phoenix's programs (`scripts/test-phoenix-flow.mjs`) |
+| Phoenix perps | `/desk` (`phoenix-appoint`, `phoenix-fund`, `phoenix-withdraw`, `phoenix-remove`) | v1 for appoint (new subaccount), fund, withdraw | LiteSVM with Phoenix's programs (`scripts/test-phoenix-flow.mjs`, 23 checks); the desk against mainnet not yet |
 
 `scripts/simulate-solana-action.mjs` builds any action with a stand-in
 treasury and simulates it on mainnet. None of them has run through the hub's

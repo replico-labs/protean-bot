@@ -10,8 +10,10 @@
  * Checks: the Treasury registers with its authority not signing (as a PDA
  * can't); it deposits; it opens an isolated subaccount, funds it and
  * delegates it to the trader's key; the trader's key trades it but can't
- * withdraw; re-delegating cuts the old key off; the new key closes; the
- * Treasury moves the collateral back and withdraws.
+ * withdraw, or pull the cross account's collateral into its subaccount;
+ * re-delegating cuts the old key off; the new key closes; delegating back
+ * to the Treasury (desk remove) cuts it off too; the Treasury moves the
+ * collateral back and withdraws.
  *
  *   for p in EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih:phoenix_eternal EMBERpYNE6ehWmXymZZS2skiFmCa9V5dp14e1iduM5qy:phoenix_ember_program RiSeVw3ZjNfsaXPRb4mgaqYaEEt41pNNJoDvVh7pgQj:phoenix_hawkeye; do
  *     node scripts/dump-solana-program.mjs ${p%%:*} $PHOENIX_SO_DIR/${p##*:}.so; done
@@ -198,6 +200,8 @@ err = await send([rise.buildWithdrawFundsIxResolved({ exchange, trader: { author
 check(/can't be signed/.test(err ?? ""), "and the trader's key can't name the Treasury as authority: the Treasury must sign", err ?? "it succeeded");
 err = await send([rise.buildTransferCollateralIxResolved({ exchange, trader: { authority: treasury.address, positionAuthority: traderKey.address, srcTraderAccount: child, dstTraderAccount: cross }, amount: 1_000_000n })], { feePayer: traderKey });
 console.log(`    (the trader's key moving collateral between the Treasury's own subaccounts: ${err ? "refused" : "allowed"})`);
+err = await send([rise.buildTransferCollateralIxResolved({ exchange, trader: { authority: treasury.address, positionAuthority: traderKey.address, srcTraderAccount: cross, dstTraderAccount: child }, amount: 1_000_000n })], { feePayer: traderKey });
+check(Boolean(err), "the trader's key can't pull the cross account's collateral into its own subaccount", "it moved 1 USDC from the cross account");
 
 console.log("Replacing the trader's key…");
 err = await send([rise.buildDelegateTraderIxResolved({ exchange, trader: { authority: treasury.address, traderAccount: child }, newPositionAuthority: replacementKey.address })], { feePayer: treasury });
@@ -206,6 +210,12 @@ err = await send([order(traderKey, rise.Side.Ask, "99000", "0.001")], { feePayer
 check(Boolean(err), "the old key can't trade any more", "it traded");
 err = await send([order(replacementKey, rise.Side.Ask, "99000", "0.001")], { feePayer: replacementKey });
 check(!err, "the new key closes the 0.001 BTC long", err);
+
+console.log("Taking the subaccount back (desk remove: delegated to the Treasury itself)…");
+err = await send([rise.buildDelegateTraderIxResolved({ exchange, trader: { authority: treasury.address, traderAccount: child }, newPositionAuthority: treasury.address })], { feePayer: treasury });
+check(!err && traderOf(child).positionAuthority === treasury.address, "the Treasury delegates the subaccount back to itself", err ?? traderOf(child).positionAuthority);
+err = await send([order(replacementKey, rise.Side.Bid, "101000", "0.001")], { feePayer: replacementKey });
+check(Boolean(err), "and the trader's key can't trade it any more", "it traded");
 
 console.log("The Treasury takes the money back…");
 const before = collateralOf(child);

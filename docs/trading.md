@@ -6,7 +6,7 @@ Perps, the trading desk, and the external protocol actions `/proposeaction` can 
 
 One command for perpetuals on whichever exchange the chat's network has: **Perpl** on Monad and **HyperCore** on HyperEVM.
 - Base has none: Avantis has no public docs or SDK to build against.
-- Solana DAOs will use **Phoenix**, which isn't built yet. New Phoenix accounts need an access or referral code, and it runs on mainnet only.
+- Solana DAOs trade perps through the **Phoenix desk** below (`/desk`), on mainnet only; `/perps` in a Solana chat points there.
 
 | Command | What it does |
 |---|---|
@@ -95,7 +95,18 @@ Hyperliquid has no trade-only account a contract can own, and its API wallets ("
 - **Hyperliquid limits how many named agents an account can have.** An appointment past that limit executes on HyperEVM but doesn't take effect on HyperCore, and is dropped as above. The exact limit isn't checked here.
 - **Not live-tested yet:** the CoreWriter encoding is from hyper-evm-lib (`CoreWriterLib.addApiWallet`), and orders are signed by Hyperliquid's own SDK (`@nktkas/hyperliquid`), but no desk has run against Hyperliquid itself. `scripts/test-hypercore-desk.mjs` runs the whole flow on a local chain against a stand-in Hyperliquid API; `scripts/test-perpl-desk.mjs` does the same for Perpl against stand-in Perpl contracts.
 
-Phoenix (Solana) desks aren't built yet.
+### Phoenix desk (Solana)
+
+`/desk` in a chat linked to a Solana DAO on mainnet (`src/solana/deskPhoenix.js`). The same commands as above, plus `/desk register`.
+
+- **Registering:** `/desk register` puts the Treasury on Phoenix once, through Phoenix's onboarding API for apps without a referral code. That path takes a PDA as the trader authority (the Treasury never signs); the operator pays.
+- **One isolated subaccount per trader.** The Treasury's cross account (subaccount 0) receives deposits; each trader gets their own isolated subaccount (1, 2, ...). On-chain, a trader's losses stop at what their subaccount holds, and an isolated subaccount holds one market's position at a time.
+- **The trader's key is the bot's.** Appointing a trader makes a fresh Solana key, kept encrypted like user wallets (walletStore `phoenix-agent`). The appointment proposal (`phoenix-appoint`) delegates the subaccount to it as Phoenix's position authority. The bot checks each order against the mandate, then signs it with that key; the operator pays the fee.
+- **What Phoenix enforces regardless of the bot** (checked against Phoenix's mainnet programs in LiteSVM, `scripts/test-phoenix-flow.mjs`): the key can trade its subaccount but can't withdraw from it, can't sign for the Treasury, and can't pull the cross account's collateral into its subaccount. Re-delegating cuts the old key off at once.
+- **Money moves by proposal:** `desk fund` (`phoenix-fund`: USDC wrapped by Phoenix's Ember, deposited into the cross account, then moved into the subaccount) and `desk withdraw` (`phoenix-withdraw`: the subaccount's collateral back to the cross account, withdrawn and unwrapped to USDC). These proposals need v1 transactions (973 and 1,792 bytes).
+- **Removing a trader:** `desk remove` (`phoenix-remove`) delegates the subaccount back to the Treasury itself, so only proposals can trade it, and the bot destroys the key. `desk resign` destroys the key at once; the position then waits for a new appointment or a removal.
+- **Leverage** is what the position would be against the subaccount's collateral, checked against the mandate's `lev`. Orders are immediate-or-cancel at the trader's limit price.
+- **Not live-tested yet:** the instructions are the ones the LiteSVM test runs, but the desk itself (Phoenix's API for accounts, markets, positions and registration) hasn't run against mainnet. It needs the hub on mainnet first.
 
 ## External protocol actions
 

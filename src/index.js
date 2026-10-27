@@ -215,6 +215,8 @@ bot.on("message:text", async (ctx, next) => {
     isAdmin: undefined, // admin-only commands were already checked above
     cmd: (n) => `/${n}`,
   };
+  // Pausing a Solana DAO's desk is for the group's admins (or the DAO's creator), as for /desk below.
+  if (name === "desk" && /^(pause|resume)$/i.test(solanaCtx.args[0] ?? "")) solanaCtx.isAdmin = await isGroupAdmin(ctx).catch(() => undefined);
   if (isSlowSolanaCommand(name)) await ctx.replyWithChatAction("typing").catch(() => {});
   const result = await runSolanaCommand(name, solanaCtx);
   if (!result) return next();

@@ -229,3 +229,21 @@ export async function deleteAgentKey(id) {
   const { error } = await getSupabaseClient().from("wallets").delete().eq("platform", AGENT_PLATFORM).eq("platform_user_id", String(id));
   if (error) throw new Error(`Supabase delete failed: ${supabaseMessage(error)}`);
 }
+
+/*//////////////////////////////////////////////////////////////
+                  PHOENIX DESK TRADER KEYS (SOLANA)
+//////////////////////////////////////////////////////////////*/
+
+/**
+ * A Phoenix trading desk (src/solana/deskPhoenix.js) delegates each
+ * trader's isolated subaccount to a Solana key the bot makes and keeps,
+ * encrypted like a user's Solana wallet (src/solana/wallets.js), on a
+ * wallet row under platform `phoenix-agent` and an id per appointment.
+ */
+export const PHOENIX_AGENT_PLATFORM = "phoenix-agent";
+
+/** Throws a Phoenix trader key away: it can't sign again, whatever Phoenix still has delegated. */
+export async function deletePhoenixAgentKey(id) {
+  const { error } = await getSupabaseClient().from("wallets").delete().eq("platform", PHOENIX_AGENT_PLATFORM).eq("platform_user_id", String(id));
+  if (error) throw new Error(`Supabase delete failed: ${supabaseMessage(error)}`);
+}

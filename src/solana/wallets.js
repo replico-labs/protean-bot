@@ -1,7 +1,7 @@
 import { Keypair, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
 import anchor from "@coral-xyz/anchor";
 import { encryptSecret, decryptSecret } from "../kmsWallet.js";
-import { findWalletRecord, findSolanaWallet, storeSolanaWallet, recordSolanaTopup, isWalletStoreConfigured } from "../walletStore.js";
+import { findWalletRecord, findSolanaWallet, storeSolanaWallet, recordSolanaTopup, isWalletStoreConfigured, PHOENIX_AGENT_PLATFORM } from "../walletStore.js";
 import { getOrCreateUserAccount } from "../walletResolver.js";
 import { getSolanaOperator } from "./config.js";
 
@@ -63,4 +63,20 @@ export async function ensureSolFunded(network, platformUserId, platform, address
   const tx = new Transaction().add(SystemProgram.transfer({ fromPubkey: operator.publicKey, toPubkey: address, lamports: amount }));
   await sendAndConfirmTransaction(network.connection, tx, [operator], { commitment: "confirmed" });
   await recordSolanaTopup(platform, platformUserId);
+}
+
+/**
+ * A Phoenix desk trader's key (src/solana/deskPhoenix.js): made for one
+ * appointment and kept like a user's wallet, under walletStore's
+ * PHOENIX_AGENT_PLATFORM. No trader ever holds it; the bot signs their
+ * orders with it after the mandate checks. Returns the keypair.
+ */
+export async function createPhoenixAgentKey(id) {
+  return getOrCreateSolanaKeypair(String(id), PHOENIX_AGENT_PLATFORM);
+}
+
+/** That key, decrypted for one use, or null if it was destroyed. */
+export async function getPhoenixAgentKey(id) {
+  if (!(await findSolanaWallet(PHOENIX_AGENT_PLATFORM, String(id)))) return null;
+  return getOrCreateSolanaKeypair(String(id), PHOENIX_AGENT_PLATFORM);
 }

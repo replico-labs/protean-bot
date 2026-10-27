@@ -3,9 +3,10 @@ import * as marinade from "./marinade.js";
 import * as juplend from "./juplend.js";
 import * as pumpfun from "./pumpfun.js";
 import * as jupiter from "./jupiter.js";
+import * as phoenix from "./phoenix.js";
 
 /** Every Solana protocol integration (src/solana/integrations/*), for actions.js and the verify script. */
-export const PROTOCOLS = [jito, marinade, juplend, pumpfun, jupiter];
+export const PROTOCOLS = [jito, marinade, juplend, pumpfun, jupiter, phoenix];
 
 /**
  * Their /proposeaction actions, merged into actions.js's ACTIONS, each
