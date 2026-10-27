@@ -17,9 +17,9 @@ commands.
 | Signers in all | 3 | 5 |
 | Threshold | 2-of-3 | 3-of-5 |
 | Arbitrators (no key) | 2 | 2 |
-| People in the group | 4 (+ up to 4 others) | 6 (+ up to 2 others) |
+| People in the group | 4 (+ up to 4 others; 3 on WhatsApp) | 6 (+ up to 2 others; 1 on WhatsApp) |
 
-- **A group has at most 8 people.**
+- **A group has at most 8 people** on Telegram, Discord and Slack, and **7 on WhatsApp**, where the bot's business number takes one of the Groups API's 8 seats. Both sizes fit: 1 v 1 with 2 arbitrators is 4 people, 2 v 2 is 6. On WhatsApp the bot creates the group itself and admits only the invited numbers (see [spin-up groups](spinup-design.md)).
 - **Sides are the same size.** With 1 v 2 (4 signers) no threshold works:
   3-of-4 means the single-signer side can't win a dispute even with the bot,
   2-of-4 means the two-signer side can release without the bot. A side

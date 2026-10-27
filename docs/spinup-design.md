@@ -43,7 +43,7 @@ walks them through it.
 | **Telegram** | No: the Bot API has no way to create a group or channel; only user accounts can. A "userbot" (a real account driven through the user API) could, but breaks Telegram's rules for automation and risks a ban. | A start-group link (`t.me/<bot>?startgroup=<token>&admin=<rights>`): one tap creates a group with the bot added as admin, and the token reaches the bot. Then it can set the title, description, permissions, pin messages, make invite links. |
 | **Discord** | A bot can create a server (`POST /guilds`, or from a template) only while it's in fewer than 10 servers, and it then owns it. Unverified: whether it can hand ownership to a person and leave. | Create channels, private channels, threads, roles and invites in servers it's in (needs Manage Channels and Manage Roles, which the bot doesn't ask for yet). Users can make a server from our template in one click (`discord.new/<code>`). |
 | **Slack** | No: apps can't create workspaces (only Enterprise Grid org admins can, inside their own org). | Create public and private channels in workspaces that installed the app (`conversations.create`, needs `channels:manage` and `groups:write`), invite members, set topics. Slack Connect channels need the other side to accept. |
-| **WhatsApp** | Baileys (the unofficial library our WhatsApp bot uses) can create groups, as a normal WhatsApp account; same ban risk as a userbot. Meta's official Cloud API has added groups; not checked how far. | |
+| **WhatsApp** | **Yes, for small groups, through Meta's Cloud API Groups API:** at most 8 participants including the business number (so 7 people plus the bot), up to 10,000 groups per number. Needs an Official Business Account; the Cloud API, not Baileys. (Baileys, the unofficial library our WhatsApp bot uses, can also create groups as a normal account, with a userbot's ban risk: not used for this.) | Create the group, make its invite link, approve or reject each join request, remove participants. There's no direct add: people join through the link. Figures from [Unipile's guide](https://www.unipile.com/whatsapp-group-api/), to check against Meta's docs. |
 
 ## The flow
 
@@ -70,6 +70,9 @@ any chat; or the same choices on the website.
 | **Telegram** | Start-group link: the user's own new group. | Same: a Telegram group is the community. |
 | **Discord** | In a server the user already has: the bot creates a private channel there and invites the parties. With no server: our template link, then the bot-invite link carrying the token. | Template link (`discord.new/<code>`): a full server from our template, owned by the user. Then the bot-invite link carrying the token; after the user adds the bot, Discord sends them back to our web server with the server ID and token, and the bot adds the roles and channels (#proposals, #treasury, #trading). |
 | **Slack** | A private channel in the user's own workspace (one that installed the app); the bot invites the parties. | The user creates the workspace on Slack's own page (no way around that step), then "Add to Slack" carrying the token; on install the bot creates the channels. |
+| **WhatsApp** | Escrow (at most 7 people): **the bot creates the group** through the Groups API, DMs the invite link to each party and arbitrator, and approves join requests only from the invited numbers, so a leaked link lets nobody else in. Surveys of up to 7 the same way. | Bigger groups: the users create a normal WhatsApp group and add the bot. |
+
+On WhatsApp the group is created by the bot's business number rather than the users, an exception to the principle above that's limited to small private groups: the bot is a member either way, and the members can't be added without their own tap on the link.
 
 ## The lobby: a guide, not a host
 
@@ -124,11 +127,13 @@ door.
 - Discord's `guilds.join` login adding a member to the lobby.
 - Discord's current docs on bot-created servers (the 10-server cap, and
   ownership transfer).
-- WhatsApp: how far Meta's Cloud API supports groups.
+- WhatsApp Groups API, against Meta's own docs: the 8-participant cap, join-request approval, whether interactive buttons work in groups, and template rules for messages outside the 24-hour window (deadline reminders).
+- WhatsApp: applying for the Groups API and the Official Business Account (to do later), and running the Cloud API beside Baileys (two numbers) or moving the WhatsApp bot to the Cloud API. Cloud API messages are billed per conversation.
 
 ## Suggested build order
 
 1. Telegram start-group flow (simplest, no lobby).
+1b. WhatsApp: the bot creates small escrow and survey groups through the Groups API, once Meta approves the application (applying later). It's the only platform where the bot does every step, so it moves ahead of Discord and Slack once approved.
 2. Discord: template + bot-invite flow, then the lobby with
    "Continue with Discord".
 3. Slack: channel-in-workspace and Add to Slack flow; the lobby once its
