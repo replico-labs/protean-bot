@@ -3,12 +3,14 @@ import {
   AccountRole,
   address,
   appendTransactionMessageInstructions,
+  compileTransaction,
   createKeyPairSignerFromBytes,
   createTransactionMessage,
   getBase64EncodedWireTransaction,
   getSignatureFromTransaction,
   getTransactionEncoder,
   setTransactionMessageComputeUnitLimit,
+  setTransactionMessageFeePayer,
   setTransactionMessageFeePayerSigner,
   setTransactionMessageLifetimeUsingBlockhash,
   setTransactionMessageLoadedAccountsDataSizeLimit,
@@ -75,6 +77,20 @@ export async function buildV1(ixs, signers, { blockhash, lastValidBlockHeight, c
   const size = getTransactionEncoder().encode(signed).length;
   if (size > V1_TRANSACTION_SIZE_LIMIT) throw Object.assign(new Error(`That transaction is ${size} bytes, more than even a v1 Solana transaction holds (${V1_TRANSACTION_SIZE_LIMIT}).`), { userFacing: true });
   return { signed, wire: getBase64EncodedWireTransaction(signed), signature: getSignatureFromTransaction(signed), size };
+}
+
+/**
+ * An unsigned v1 transaction paid by `payer`, base64-encoded, for a
+ * simulation with signature checks off (scripts/simulate-solana-action.mjs):
+ * nobody needs to hold the payer's key. The RPC replaces the blockhash.
+ */
+export function unsignedV1(ixs, payer, { computeUnits } = {}) {
+  let message = setTransactionMessageFeePayer(address(payer.toBase58()), createTransactionMessage({ version: 1 }));
+  message = setTransactionMessageLifetimeUsingBlockhash({ blockhash: PLACEHOLDER_BLOCKHASH, lastValidBlockHeight: 0n }, message);
+  message = appendTransactionMessageInstructions(ixs.map((ix) => kitInstruction(ix, new Map())), message);
+  message = setTransactionMessageLoadedAccountsDataSizeLimit(MAX_LOADED_ACCOUNTS_DATA_SIZE, message);
+  message = setTransactionMessageComputeUnitLimit(computeUnits || defaultComputeUnits(ixs.length), message);
+  return getBase64EncodedWireTransaction(compileTransaction(message));
 }
 
 /**

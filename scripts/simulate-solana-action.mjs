@@ -16,6 +16,7 @@
  */
 import { Connection, PublicKey, TransactionMessage, VersionedTransaction, ComputeBudgetProgram, clusterApiUrl } from "@solana/web3.js";
 import { PROTOCOLS } from "../src/solana/integrations/index.js";
+import { legacySize, unsignedV1, LEGACY_TRANSACTION_SIZE_LIMIT } from "../src/solana/v1.js";
 
 // Every protocol's actions, including ones held back from /proposeaction until v1 transactions.
 const INTEGRATION_ACTIONS = Object.assign({}, ...PROTOCOLS.map((p) => p.actions));
@@ -55,11 +56,21 @@ const storedBytes = 4 + built.instructions.reduce((n, ix) => n + 36 + 34 * ix.ac
 const room = 1232 - 361 - storedBytes;
 console.log(`Stored in a proposal: ${storedBytes} bytes; ${room >= 0 ? `fits a legacy propose with a description up to ${room} characters` : `too big for a legacy propose by ${-room} bytes (needs v1 transactions)`}`);
 
-const { blockhash } = await network.connection.getLatestBlockhash();
-const message = new TransactionMessage({ payerKey: treasury, recentBlockhash: blockhash, instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_000_000 }), ...instructions] }).compileToLegacyMessage();
-const tx = new VersionedTransaction(message);
-console.log(`Transaction size: ${tx.serialize().length} bytes (legacy limit 1232)`);
-const sim = await network.connection.simulateTransaction(tx, { sigVerify: false, replaceRecentBlockhash: true });
+let sim;
+if (legacySize([ComputeBudgetProgram.setComputeUnitLimit({ units: 1_000_000 }), ...instructions], treasury) <= LEGACY_TRANSACTION_SIZE_LIMIT) {
+  const { blockhash } = await network.connection.getLatestBlockhash();
+  const message = new TransactionMessage({ payerKey: treasury, recentBlockhash: blockhash, instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_000_000 }), ...instructions] }).compileToLegacyMessage();
+  const tx = new VersionedTransaction(message);
+  console.log(`Transaction size: ${tx.serialize().length} bytes (legacy)`);
+  sim = await network.connection.simulateTransaction(tx, { sigVerify: false, replaceRecentBlockhash: true });
+} else {
+  // Too big for legacy: simulate it as a v1 transaction, as the bot would send it.
+  const wire = unsignedV1(instructions, treasury, { computeUnits: 1_400_000 });
+  console.log(`Transaction size: ${Buffer.from(wire, "base64").length} bytes (v1; legacy holds 1232)`);
+  sim = await network.connection._rpcRequest("simulateTransaction", [wire, { encoding: "base64", sigVerify: false, replaceRecentBlockhash: true, commitment: "confirmed" }]);
+  if (sim.error) throw new Error(`simulateTransaction: ${JSON.stringify(sim.error)}`);
+  sim = sim.result;
+}
 for (const line of sim.value.logs ?? []) console.log(`  ${line}`);
 if (sim.value.err) {
   console.log(`✗ Simulation failed: ${JSON.stringify(sim.value.err)}`);

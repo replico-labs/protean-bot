@@ -1,5 +1,6 @@
 import { PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import * as rise from "@ellipsis-labs/rise";
+import { fromKit } from "./integrations/common.js";
 
 /**
  * Phoenix perps (Ellipsis Labs' Phoenix "Rise"): the pieces the desk
@@ -147,15 +148,8 @@ export function withMarks(positions, marks) {
   });
 }
 
-/** A kit instruction from the SDK ({ programAddress, accounts: [{ address, role }], data }) as a web3.js one. */
-export function web3Instruction(ix) {
-  return new TransactionInstruction({
-    programId: new PublicKey(ix.programAddress),
-    // kit's AccountRole: bit 0 writable, bit 1 signer.
-    keys: ix.accounts.map((a) => ({ pubkey: new PublicKey(a.address), isSigner: Boolean(a.role & 2), isWritable: Boolean(a.role & 1) })),
-    data: Buffer.from(ix.data),
-  });
-}
+/** A kit instruction from the SDK as a web3.js one. */
+export const web3Instruction = fromKit;
 
 /** The SDK returns some builds as { instructions }, others as a list. */
 export const listOf = (built) => built.instructions ?? built.ixs ?? (Array.isArray(built) ? built : [built]);

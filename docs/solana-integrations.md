@@ -65,12 +65,12 @@ From the hub's code (`programs/hub`, `crates/vortex-core`):
 
 | Protocol | What a DAO would do | Program (from its docs) | Devnet | Fits a proposal today? |
 |---|---|---|---|---|
-| **Kamino Lend** | deposit, withdraw, borrow, repay | `KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD` (mainnet; the repo lists the same ID on devnet, a Mintlify page says `SLendK7y…` for staging: conflicting) | probably | ❌ with legacy transactions (a deposit also needs refresh-reserve and refresh-obligation instructions, over 20 accounts); ✅ with v1 |
+| **Kamino Lend** | deposit, withdraw, borrow, repay | `KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD` (mainnet, klend `lib.rs`; `SLendK7ySfcEzyaFqy93gDnD3RtrpXJcnRwb6zFHJSh` is its staging build); main market `7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF` | probably | ❌ with legacy transactions (a deposit also needs refresh-reserve and refresh-obligation instructions, over 20 accounts); ✅ with v1 |
 | **Jupiter Lend** (Earn) | deposit, withdraw (fTokens) | `jup3YeL8QhtSx1e253b2FDvsMNC87fDrgQZivbrndc9` mainnet, `7tjE28izRUjzmxC1QNXnNwcc4N82CNYCexf3k8mw67s3` devnet (Jupiter's CPI guide) | ✅ | likely ✅: a CPI context of about 10 accounts; SDK `@jup-ag/lend` gives the instructions and CPI accounts |
 | **Jupiter aggregator** | swap any token for any token | mainnet only | ❌ | ❌ by design: Jupiter's own docs say swaps via CPI are likely to fail (routes need lookup tables and many accounts), and a route quoted at proposal time is stale at execution. See the swap design below |
 | **Jito** (JitoSOL) | stake SOL for JitoSOL, unstake | SPL stake pool: mainnet pool `Jito4APyf642JPZPx3hGc6WWJ8zPKtRbRs4P815Awbb`, mint `J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn`; devnet program `DPoo15wWDqpPJJtS2MUZ49aRxqz5ZaaJCJP4z8bLuib`, pool `JitoY5pcAxWX6iyP2QdFwTznGb8A99PRCUCVVxB46WZ`, mint `J1tos8mqbhdGcF3pgj4PCKyVjzWSURcpLZU7pPGHxSYi` (Jito's deployed-programs page; not the old SPL devnet deployment, which is outdated) | ✅ | ✅: `deposit_sol` is about 10 accounts, and the SPL stake pool program takes a PDA depositor |
 | **Marinade** (mSOL) | stake SOL for mSOL, liquid unstake | `MarBmsSgKXdrN1egZf5sqe1TMai9K1rChYNDJgjq7aD`, mSOL mint `mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So` (mainnet) | docs say yes, address not found yet | ✅ likely: deposit is about 10 accounts |
-| **Tensor** | buy, list, sell NFTs, bid | marketplace program ID not found yet (in the `tensor_marketplace` crate; Tensor is open source); its Whitelist program `TL1ST2iRBzuGTqLn1KXnGdSnEow62BzPnGiqyRXhWtW` is on devnet | partly | borderline with legacy (a buy touches 15–20 accounts, more for compressed NFTs, which also need proofs); ✅ with v1 |
+| **Tensor** | buy, list, sell NFTs, bid | marketplace `TCMPhJdwDryooaGtiocG1u3xcYbRpiJzb283XfCZsDp` on mainnet and devnet (tensor-foundation/marketplace `declare_id`, and its client's program address); its Whitelist program `TL1ST2iRBzuGTqLn1KXnGdSnEow62BzPnGiqyRXhWtW` | partly | borderline with legacy (a buy touches 15–20 accounts, more for compressed NFTs, which also need proofs); ✅ with v1 |
 | **Pump.fun** | buy and sell a coin on its bonding curve | `6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P`; its AMM after migration `pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA` | not found | buy/sell ✅ (about 12–16 accounts); **creating a coin ❌**: it needs a new mint keypair to sign, which a proposal can't |
 | **Phoenix perps** | a trading desk: the Treasury owns the trader account, traders trade it | `EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih` (verified on mainnet), with Ember and Hawkeye | ❌ mainnet only; LiteSVM fixtures for local tests | ✅ the proposals (deposit, delegate, withdraw) are small; trades aren't proposals. See [Phoenix perps](#phoenix-perps) |
 
@@ -201,6 +201,21 @@ Jupiter swaps through the fill adapter. Not designed yet.
 
 ## What's built
 
+**Kamino and CPI.** Kamino's original deposit, withdraw, borrow and repay
+instructions refuse to run inside another program unless that program is on
+Kamino's whitelist (`check_refresh` → `is_forbidden_cpi_call`, klend
+`utils/refresh_ix_utils.rs`): they check, from the instructions sysvar,
+that refresh instructions sit right before them at the top level. Their
+`_v2` variants make no such check, and Kamino's klend-interface has a CPI
+example built on them. So the Kamino actions use v2 instructions (the SDK's
+`useV2Ixs`), with the refreshes carried in the proposal before them. Flash
+loans and obligation ownership transfers stay CPI-only for whitelisted
+programs; neither is used.
+
+**Tensor** supports CPI (its repo has a CPI test crate). Core assets and
+compressed NFTs aren't covered yet, nor selling into bids (those need the
+collection's whitelist proofs).
+
 Actions are offered only where they apply: on the protocol's cluster, where
 v1 transactions are on if they need them, and where the fill program is set
 if they swap.
@@ -211,6 +226,8 @@ if they swap.
 | Marinade | `marinade-stake`, `marinade-unstake` | legacy | mainnet simulation |
 | Jupiter Lend | `juplend-deposit`, `juplend-withdraw` | v1 | mainnet simulation |
 | Pump.fun | `pumpfun-buy`, `pumpfun-sell` | legacy (the operator opens the coin account first) | mainnet simulation |
+| Kamino Lend | `kamino-deposit`, `kamino-withdraw` (main market) | v1 | instruction builders only; needs a mainnet simulation |
+| Tensor | `tensor-buy`, `tensor-list`, `tensor-delist` (token-metadata NFTs, programmable included) | v1 for a buy (944 bytes); list and delist fit legacy | instruction builders offline (the Treasury is the only signer); needs a mainnet simulation |
 | Jupiter (fill orders) | `jup-swap`, `jup-cancel` | legacy (v1 when selling SOL, which is wrapped first) | instruction builders against the IDL; program tests written, not run |
 | Phoenix perps | `/desk` (`phoenix-appoint`, `phoenix-fund`, `phoenix-withdraw`, `phoenix-remove`) | v1 for appoint (new subaccount), fund, withdraw | LiteSVM with Phoenix's programs (`scripts/test-phoenix-flow.mjs`, 23 checks); the desk against mainnet not yet |
 

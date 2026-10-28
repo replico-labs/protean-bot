@@ -1,4 +1,4 @@
-import { PublicKey } from "@solana/web3.js";
+import { PublicKey, TransactionInstruction } from "@solana/web3.js";
 
 /**
  * Shared pieces of the Solana protocol integrations: each protocol module
@@ -39,4 +39,17 @@ export async function requireOwned(network, address, owner, label) {
   if (!info) fail(`${label} (\`${address.toBase58()}\`) doesn't exist on ${network.name}.`);
   if (!info.owner.equals(owner)) fail(`${label} (\`${address.toBase58()}\`) belongs to ${info.owner.toBase58()}, not ${owner.toBase58()}.`);
   return info;
+}
+
+/**
+ * An instruction from a @solana/kit-based SDK ({ programAddress, accounts:
+ * [{ address, role }], data }) as a web3.js TransactionInstruction, for
+ * v.stored. kit's AccountRole: bit 0 writable, bit 1 signer.
+ */
+export function fromKit(ix) {
+  return new TransactionInstruction({
+    programId: new PublicKey(ix.programAddress),
+    keys: (ix.accounts ?? []).map((a) => ({ pubkey: new PublicKey(a.address), isSigner: Boolean(a.role & 2), isWritable: Boolean(a.role & 1) })),
+    data: Buffer.from(ix.data ?? []),
+  });
 }
