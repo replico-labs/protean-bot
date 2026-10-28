@@ -32,7 +32,7 @@ if (!def || !standIn || !action) {
   console.error(`Usage: simulate-solana-action.mjs <mainnet|devnet> <stand-in address> <action> [args...]\nActions: ${Object.keys(INTEGRATION_ACTIONS).join(", ")}`);
   process.exit(2);
 }
-const network = { id: def.id, name: def.name, connection: new Connection(def.rpc, "confirmed") };
+const network = { id: def.id, name: def.name, rpcUrl: def.rpc, envPrefix: def.id === "solana-mainnet" ? "SOLANA_MAINNET" : "SOLANA_DEVNET", v1Transactions: true, connection: new Connection(def.rpc, "confirmed") };
 const treasury = new PublicKey(standIn);
 
 let built;
