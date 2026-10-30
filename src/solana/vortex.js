@@ -206,7 +206,7 @@ export async function send(network, ixs, signers, { computeUnits } = {}) {
     if (!err?.logs?.length && !err?.transactionLogs?.length && typeof err?.getLogs === "function") {
       err.logs = await err.getLogs(network.connection).catch(() => undefined);
     }
-    throw explain(err);
+    throw explain(err, network);
   }
 }
 
@@ -214,7 +214,7 @@ export async function send(network, ixs, signers, { computeUnits } = {}) {
  * Turns a failed transaction into a readable error: a Vortexes GovError
  * by name and message where the logs carry one, else the first error log.
  */
-export function explain(err) {
+export function explain(err, network) {
   const logs = err?.logs ?? err?.transactionLogs ?? [];
   const text = [err?.message ?? "", ...logs].join("\n");
   // The system program's own wording, e.g. a treasury too poor to pay rent.
@@ -228,12 +228,17 @@ export function explain(err) {
   const hex = text.match(/custom program error: (0x[0-9a-f]+)/i);
   if (hex) {
     const code = parseInt(hex[1], 16);
-    const gov = GOV_ERRORS[String(code)];
+    // Which program raised it (the first to fail; the callers above it fail with the same code): a GovError code
+    // means something only from a Vortexes program, as other programs reuse the numbers.
+    const failed = logs.map((l) => l.match(/^Program (\S+) failed: custom program error/)).find(Boolean)?.[1];
+    const vortexes = !failed || !network || Object.values(network.programs).some((p) => p.toBase58() === failed);
+    const gov = vortexes ? GOV_ERRORS[String(code)] : undefined;
     if (gov) return userError(`${gov.msg} (${gov.name})`, { code: gov.name });
     if (logs.some((l) => /Error: insufficient funds/i.test(l))) return userError("Not enough tokens for that.", { code: "InsufficientFunds" });
     const anchorLine = logs.find((l) => l.includes("Error Message:"));
-    if (anchorLine) return userError(anchorLine.split("Error Message:")[1].trim());
-    return userError(`Program error ${code}`);
+    const where = failed && !vortexes ? ` (program \`${failed}\`, error ${code})` : "";
+    if (anchorLine) return userError(`${anchorLine.split("Error Message:")[1].trim()}${where}`);
+    return userError(`Program error ${code}${where ? ` in program \`${failed}\`` : ""}`);
   }
   return err;
 }

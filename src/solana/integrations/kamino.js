@@ -128,6 +128,9 @@ async function build(c, kind, words) {
   const vanilla = obligation instanceof klend.VanillaObligation;
   if (kind === "withdraw" && vanilla) fail("The treasury has nothing lent on Kamino.");
   if (kind === "borrow" && vanilla) fail("The treasury has no collateral on Kamino: lend something with `kamino-deposit` first.");
+  if (kind === "borrow" && m.market.state.borrowDisabled) fail("Kamino has turned borrowing off in its main market.");
+  // Kamino's flag on the obligation itself: it blocks borrowing outside an elevation group (Kamino's correlated-asset mode).
+  if (kind === "borrow" && obligation.state.borrowingDisabled && obligation.state.elevationGroup === 0) fail("Kamino has borrowing turned off for the treasury's Kamino account (its obligation's borrowing_disabled flag), outside an elevation group.");
   const debt = vanilla ? undefined : obligation.getBorrowByReserve(a.reserve.address);
   if (kind === "repay" && !debt) fail(`The treasury owes Kamino no ${a.label}.`);
   const action = await kaminoAction(c, m, kind, a, obligation, all ? klend.U64_MAX : raw.toString());

@@ -2,7 +2,7 @@ import { SystemProgram } from "@solana/web3.js";
 import { NATIVE_MINT, TOKEN_PROGRAM_ID, createAssociatedTokenAccountIdempotentInstruction, createCloseAccountInstruction, createSyncNativeInstruction, createTransferInstruction } from "@solana/spl-token";
 import anchor from "@coral-xyz/anchor";
 import { getDepositIxs, getWithdrawIxs, getRedeemIxs, getDepositContext } from "@jup-ag/lend/earn";
-import { getOperateIx, getVaultsProgram, getVaultsProgramId, getInitPositionContext, VAULT_T1_TYPE } from "@jup-ag/lend/borrow";
+import { getOperateIx, getVaultsProgram, getVaultsProgramId, getInitPositionContext, isDexVault } from "@jup-ag/lend/borrow";
 import * as v from "../vortex.js";
 import { fail, key, deployment, requireProgram } from "./common.js";
 
@@ -90,8 +90,9 @@ async function vaultsProgram(c) {
 /** The vault lending `debt` against `col` (a standard one: Jupiter's smart vaults aren't supported). */
 async function vaultFor(program, col, debt) {
   const configs = await program.account.vaultConfig.all();
-  const found = configs.find(({ account: v }) => Number(v.vaultType) === VAULT_T1_TYPE && v.supplyToken.equals(col.mint) && v.borrowToken.equals(debt.mint));
-  if (!found) fail(`Jupiter Lend has no vault lending ${debt.label} against ${col.label}.`);
+  // Standard vaults only, as the SDK's operate builder takes them (it refuses smart vaults; older standard vaults aren't all type 1).
+  const found = configs.find(({ account: v }) => !isDexVault(Number(v.vaultType)) && v.supplyToken.equals(col.mint) && v.borrowToken.equals(debt.mint));
+  if (!found) fail(`Jupiter Lend has no vault lending ${debt.label} against ${col.label} (of the ${configs.length} vaults it has).`);
   return Number(found.account.vaultId);
 }
 
