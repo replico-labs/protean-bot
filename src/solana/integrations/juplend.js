@@ -2,7 +2,8 @@ import { SystemProgram } from "@solana/web3.js";
 import { NATIVE_MINT, TOKEN_PROGRAM_ID, createAssociatedTokenAccountIdempotentInstruction, createCloseAccountInstruction, createSyncNativeInstruction, createTransferInstruction } from "@solana/spl-token";
 import anchor from "@coral-xyz/anchor";
 import { getDepositIxs, getWithdrawIxs, getRedeemIxs, getDepositContext } from "@jup-ag/lend/earn";
-import { getOperateIx, getVaultsProgram, getVaultsProgramId, getInitPositionContext, isDexVault } from "@jup-ag/lend/borrow";
+import { getOperateIx, getVaultsProgram, getVaultsProgramId, getInitPositionContext, isDexVault, getLiquidityProgram } from "@jup-ag/lend/borrow";
+import { borrowPda } from "@jup-ag/lend";
 import * as v from "../vortex.js";
 import { fail, key, deployment, requireProgram } from "./common.js";
 
@@ -88,6 +89,19 @@ async function vaultsProgram(c) {
 }
 
 /** The vault lending `debt` against `col` (a standard one: Jupiter's smart vaults aren't supported). */
+/**
+ * Refuses a borrow while the token's pool on Jupiter's liquidity layer is
+ * at its utilization cap (its TokenReserve's last_utilization against
+ * max_utilization, 100% = 10_000): the borrow would fail at execution with
+ * USER_MODULE_MAX_UTILIZATION_REACHED (6035).
+ */
+async function requireBorrowable(c, debt) {
+  const liquidity = getLiquidityProgram({ connection: c.network.connection, signer: c.d.treasury, market: MARKET });
+  const reserve = await liquidity.account.tokenReserve.fetchNullable(borrowPda.getLiquidityReserve(debt.mint, MARKET));
+  if (!reserve) fail(`Jupiter Lend has no pool for ${debt.label}.`);
+  if (reserve.lastUtilization >= reserve.maxUtilization) fail(`Jupiter Lend's ${debt.label} pool is at its utilization cap (${reserve.lastUtilization / 100}% used of ${reserve.maxUtilization / 100}%), so nothing can be borrowed from it until lenders add ${debt.label} or borrowers repay.`);
+}
+
 async function vaultFor(program, col, debt) {
   const configs = await program.account.vaultConfig.all();
   // Standard vaults only, as the SDK's operate builder takes them (it refuses smart vaults; older standard vaults aren't all type 1).
@@ -232,6 +246,7 @@ export const actions = {
       const colRaw = amountOf(col, c.args[1], "the collateral");
       const debtRaw = amountOf(debt, c.args[3], "the amount to borrow");
       if (colRaw === 0n && debtRaw === 0n) fail("Add collateral, borrow, or both.");
+      if (debtRaw > 0n) await requireBorrowable(c, debt);
       const vaultId = await vaultFor(program, col, debt);
       const pos = await positionOf(c, program, vaultId);
       if (!pos && colRaw === 0n) fail(`The treasury has no ${col.label}/${debt.label} position on Jupiter Lend yet: add collateral with the first borrow.`);

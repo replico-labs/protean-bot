@@ -36,7 +36,12 @@
  * vortex_board.so (anchor build, with vortex-core MAX_INSTRUCTIONS 16: a
  * first Kamino deposit takes about 10); with vortex_fill.so, jup-swap runs.
  * Without HUB_TEST_PUMP_MINT or HUB_TEST_TENSOR_MINT, those steps are
- * skipped. HUB_TEST_ONLY=jito,kamino runs just those protocols. Nothing
+ * skipped. HUB_TEST_ONLY=jito,kamino runs just those protocols.
+ * HUB_TEST_KAMINO_MARKET=<a Kamino market's address> runs Kamino in that
+ * market instead of the main one; HUB_TEST_JUPLEND_BORROW=<a mint> (and
+ * HUB_TEST_JUPLEND_BORROW_AMOUNT, default 50) borrows that token against
+ * SOL on Jupiter Lend instead of USDC: for when mainnet has borrowing shut
+ * in one (the bot refuses at proposal time then, saying why). Nothing
  * reaches mainnet: transactions run in the fork only. data/chats.json is
  * backed up and put back. About 5 minutes.
  */
@@ -68,6 +73,10 @@ const PUMP_MINT = process.env.HUB_TEST_PUMP_MINT || "";
 const TENSOR_MINT = process.env.HUB_TEST_TENSOR_MINT || "";
 const ONLY = process.env.HUB_TEST_ONLY ? new Set(process.env.HUB_TEST_ONLY.split(",").map((s) => s.trim())) : null;
 const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+// Kamino's market (`main`, or another market's address) and the token Jupiter Lend borrows against SOL (`usdc` or a mint), for when one is shut on mainnet.
+const KAMINO_MARKET = process.env.HUB_TEST_KAMINO_MARKET || "main";
+const JUP_DEBT = (process.env.HUB_TEST_JUPLEND_BORROW || "usdc").toLowerCase() === "usdc" ? USDC : process.env.HUB_TEST_JUPLEND_BORROW;
+const JUP_DEBT_AMOUNT = process.env.HUB_TEST_JUPLEND_BORROW_AMOUNT || "50";
 const JITOSOL = "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn";
 const MSOL = "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So";
 
@@ -197,6 +206,10 @@ async function held(mint) {
   return conn.getTokenAccountBalance(ata).then((b) => BigInt(b.value.amount)).catch(() => 0n);
 }
 
+const decimalsOf = async (mint) => (await conn.getTokenSupply(new PublicKey(mint))).value.decimals;
+const jupDebtRaw = async () => v.parseUnits(JUP_DEBT_AMOUNT, await decimalsOf(JUP_DEBT));
+const jupDebtLabel = JUP_DEBT === USDC ? "USDC" : `token ${JUP_DEBT.slice(0, 4)}…`;
+
 // ---- the steps ----
 const trader = Keypair.generate().publicKey.toBase58();
 const fmt = (raw, decimals) => v.formatUnits(raw, decimals);
@@ -205,8 +218,8 @@ const STEPS = [
   { round: 1, protocol: "jito", line: "jito-stake 1", check: async () => [(await held(JITOSOL)) > 0n, `JitoSOL ${fmt(await held(JITOSOL), 9)}`] },
   { round: 1, protocol: "marinade", line: "marinade-stake 1", check: async () => [(await held(MSOL)) > 0n, `mSOL ${fmt(await held(MSOL), 9)}`] },
   { round: 1, protocol: "juplend", line: "juplend-deposit usdc 10", before: () => held(USDC), check: async (was) => [(await held(USDC)) === was - 10_000_000n, `USDC ${fmt(await held(USDC), 6)} (was ${fmt(was, 6)})`] },
-  { round: 1, protocol: "juplend", line: "juplend-borrow sol 2 usdc 50", before: () => held(USDC), check: async (was) => [(await held(USDC)) === was + 50_000_000n, `USDC ${fmt(await held(USDC), 6)} (was ${fmt(was, 6)}); 2 SOL of collateral in the Treasury's position`] },
-  { round: 1, protocol: "kamino", line: "kamino-deposit sol 1", before: () => held("sol"), check: async (was) => [(await held("sol")) <= was - BigInt(LAMPORTS_PER_SOL), `SOL ${fmt(await held("sol"), 9)} (was ${fmt(was, 9)})`] },
+  { round: 1, protocol: "juplend", line: `juplend-borrow sol 2 ${JUP_DEBT} ${JUP_DEBT_AMOUNT}`, before: () => held(JUP_DEBT), check: async (was) => [(await held(JUP_DEBT)) === was + (await jupDebtRaw()), `${jupDebtLabel} ${fmt(await held(JUP_DEBT), await decimalsOf(JUP_DEBT))} (was ${fmt(was, await decimalsOf(JUP_DEBT))}); 2 SOL of collateral in the Treasury's position`] },
+  { round: 1, protocol: "kamino", line: `kamino-deposit sol 1 ${KAMINO_MARKET}`, before: () => held("sol"), check: async (was) => [(await held("sol")) <= was - BigInt(LAMPORTS_PER_SOL), `SOL ${fmt(await held("sol"), 9)} (was ${fmt(was, 9)})`] },
   { round: 1, protocol: "pumpfun", needs: PUMP_MINT, line: `pumpfun-buy ${PUMP_MINT} 0.1 10`, check: async () => [(await held(PUMP_MINT)) > 0n, `coins ${await held(PUMP_MINT)}`] },
   { round: 1, protocol: "tensor", needs: TENSOR_MINT, line: `tensor-buy ${TENSOR_MINT} ${process.env.HUB_TEST_TENSOR_MAX_SOL || "500"}`, check: async () => [(await held(TENSOR_MINT)) === 1n, `the Treasury holds ${await held(TENSOR_MINT)} of the NFT`] },
   { round: 1, protocol: "phoenix", line: `phoenix-appoint 1 ${trader}`, check: async () => [Boolean(await phx.readTrader(net, treasury, 1)), "subaccount 1 registered and delegated"] },
@@ -215,10 +228,10 @@ const STEPS = [
   { round: 2, protocol: "jito", after: "jito-stake", line: "jito-unstake all", check: async () => [(await held(JITOSOL)) === 0n, `JitoSOL ${fmt(await held(JITOSOL), 9)} (a stake account holds it now)`] },
   { round: 2, protocol: "marinade", after: "marinade-stake", line: "marinade-unstake all", check: async () => [(await held(MSOL)) === 0n, `mSOL ${fmt(await held(MSOL), 9)}`] },
   { round: 2, protocol: "juplend", after: "juplend-deposit", line: "juplend-withdraw usdc all", before: () => held(USDC), check: async (was) => [(await held(USDC)) >= was + 9_990_000n, `USDC ${fmt(await held(USDC), 6)} (was ${fmt(was, 6)})`] },
-  { round: 2, protocol: "juplend", after: "juplend-borrow", line: "juplend-repay sol usdc all all", before: async () => ({ usdc: await held(USDC), sol: await held("sol") }), check: async (was) => [(await held(USDC)) <= was.usdc - 50_000_000n && (await held("sol")) >= was.sol + BigInt(1.99 * LAMPORTS_PER_SOL), `USDC ${fmt(await held(USDC), 6)} (was ${fmt(was.usdc, 6)}), SOL ${fmt(await held("sol"), 9)} (was ${fmt(was.sol, 9)})`] },
-  { round: 2, protocol: "kamino", after: "kamino-deposit", line: "kamino-borrow usdc 20", before: () => held(USDC), check: async (was) => [(await held(USDC)) === was + 20_000_000n, `USDC ${fmt(await held(USDC), 6)} (was ${fmt(was, 6)})`] },
-  { round: 3, protocol: "kamino", after: "kamino-borrow", line: "kamino-repay usdc all", before: () => held(USDC), check: async (was) => [(await held(USDC)) <= was - 20_000_000n && (await held(USDC)) >= was - 20_100_000n, `USDC ${fmt(await held(USDC), 6)} (was ${fmt(was, 6)}): 20 and a little interest`] },
-  { round: 4, protocol: "kamino", after: "kamino-repay", line: "kamino-withdraw sol all", before: () => held("sol"), check: async (was) => [(await held("sol")) >= was + BigInt(0.99 * LAMPORTS_PER_SOL), `SOL ${fmt(await held("sol"), 9)} (was ${fmt(was, 9)})`] },
+  { round: 2, protocol: "juplend", after: "juplend-borrow", line: `juplend-repay sol ${JUP_DEBT} all all`, before: async () => ({ debt: await held(JUP_DEBT), sol: await held("sol") }), check: async (was) => [(await held(JUP_DEBT)) <= was.debt - (await jupDebtRaw()) && (await held("sol")) >= was.sol + BigInt(1.99 * LAMPORTS_PER_SOL), `${jupDebtLabel} ${fmt(await held(JUP_DEBT), await decimalsOf(JUP_DEBT))} (was ${fmt(was.debt, await decimalsOf(JUP_DEBT))}), SOL ${fmt(await held("sol"), 9)} (was ${fmt(was.sol, 9)})`] },
+  { round: 2, protocol: "kamino", after: "kamino-deposit", line: `kamino-borrow usdc 20 ${KAMINO_MARKET}`, before: () => held(USDC), check: async (was) => [(await held(USDC)) === was + 20_000_000n, `USDC ${fmt(await held(USDC), 6)} (was ${fmt(was, 6)})`] },
+  { round: 3, protocol: "kamino", after: "kamino-borrow", line: `kamino-repay usdc all ${KAMINO_MARKET}`, before: () => held(USDC), check: async (was) => [(await held(USDC)) <= was - 20_000_000n && (await held(USDC)) >= was - 20_100_000n, `USDC ${fmt(await held(USDC), 6)} (was ${fmt(was, 6)}): 20 and a little interest`] },
+  { round: 4, protocol: "kamino", after: "kamino-repay", line: `kamino-withdraw sol all ${KAMINO_MARKET}`, before: () => held("sol"), check: async (was) => [(await held("sol")) >= was + BigInt(0.99 * LAMPORTS_PER_SOL), `SOL ${fmt(await held("sol"), 9)} (was ${fmt(was, 9)})`] },
   { round: 2, protocol: "pumpfun", after: "pumpfun-buy", needs: PUMP_MINT, line: `pumpfun-sell ${PUMP_MINT} all 10`, check: async () => [(await held(PUMP_MINT)) === 0n, `coins ${await held(PUMP_MINT)}`] },
   { round: 2, protocol: "tensor", after: "tensor-buy", needs: TENSOR_MINT, line: `tensor-list ${TENSOR_MINT} 999`, check: async () => [(await held(TENSOR_MINT)) === 0n, "listed at 999 SOL (the NFT is in Tensor's escrow)"] },
   { round: 2, protocol: "phoenix", after: "phoenix-appoint", line: "phoenix-fund 1 10", before: () => held(USDC), check: async (was) => [(await held(USDC)) === was - 10_000_000n, `USDC ${fmt(await held(USDC), 6)} (was ${fmt(was, 6)})`] },
@@ -257,6 +270,8 @@ try {
   // The Treasury's funds: SOL, and 100 USDC in its token account.
   fork.setLamports(treasury.toBase58(), (TENSOR_MINT ? 1_100n : 50n) * BigInt(LAMPORTS_PER_SOL));
   await fork.setTokenAccount(getAssociatedTokenAddressSync(new PublicKey(USDC), treasury, true).toBase58(), treasury.toBase58(), USDC, 100_000_000n, TOKEN_PROGRAM_ID.toBase58());
+  // Another borrowed token: 1% of the loan up front, for the interest repay-all pays.
+  if (JUP_DEBT !== USDC && (!ONLY || ONLY.has("juplend"))) await fork.setTokenAccount(getAssociatedTokenAddressSync(new PublicKey(JUP_DEBT), treasury, true, await tokenProgramOf(JUP_DEBT)).toBase58(), treasury.toBase58(), JUP_DEBT, (await jupDebtRaw()) / 100n + 1n, (await tokenProgramOf(JUP_DEBT)).toBase58());
   record("Treasury funded", (await held(USDC)) === 100_000_000n, `${fmt(await held("sol"), 9)} SOL, ${fmt(await held(USDC), 6)} USDC`);
 
   const wanted = (s) => (!ONLY || ONLY.has(s.protocol)) && (s.needs === undefined || Boolean(s.needs));
