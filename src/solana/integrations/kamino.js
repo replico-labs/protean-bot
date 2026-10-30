@@ -21,9 +21,12 @@ const kit = createRequire(require.resolve("@kamino-finance/klend-sdk"))("@solana
  * refresh_ix_utils.rs; Kamino's klend-interface has a CPI example), so the
  * instructions come from Kamino's SDK (@kamino-finance/klend-sdk) with
  * useV2Ixs, and the proposal carries the refreshes before them, run by the
- * hub in the same order. The first deposit also sets up the treasury's
- * user metadata and obligation (no lookup table: the treasury can't sign a
- * new one).
+ * hub in the same order.
+ *
+ * The first deposit also sets up the treasury's user metadata, obligation
+ * and the reserve's obligation farm (no lookup table: the treasury can't
+ * sign a new one): about 10 instructions with SOL's wrapping, within a
+ * proposal's 16 (vortex-core MAX_INSTRUCTIONS).
  *
  * The refreshes name the obligation's reserves when the proposal is
  * written; if another proposal adds a reserve to the obligation before this
@@ -87,20 +90,17 @@ async function obligationOf(c, m) {
 
 /** A KaminoAction's instructions in order, minus compute budget (the transaction sets it) and the SDK's ATA creation (done here). */
 function actionIxs(action) {
-  return [...action.setupIxs, ...action.inBetweenIxs, ...action.lendingIxs, ...action.cleanupIxs].map(fromKit);
+  return [...action.setupIxs, ...action.inBetweenIxs, ...action.lendingIxs, ...action.postLendingIxs, ...action.cleanupIxs].map(fromKit);
 }
 
-async function build(c, kind, words) {
-  const m = await mainMarket(c);
-  const a = await asset(c, m, words[0]);
-  const obligation = await obligationOf(c, m);
-  const all = kind === "withdraw" && String(words[1]).toLowerCase() === "all";
-  const raw = all ? null : v.parseUnits(words[1], a.decimals);
-  if (raw !== null && raw <= 0n) fail(`${kind === "deposit" ? "Lend" : "Withdraw"} more than 0.`);
-  if (kind === "withdraw" && obligation instanceof klend.VanillaObligation) fail("The treasury has nothing lent on Kamino.");
+/** Instructions a proposal of this model holds (vortex-core MAX_INSTRUCTIONS, less conviction's 2 budget steps). */
+const proposalLimit = (model) => (model === "conviction" ? 14 : 16);
+
+/** The SDK's action for `kind` (deposit or withdraw) of `raw` (or all) of asset `a`. */
+async function kaminoAction(c, m, kind, a, obligation, amount) {
   const props = {
     kaminoMarket: m.market,
-    amount: all ? klend.U64_MAX : raw.toString(),
+    amount,
     reserveAddress: a.reserve.address,
     owner: kit.createNoopSigner(kit.address(c.d.treasury.toBase58())),
     obligation,
@@ -111,12 +111,24 @@ async function build(c, kind, words) {
     initUserMetadata: { skipInitialization: false, skipLutCreation: true },
     currentLedgerInstant: await klend.getCurrentLedgerInstant(m.rpc),
   };
-  const action = kind === "deposit" ? await klend.KaminoAction.buildDepositTxns(props) : await klend.KaminoAction.buildWithdrawTxns(props);
+  return kind === "deposit" ? klend.KaminoAction.buildDepositTxns(props) : klend.KaminoAction.buildWithdrawTxns(props);
+}
+
+async function build(c, kind, words) {
+  const m = await mainMarket(c);
+  const a = await asset(c, m, words[0]);
+  const obligation = await obligationOf(c, m);
+  const all = kind === "withdraw" && String(words[1]).toLowerCase() === "all";
+  const raw = all ? null : v.parseUnits(words[1], a.decimals);
+  if (raw !== null && raw <= 0n) fail(`${kind === "deposit" ? "Lend" : "Withdraw"} more than 0.`);
+  if (kind === "withdraw" && obligation instanceof klend.VanillaObligation) fail("The treasury has nothing lent on Kamino.");
+  const action = await kaminoAction(c, m, kind, a, obligation, all ? klend.U64_MAX : raw.toString());
   const own = v.tokenAccount(a.mint, c.d.treasury, a.programId);
   const ixs = [createAssociatedTokenAccountIdempotentInstruction(c.d.treasury, own, c.d.treasury, a.mint, a.programId)];
   if (kind === "deposit" && a.isSol) ixs.push(SystemProgram.transfer({ fromPubkey: c.d.treasury, toPubkey: own, lamports: raw }), createSyncNativeInstruction(own));
   ixs.push(...actionIxs(action));
   if (a.isSol) ixs.push(createCloseAccountInstruction(own, c.d.treasury, c.d.treasury));
+  if (ixs.length > proposalLimit(c.model)) fail(`This ${kind} needs ${ixs.length} instructions (refreshing every reserve the treasury's Kamino account uses), more than one proposal holds (${proposalLimit(c.model)}).`);
   return { a, raw, all, ixs };
 }
 

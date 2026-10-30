@@ -33,7 +33,8 @@
  * The mainnet RPC is SOLANA_MAINNET_RPC_URL (from .env too), or
  * HUB_FORK_SOURCE_RPC_URL; a paid one helps, as the first round fetches a
  * few thousand accounts. VORTEXES_DEPLOY_DIR needs vortex_hub.so and
- * vortex_board.so (anchor build); with vortex_fill.so, jup-swap runs too.
+ * vortex_board.so (anchor build, with vortex-core MAX_INSTRUCTIONS 16: a
+ * first Kamino deposit takes about 10); with vortex_fill.so, jup-swap runs.
  * Without HUB_TEST_PUMP_MINT or HUB_TEST_TENSOR_MINT, those steps are
  * skipped. HUB_TEST_ONLY=jito,kamino runs just those protocols. Nothing
  * reaches mainnet: transactions run in the fork only. data/chats.json is

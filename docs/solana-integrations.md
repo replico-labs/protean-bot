@@ -13,7 +13,9 @@ Marinade (liquid staking), Tensor (NFTs), Pump.fun, Phoenix perps.
 
 From the hub's code (`programs/hub`, `crates/vortex-core`):
 
-- A proposal stores up to **8 instructions** (`MAX_INSTRUCTIONS`). On
+- A proposal stores up to **16 instructions** (`MAX_INSTRUCTIONS`; 14 for
+  conviction, whose budget takes 2. It was 8, from legacy transactions, until
+  a first Kamino deposit needed 10). On
   execution the hub runs each one with `invoke_signed`, **signed by the
   treasury PDA**. So every integration is a CPI from the hub.
 - **The treasury is the only signer** a proposal's instructions may ask for
@@ -53,7 +55,7 @@ From the hub's code (`programs/hub`, `crates/vortex-core`):
    and a v1 header always carries a loaded-accounts-data limit (the runtime
    holds a header without one to 0) and a compute limit.
 2. **Check the hub with big proposals:** compute for deserializing and
-   running up to 8 instructions with ~100 accounts, and the proposal
+   running up to 16 instructions within v1's 64 accounts, and the proposal
    account's size (it's sized from `instructions_len`). Compute budget per
    execution sized to the instructions (in v1, set in the header).
 3. **Fallback only if a proposal ever needs more than 4,096 bytes:** "large
@@ -222,19 +224,18 @@ if they swap.
 
 | Protocol | Actions | Proposal fits | Checked |
 |---|---|---|---|
-| Jito | `jito-stake`, `jito-unstake` | legacy | mainnet simulation |
-| Marinade | `marinade-stake`, `marinade-unstake` | legacy | mainnet simulation |
-| Jupiter Lend | `juplend-deposit`, `juplend-withdraw` | v1 | mainnet simulation |
-| Pump.fun | `pumpfun-buy`, `pumpfun-sell` | legacy (the operator opens the coin account first) | mainnet simulation |
-| Kamino Lend | `kamino-deposit`, `kamino-withdraw` (main market) | v1 | instruction builders only; needs a mainnet simulation |
-| Tensor | `tensor-buy`, `tensor-list`, `tensor-delist` (token-metadata NFTs, programmable included) | v1 for a buy (944 bytes); list and delist fit legacy | instruction builders offline (the Treasury is the only signer); needs a mainnet simulation |
-| Jupiter (fill orders) | `jup-swap`, `jup-cancel` | legacy (v1 when selling SOL, which is wrapped first) | instruction builders against the IDL; program tests written, not run |
-| Phoenix perps | `/desk` (`phoenix-appoint`, `phoenix-fund`, `phoenix-withdraw`, `phoenix-remove`) | v1 for appoint (new subaccount), fund, withdraw | LiteSVM with Phoenix's programs (`scripts/test-phoenix-flow.mjs`, 23 checks); the desk against mainnet not yet |
+| Jito | `jito-stake`, `jito-unstake` | legacy | through the hub on a mainnet fork |
+| Marinade | `marinade-stake`, `marinade-unstake` | legacy | through the hub on a mainnet fork |
+| Jupiter Lend | `juplend-deposit`, `juplend-withdraw` | v1 | through the hub on a mainnet fork |
+| Pump.fun | `pumpfun-buy`, `pumpfun-sell` | legacy (the operator opens the coin account first) | through the hub on a mainnet fork |
+| Kamino Lend | `kamino-deposit`, `kamino-withdraw` (main market) | v1; a first SOL deposit is about 10 instructions | deposit by mainnet simulation; the hub run hit the old 8-instruction limit (now 16), to re-run |
+| Tensor | `tensor-buy`, `tensor-list`, `tensor-delist` (token-metadata NFTs, programmable included) | v1 for a buy (944 bytes); list and delist fit legacy | through the hub on a mainnet fork (a programmable NFT) |
+| Jupiter (fill orders) | `jup-swap`, `jup-cancel` | legacy (v1 when selling SOL, which is wrapped first) | `jup-swap` through the hub on a mainnet fork, filled by the keeper |
+| Phoenix perps | `/desk` (`phoenix-appoint`, `phoenix-fund`, `phoenix-withdraw`, `phoenix-remove`) | v1 for appoint (new subaccount), fund, withdraw | LiteSVM with Phoenix's programs (`scripts/test-phoenix-flow.mjs`, 23 checks); the hub run stopped at registration (a fork bug, fixed), to re-run |
 
 `scripts/simulate-solana-action.mjs` builds any action with a stand-in
-treasury and simulates it on mainnet. None of them has run through the hub's
-CPI yet, because the Vortexes binaries aren't in the bot's tests; that's the
-local test to run next.
+treasury and simulates it on mainnet. `scripts/test-hub-mainnet-fork.mjs`
+runs them as proposals the Treasury executes through the hub (below).
 
 ## Testing when there's no devnet
 

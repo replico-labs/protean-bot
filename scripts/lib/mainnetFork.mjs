@@ -28,6 +28,7 @@ const LOADER_V4 = "LoaderV411111111111111111111111111111111111";
 const TOKEN_PROGRAMS = new Set(["TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"]);
 const CLOCK = "SysvarC1ock11111111111111111111111111111111";
 const STAKE_HISTORY = "SysvarStakeHistory1111111111111111111111111";
+const LAST_RESTART_SLOT = "SysvarLastRestartS1ot1111111111111111111111";
 const MAINNET_GENESIS = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d";
 /** Programs whose accounts are price feeds, refreshed from mainnet while nothing here writes them. */
 const ORACLE_OWNERS = new Set([
@@ -125,6 +126,9 @@ export async function startFork({ remoteUrl, port = 8899, log = () => {} }) {
     }
     vm.setStakeHistory(history);
   }
+  // Phoenix treats the exchange as under maintenance unless this matches the restart it acknowledged.
+  const lrs = await remote("getAccountInfo", [LAST_RESTART_SLOT, { encoding: "base64" }]);
+  if (lrs?.value) vm.setLastRestartSlot(u64(fromB64(lrs.value.data[0]), 0));
   const now = () => {
     const elapsed = (Date.now() - start.wall) / 1000;
     return { slot: start.slot + BigInt(Math.floor(elapsed * SLOTS_PER_SECOND)), unix: start.unix + BigInt(Math.floor(elapsed)) };
