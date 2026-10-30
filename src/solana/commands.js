@@ -1805,6 +1805,12 @@ export async function proposeAction(ctx, c, actionId, args, description, allWord
   if (COUNCIL.includes(c.model)) requireCouncil(c.governance, kp);
   if (c.model === "board") requireSigner(c.governance, kp);
   const { opts, notes } = await proposalOptions(ctx, c, allWords, kp);
+  // Accounts the bot opens for the treasury before proposing (e.g. a Jupiter Lend position), paid by the operator: only once the proposer may propose.
+  if (built.prepare) {
+    const operator = getSolanaOperator();
+    if (!operator) fail("This needs the bot's Solana operator wallet to set it up first - ask an admin to set SOLANA_OPERATOR_KEY.");
+    await built.prepare({ operator: operator.publicKey, send: (ixs) => v.send(c.network, ixs, [operator]) });
+  }
   const { id } = await v.propose(c.network, kp, c.d, c.model, built.instructions, description, { budget: built.budget ?? [], ...opts });
   const reply = await proposalMade(ctx, c, id, [`✅ Proposal *#${id}*: ${built.summary}`, `_${description}_`, ...notes, "", await nextStep(ctx, c, id)].join("\n"));
   return { id, reply };

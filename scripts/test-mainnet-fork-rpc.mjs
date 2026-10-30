@@ -43,7 +43,8 @@ const stub = http.createServer((req, res) => { let b = ""; req.on("data", (c) =>
   const result = method === "getAccountInfo" ? { context: { slot: 1 }, value: A[params[0]] ?? null }
     : method === "getMultipleAccounts" ? { context: { slot: 1 }, value: params[0].map((k) => A[k] ?? null) }
     : method === "getEpochSchedule" ? { slotsPerEpoch: 432000, leaderScheduleSlotOffset: 432000, warmup: false, firstNormalEpoch: 0, firstNormalSlot: 0 }
-    : method === "getProgramAccounts" ? [] : null;
+    : method === "getProgramAccounts" ? []
+    : method === "getTokenAccountsByOwner" ? { context: { slot: 1 }, value: [] } : null;
   res.end(JSON.stringify({ jsonrpc: "2.0", id, result }));
 }); }).listen(18990);
 
@@ -82,6 +83,10 @@ await fork.setTokenAccount(ata.toBase58(), me.publicKey.toBase58(), mint.publicK
 // getTokenAccountBalance requires Token/Token-2022 owners; X isn't, so check the raw data instead.
 const ta = await conn.getAccountInfo(ata);
 check(ta.data.readBigUInt64LE(64) === 5_000_000n, "setTokenAccount writes the balance");
+const held = Keypair.generate().publicKey;
+await fork.setTokenAccount(held.toBase58(), me.publicKey.toBase58(), mint.publicKey.toBase58(), 1n);
+const owned = await conn.getTokenAccountsByOwner(me.publicKey, { programId: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA") });
+check(owned.value.length === 1 && owned.value[0].pubkey.equals(held) && owned.value[0].account.data.readBigUInt64LE(64) === 1n, "getTokenAccountsByOwner includes the fork's own token accounts", JSON.stringify(owned.value.map((x) => x.pubkey.toBase58())));
 // Kit RPC.
 const slot = await rpc.getSlot().send();
 const bt = await rpc.getBlockTime(slot).send();

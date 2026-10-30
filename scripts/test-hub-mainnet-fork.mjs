@@ -13,13 +13,13 @@
  * and the actions are proposed and executed in rounds, each round's checks
  * reading the result:
  *
- *   1. jito-stake, marinade-stake, juplend-deposit, kamino-deposit,
- *      pumpfun-buy, tensor-buy, phoenix-appoint, jup-swap (then the fill
+ *   1. jito-stake, marinade-stake, juplend-deposit, juplend-borrow,
+ *      kamino-deposit, pumpfun-buy, tensor-buy, phoenix-appoint, jup-swap (then the fill
  *      keeper fills the order through Jupiter)
- *   2. jito-unstake, marinade-unstake, juplend-withdraw, kamino-withdraw,
- *      pumpfun-sell, tensor-list, phoenix-fund
- *   3. tensor-delist, phoenix-withdraw
- *   4. phoenix-remove
+ *   2. jito-unstake, marinade-unstake, juplend-withdraw, juplend-repay,
+ *      kamino-borrow, pumpfun-sell, tensor-list, phoenix-fund
+ *   3. kamino-repay, tensor-delist, phoenix-withdraw
+ *   4. kamino-withdraw, phoenix-remove
  *
  * Phoenix registers the Treasury through its API first, as `desk register`
  * does; the API's onboarder co-signs that on mainnet, so here it goes in
@@ -205,6 +205,7 @@ const STEPS = [
   { round: 1, protocol: "jito", line: "jito-stake 1", check: async () => [(await held(JITOSOL)) > 0n, `JitoSOL ${fmt(await held(JITOSOL), 9)}`] },
   { round: 1, protocol: "marinade", line: "marinade-stake 1", check: async () => [(await held(MSOL)) > 0n, `mSOL ${fmt(await held(MSOL), 9)}`] },
   { round: 1, protocol: "juplend", line: "juplend-deposit usdc 10", before: () => held(USDC), check: async (was) => [(await held(USDC)) === was - 10_000_000n, `USDC ${fmt(await held(USDC), 6)} (was ${fmt(was, 6)})`] },
+  { round: 1, protocol: "juplend", line: "juplend-borrow sol 2 usdc 50", before: () => held(USDC), check: async (was) => [(await held(USDC)) === was + 50_000_000n, `USDC ${fmt(await held(USDC), 6)} (was ${fmt(was, 6)}); 2 SOL of collateral in the Treasury's position`] },
   { round: 1, protocol: "kamino", line: "kamino-deposit sol 1", before: () => held("sol"), check: async (was) => [(await held("sol")) <= was - BigInt(LAMPORTS_PER_SOL), `SOL ${fmt(await held("sol"), 9)} (was ${fmt(was, 9)})`] },
   { round: 1, protocol: "pumpfun", needs: PUMP_MINT, line: `pumpfun-buy ${PUMP_MINT} 0.1 10`, check: async () => [(await held(PUMP_MINT)) > 0n, `coins ${await held(PUMP_MINT)}`] },
   { round: 1, protocol: "tensor", needs: TENSOR_MINT, line: `tensor-buy ${TENSOR_MINT} ${process.env.HUB_TEST_TENSOR_MAX_SOL || "500"}`, check: async () => [(await held(TENSOR_MINT)) === 1n, `the Treasury holds ${await held(TENSOR_MINT)} of the NFT`] },
@@ -214,7 +215,10 @@ const STEPS = [
   { round: 2, protocol: "jito", after: "jito-stake", line: "jito-unstake all", check: async () => [(await held(JITOSOL)) === 0n, `JitoSOL ${fmt(await held(JITOSOL), 9)} (a stake account holds it now)`] },
   { round: 2, protocol: "marinade", after: "marinade-stake", line: "marinade-unstake all", check: async () => [(await held(MSOL)) === 0n, `mSOL ${fmt(await held(MSOL), 9)}`] },
   { round: 2, protocol: "juplend", after: "juplend-deposit", line: "juplend-withdraw usdc all", before: () => held(USDC), check: async (was) => [(await held(USDC)) >= was + 9_990_000n, `USDC ${fmt(await held(USDC), 6)} (was ${fmt(was, 6)})`] },
-  { round: 2, protocol: "kamino", after: "kamino-deposit", line: "kamino-withdraw sol all", before: () => held("sol"), check: async (was) => [(await held("sol")) >= was + BigInt(0.99 * LAMPORTS_PER_SOL), `SOL ${fmt(await held("sol"), 9)} (was ${fmt(was, 9)})`] },
+  { round: 2, protocol: "juplend", after: "juplend-borrow", line: "juplend-repay sol usdc all all", before: async () => ({ usdc: await held(USDC), sol: await held("sol") }), check: async (was) => [(await held(USDC)) <= was.usdc - 50_000_000n && (await held("sol")) >= was.sol + BigInt(1.99 * LAMPORTS_PER_SOL), `USDC ${fmt(await held(USDC), 6)} (was ${fmt(was.usdc, 6)}), SOL ${fmt(await held("sol"), 9)} (was ${fmt(was.sol, 9)})`] },
+  { round: 2, protocol: "kamino", after: "kamino-deposit", line: "kamino-borrow usdc 20", before: () => held(USDC), check: async (was) => [(await held(USDC)) === was + 20_000_000n, `USDC ${fmt(await held(USDC), 6)} (was ${fmt(was, 6)})`] },
+  { round: 3, protocol: "kamino", after: "kamino-borrow", line: "kamino-repay usdc all", before: () => held(USDC), check: async (was) => [(await held(USDC)) <= was - 20_000_000n && (await held(USDC)) >= was - 20_100_000n, `USDC ${fmt(await held(USDC), 6)} (was ${fmt(was, 6)}): 20 and a little interest`] },
+  { round: 4, protocol: "kamino", after: "kamino-repay", line: "kamino-withdraw sol all", before: () => held("sol"), check: async (was) => [(await held("sol")) >= was + BigInt(0.99 * LAMPORTS_PER_SOL), `SOL ${fmt(await held("sol"), 9)} (was ${fmt(was, 9)})`] },
   { round: 2, protocol: "pumpfun", after: "pumpfun-buy", needs: PUMP_MINT, line: `pumpfun-sell ${PUMP_MINT} all 10`, check: async () => [(await held(PUMP_MINT)) === 0n, `coins ${await held(PUMP_MINT)}`] },
   { round: 2, protocol: "tensor", after: "tensor-buy", needs: TENSOR_MINT, line: `tensor-list ${TENSOR_MINT} 999`, check: async () => [(await held(TENSOR_MINT)) === 0n, "listed at 999 SOL (the NFT is in Tensor's escrow)"] },
   { round: 2, protocol: "phoenix", after: "phoenix-appoint", line: "phoenix-fund 1 10", before: () => held(USDC), check: async (was) => [(await held(USDC)) === was - 10_000_000n, `USDC ${fmt(await held(USDC), 6)} (was ${fmt(was, 6)})`] },

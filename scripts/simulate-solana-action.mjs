@@ -43,6 +43,7 @@ try {
   process.exit(1);
 }
 console.log(`Summary: ${built.summary}`);
+if (built.prepare) console.log("Note: this needs the bot to open an account for the treasury first (when proposed); simulated without it, it may fail where that account is missing.");
 const instructions = built.instructions.map((ix) => ({
   programId: ix.programId,
   keys: ix.accounts.map((a) => ({ pubkey: a.pubkey, isSigner: a.isSigner, isWritable: a.isWritable })),

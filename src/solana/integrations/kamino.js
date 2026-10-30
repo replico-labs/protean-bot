@@ -12,7 +12,8 @@ const kit = createRequire(require.resolve("@kamino-finance/klend-sdk"))("@solana
 /**
  * Kamino Lend: the treasury lends a token in Kamino's main market for
  * interest, as collateral in its own obligation (a vanilla obligation owned
- * by the treasury), and withdraws it later.
+ * by the treasury), withdraws it later, and can borrow against it and
+ * repay.
  *
  * Kamino forbids being called through another program (CPI) for its
  * original deposit / withdraw instructions, which check that refresh
@@ -96,7 +97,7 @@ function actionIxs(action) {
 /** Instructions a proposal of this model holds (vortex-core MAX_INSTRUCTIONS, less conviction's 2 budget steps). */
 const proposalLimit = (model) => (model === "conviction" ? 14 : 16);
 
-/** The SDK's action for `kind` (deposit or withdraw) of `raw` (or all) of asset `a`. */
+/** The SDK's action for `kind` (deposit, withdraw, borrow or repay) of `raw` (or all) of asset `a`. */
 async function kaminoAction(c, m, kind, a, obligation, amount) {
   const props = {
     kaminoMarket: m.market,
@@ -111,25 +112,44 @@ async function kaminoAction(c, m, kind, a, obligation, amount) {
     initUserMetadata: { skipInitialization: false, skipLutCreation: true },
     currentLedgerInstant: await klend.getCurrentLedgerInstant(m.rpc),
   };
-  return kind === "deposit" ? klend.KaminoAction.buildDepositTxns(props) : klend.KaminoAction.buildWithdrawTxns(props);
+  const builders = { deposit: "buildDepositTxns", withdraw: "buildWithdrawTxns", borrow: "buildBorrowTxns", repay: "buildRepayTxns" };
+  return klend.KaminoAction[builders[kind]](props);
 }
+
+const VERB = { deposit: "Lend", withdraw: "Withdraw", borrow: "Borrow", repay: "Repay" };
 
 async function build(c, kind, words) {
   const m = await mainMarket(c);
   const a = await asset(c, m, words[0]);
   const obligation = await obligationOf(c, m);
-  const all = kind === "withdraw" && String(words[1]).toLowerCase() === "all";
+  const all = (kind === "withdraw" || kind === "repay") && String(words[1]).toLowerCase() === "all";
   const raw = all ? null : v.parseUnits(words[1], a.decimals);
-  if (raw !== null && raw <= 0n) fail(`${kind === "deposit" ? "Lend" : "Withdraw"} more than 0.`);
-  if (kind === "withdraw" && obligation instanceof klend.VanillaObligation) fail("The treasury has nothing lent on Kamino.");
+  if (raw !== null && raw <= 0n) fail(`${VERB[kind]} more than 0.`);
+  const vanilla = obligation instanceof klend.VanillaObligation;
+  if (kind === "withdraw" && vanilla) fail("The treasury has nothing lent on Kamino.");
+  if (kind === "borrow" && vanilla) fail("The treasury has no collateral on Kamino: lend something with `kamino-deposit` first.");
+  const debt = vanilla ? undefined : obligation.getBorrowByReserve(a.reserve.address);
+  if (kind === "repay" && !debt) fail(`The treasury owes Kamino no ${a.label}.`);
   const action = await kaminoAction(c, m, kind, a, obligation, all ? klend.U64_MAX : raw.toString());
   const own = v.tokenAccount(a.mint, c.d.treasury, a.programId);
   const ixs = [createAssociatedTokenAccountIdempotentInstruction(c.d.treasury, own, c.d.treasury, a.mint, a.programId)];
-  if (kind === "deposit" && a.isSol) ixs.push(SystemProgram.transfer({ fromPubkey: c.d.treasury, toPubkey: own, lamports: raw }), createSyncNativeInstruction(own));
+  // SOL paid in goes as wrapped SOL. Repaying all of a SOL loan wraps the debt plus 0.1% and 0.001 SOL for interest until execution; Kamino takes what's owed and the rest comes back when the account closes.
+  let wrap = 0n;
+  if (a.isSol && kind === "deposit") wrap = raw;
+  if (a.isSol && kind === "repay") wrap = all ? BigInt(debt.amount.ceil().toFixed(0)) * 1001n / 1000n + 1_000_000n : raw;
+  if (wrap > 0n) ixs.push(SystemProgram.transfer({ fromPubkey: c.d.treasury, toPubkey: own, lamports: wrap }), createSyncNativeInstruction(own));
   ixs.push(...actionIxs(action));
   if (a.isSol) ixs.push(createCloseAccountInstruction(own, c.d.treasury, c.d.treasury));
   if (ixs.length > proposalLimit(c.model)) fail(`This ${kind} needs ${ixs.length} instructions (refreshing every reserve the treasury's Kamino account uses), more than one proposal holds (${proposalLimit(c.model)}).`);
-  return { a, raw, all, ixs };
+  return { a, raw, all, ixs, wrap, debt, obligation };
+}
+
+/** The obligation's standing in USD, as Kamino's SDK reports it: what it owes, what it may borrow, and where it's liquidated. */
+function standing(obligation) {
+  const s = obligation?.refreshedStats;
+  if (!s) return "";
+  const usd = (d) => `$${Number(d.toFixed(2)).toLocaleString("en-US")}`;
+  return ` The treasury owes ${usd(s.userTotalBorrowBorrowFactorAdjusted)} on Kamino now, may borrow up to ${usd(s.borrowLimit)} against its collateral, and is liquidated past ${usd(s.borrowLiquidationLimit)} (all at today's prices).`;
 }
 
 export const actions = {
@@ -148,6 +168,42 @@ export const actions = {
         instructions: ixs.map(v.stored),
         budget: a.isSol ? [{ mint: v.SOL_ASSET, amount: raw + rent }] : [{ mint: a.mint, amount: raw }, { mint: v.SOL_ASSET, amount: rent }],
         summary: `lend ${v.formatUnits(raw, a.decimals)} ${a.label} in Kamino's main market`,
+      };
+    },
+  },
+
+  "kamino-borrow": {
+    models: "all",
+    args: [
+      { name: "<asset>", about: "`sol`, `usdc`, or a token's mint address" },
+      { name: "<amount>", about: "how much to borrow, e.g. 100" },
+    ],
+    about: "Borrow a token in Kamino's main market against what the treasury has lent there (its collateral). If the collateral falls far enough in value, Kamino liquidates part of it.",
+    async build(c) {
+      const { a, raw, ixs, obligation } = await build(c, "borrow", c.args);
+      return {
+        instructions: ixs.map(v.stored),
+        budget: [{ mint: v.SOL_ASSET, amount: BigInt(await v.tokenAccountRent(c.network)) }],
+        summary: `borrow ${v.formatUnits(raw, a.decimals)} ${a.label} from Kamino's main market against the treasury's collateral.${standing(obligation)}`,
+      };
+    },
+  },
+
+  "kamino-repay": {
+    models: "all",
+    args: [
+      { name: "<asset>", about: "the borrowed token: `sol`, `usdc`, or a mint address" },
+      { name: "<amount|all>", about: "how much to repay, or `all` (the whole loan with its interest)" },
+    ],
+    about: "Repay a Kamino borrow from the treasury.",
+    async build(c) {
+      const { a, raw, all, ixs, wrap, debt } = await build(c, "repay", c.args);
+      // Spent: the amount, or for `all` the debt with room for interest (for SOL, what's wrapped).
+      const bound = a.isSol ? wrap : all ? BigInt(debt.amount.ceil().toFixed(0)) * 1001n / 1000n + 1n : raw;
+      return {
+        instructions: ixs.map(v.stored),
+        budget: [{ mint: a.isSol ? v.SOL_ASSET : a.mint, amount: bound }],
+        summary: all ? `repay the treasury's whole ${a.label} loan on Kamino (about ${v.formatUnits(BigInt(debt.amount.ceil().toFixed(0)), a.decimals)} ${a.label} now, with interest)` : `repay ${v.formatUnits(raw, a.decimals)} ${a.label} of the treasury's Kamino loan`,
       };
     },
   },

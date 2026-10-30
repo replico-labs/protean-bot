@@ -41,7 +41,7 @@ const ORACLE_OWNERS = new Set([
 export const ORACLE_REFRESH_MS = 10_000;
 const SLOTS_PER_SECOND = 2.5;
 /** Methods passed to mainnet unchanged when the fork doesn't serve them (reads only). */
-const PASS_THROUGH = new Set(["getTokenAccountsByOwner", "getTokenLargestAccounts", "getInflationReward", "getVoteAccounts", "getSupply", "getClusterNodes", "getLeaderSchedule", "getStakeMinimumDelegation"]);
+const PASS_THROUGH = new Set(["getTokenLargestAccounts", "getInflationReward", "getVoteAccounts", "getSupply", "getClusterNodes", "getLeaderSchedule", "getStakeMinimumDelegation"]);
 
 const b64 = (u8) => Buffer.from(u8).toString("base64");
 const fromB64 = (s) => new Uint8Array(Buffer.from(s, "base64"));
@@ -376,6 +376,26 @@ export async function startFork({ remoteUrl, port = 8899, log = () => {} }) {
     async getProgramAccounts([program, cfg = {}]) {
       const list = await programAccounts(program, cfg);
       return cfg.withContext ? { context: context(), value: list } : list;
+    },
+    // Mainnet's accounts for the owner, as the fork has them, plus the ones created here.
+    async getTokenAccountsByOwner([owner, filter = {}, cfg = {}]) {
+      const res = await remote("getTokenAccountsByOwner", [owner, filter, { ...cfg, encoding: "base64" }]);
+      const programs = filter.programId ? [filter.programId] : [...TOKEN_PROGRAMS];
+      const out = new Map();
+      for (const { pubkey, account } of res.value) {
+        if (dirty.has(pubkey)) continue;
+        if (!fetchedAt.has(pubkey)) store(pubkey, account);
+        out.set(pubkey, encodeAccount(read(pubkey), cfg));
+      }
+      for (const program of programs) {
+        for (const a of vm.getProgramAccounts(address(program))) {
+          if (a.data.length < 165 || bs58.encode(a.data.slice(32, 64)) !== owner) continue;
+          if (filter.mint && bs58.encode(a.data.slice(0, 32)) !== filter.mint) continue;
+          out.set(a.address, encodeAccount({ ...a, exists: true }, cfg));
+        }
+      }
+      for (const k of [...out.keys()]) if (!read(k).exists) out.delete(k);
+      return { context: context(), value: [...out].map(([pubkey, account]) => ({ pubkey, account })) };
     },
     async getTokenAccountBalance([k]) {
       await ensure([k]);
