@@ -66,7 +66,7 @@ async function loadMarket(c, word) {
   await requireProgram(c.network, dep.program, "Kamino Lend's program");
   const address = !word || String(word).toLowerCase() === "main" ? dep.market : key(word, "the Kamino market (`main` or a market's address)");
   const main = address.equals(dep.market);
-  const label = main ? "Kamino's main market" : `Kamino market \`${address.toBase58()}\``;
+  const label = main ? "Kamino's primary market" : `Kamino market \`${address.toBase58()}\``;
   await requireOwned(c.network, address, dep.program, label);
   const rpc = kit.createSolanaRpc(c.network.rpcUrl);
   const id = `${c.network.id}:${address.toBase58()}`;
@@ -84,7 +84,10 @@ async function loadMarket(c, word) {
 async function asset(c, m, word) {
   const w = String(word ?? "").toLowerCase();
   const mint = w === "sol" ? NATIVE_MINT : w === "usdc" ? m.dep.usdc : key(word, "the token's mint");
-  const reserve = [...m.market.reserves.values()].find((r) => r.getLiquidityMint() === mint.toBase58() && r.getKind() instanceof klend.FloatRateReserveKind);
+  // A market can hold several reserves for a token: an obsolete one (config status 1, refused with ReserveObsolete 6082) is skipped, and an active one (0) is taken before a hidden one (2).
+  const reserve = [...m.market.reserves.values()]
+    .filter((r) => r.getLiquidityMint() === mint.toBase58() && r.getKind() instanceof klend.FloatRateReserveKind && r.state.config.status !== 1)
+    .sort((x, y) => x.state.config.status - y.state.config.status)[0];
   if (!reserve) fail(`${m.label} has no reserve for ${w === "sol" || w === "usdc" ? w.toUpperCase() : `\`${mint.toBase58()}\``}.`);
   const { decimals, programId } = await v.mintInfo(c.network, mint);
   return { mint, decimals, programId, reserve, isSol: mint.equals(NATIVE_MINT), label: reserve.symbol || mint.toBase58() };
@@ -169,7 +172,7 @@ export const actions = {
     args: [
       { name: "<asset>", about: "`sol`, `usdc`, or a token's mint address" },
       { name: "<amount>", about: "how much to lend, e.g. 500" },
-      { name: "<market>", about: "`main` (Kamino's main market) or another Kamino lending market's address" },
+      { name: "<market>", about: "`main` (Kamino's primary market, which its API names the SOL/BTC Market) or another Kamino lending market's address" },
     ],
     about: "Lend a token from the treasury in a Kamino market (`main` or another named by address) for interest (held as collateral in the treasury's own obligation; nothing is borrowed).",
     async build(c) {
@@ -189,7 +192,7 @@ export const actions = {
     args: [
       { name: "<asset>", about: "`sol`, `usdc`, or a token's mint address" },
       { name: "<amount>", about: "how much to borrow, e.g. 100" },
-      { name: "<market>", about: "`main` (Kamino's main market) or another Kamino lending market's address" },
+      { name: "<market>", about: "`main` (Kamino's primary market, which its API names the SOL/BTC Market) or another Kamino lending market's address" },
     ],
     about: "Borrow a token in a Kamino market (`main` or another named by address) against what the treasury has lent there (its collateral). If the collateral falls far enough in value, Kamino liquidates part of it.",
     async build(c) {
@@ -207,7 +210,7 @@ export const actions = {
     args: [
       { name: "<asset>", about: "the borrowed token: `sol`, `usdc`, or a mint address" },
       { name: "<amount|all>", about: "how much to repay, or `all` (the whole loan with its interest)" },
-      { name: "<market>", about: "`main` (Kamino's main market) or another Kamino lending market's address" },
+      { name: "<market>", about: "`main` (Kamino's primary market, which its API names the SOL/BTC Market) or another Kamino lending market's address" },
     ],
     about: "Repay a Kamino borrow from the treasury.",
     async build(c) {
@@ -227,7 +230,7 @@ export const actions = {
     args: [
       { name: "<asset>", about: "`sol`, `usdc`, or a token's mint address" },
       { name: "<amount|all>", about: "how much to take back, or `all`" },
-      { name: "<market>", about: "`main` (Kamino's main market) or another Kamino lending market's address" },
+      { name: "<market>", about: "`main` (Kamino's primary market, which its API names the SOL/BTC Market) or another Kamino lending market's address" },
     ],
     about: "Withdraw a token the treasury lent in a Kamino market (`main` or another named by address), with its interest.",
     async build(c) {

@@ -62,8 +62,9 @@ async function asset(c, word) {
   const dep = deployment(protocol, c.network);
   const w = String(word ?? "").toLowerCase();
   const mint = w === "sol" ? NATIVE_MINT : w === "usdc" ? dep.usdc : key(word, "the token's mint");
+  const named = mint.equals(NATIVE_MINT) ? "SOL" : mint.equals(dep.usdc) ? "USDC" : null;
   const { decimals, programId } = await v.mintInfo(c.network, mint);
-  return { dep, mint, decimals, programId, isSol: mint.equals(NATIVE_MINT), label: w === "sol" ? "SOL" : w === "usdc" ? "USDC" : `of token \`${mint.toBase58()}\`` };
+  return { dep, mint, decimals, programId, isSol: mint.equals(NATIVE_MINT), label: named ?? `of token \`${mint.toBase58()}\`` };
 }
 
 /** The asset's Jupiter Lend market for the treasury, or a refusal if it has none. */
@@ -98,8 +99,9 @@ async function vaultsProgram(c) {
 async function requireBorrowable(c, debt) {
   const liquidity = getLiquidityProgram({ connection: c.network.connection, signer: c.d.treasury, market: MARKET });
   const reserve = await liquidity.account.tokenReserve.fetchNullable(borrowPda.getLiquidityReserve(debt.mint, MARKET));
-  if (!reserve) fail(`Jupiter Lend has no pool for ${debt.label}.`);
-  if (reserve.lastUtilization >= reserve.maxUtilization) fail(`Jupiter Lend's ${debt.label} pool is at its utilization cap (${reserve.lastUtilization / 100}% used of ${reserve.maxUtilization / 100}%), so nothing can be borrowed from it until lenders add ${debt.label} or borrowers repay.`);
+  const name = debt.label.replace(/^of /, "");
+  if (!reserve) fail(`Jupiter Lend has no pool for ${name}.`);
+  if (reserve.lastUtilization >= reserve.maxUtilization) fail(`Jupiter Lend's pool for ${name} is at its utilization cap (${reserve.lastUtilization / 100}% used of ${reserve.maxUtilization / 100}%), so nothing can be borrowed from it until lenders add more or borrowers repay.`);
 }
 
 async function vaultFor(program, col, debt) {
