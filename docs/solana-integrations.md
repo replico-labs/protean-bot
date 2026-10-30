@@ -240,6 +240,16 @@ local test to run next.
 
 Most of these run on mainnet only. Testing doesn't need mainnet funds:
 
+- **The hub test** (`scripts/test-hub-mainnet-fork.mjs`, built): every
+  integration as a proposal a board DAO passes and its Treasury executes
+  through the hub, on a mainnet fork in LiteSVM
+  (`scripts/lib/mainnetFork.mjs`). The fork copies accounts and programs
+  from a mainnet RPC as they're used and serves them as an RPC, so the bot
+  runs unchanged: its commands propose, the timelock passes in real time,
+  `execute` runs them, and each step's result is checked (balances, the
+  Phoenix subaccount, the fill keeper's fill). Needs the Vortexes build
+  (`VORTEXES_DEPLOY_DIR`) and a mainnet RPC; the header lists the options.
+  `scripts/test-mainnet-fork-rpc.mjs` checks the fork itself offline.
 - **A local validator forked from mainnet:** `solana-test-validator` with
   `--clone-upgradeable-program <id> --url mainnet-beta` (and `--clone` for
   the markets, pools and mints a test touches), or Surfpool, which forks
