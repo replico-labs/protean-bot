@@ -228,10 +228,10 @@ if they swap.
 | Marinade | `marinade-stake`, `marinade-unstake` | legacy | through the hub on a mainnet fork |
 | Jupiter Lend | `juplend-deposit`, `juplend-withdraw` | v1 | through the hub on a mainnet fork |
 | Pump.fun | `pumpfun-buy`, `pumpfun-sell` | legacy (the operator opens the coin account first) | through the hub on a mainnet fork |
-| Kamino Lend | `kamino-deposit`, `kamino-withdraw` (main market) | v1; a first SOL deposit is about 10 instructions | deposit by mainnet simulation; the hub run hit the old 8-instruction limit (now 16), to re-run |
+| Kamino Lend | `kamino-deposit`, `kamino-withdraw` (main market) | v1; a first SOL deposit is about 10 instructions | through the hub on a mainnet fork (a first deposit with its setup, then withdraw all) |
 | Tensor | `tensor-buy`, `tensor-list`, `tensor-delist` (token-metadata NFTs, programmable included) | v1 for a buy (944 bytes); list and delist fit legacy | through the hub on a mainnet fork (a programmable NFT) |
 | Jupiter (fill orders) | `jup-swap`, `jup-cancel` | legacy (v1 when selling SOL, which is wrapped first) | `jup-swap` through the hub on a mainnet fork, filled by the keeper |
-| Phoenix perps | `/desk` (`phoenix-appoint`, `phoenix-fund`, `phoenix-withdraw`, `phoenix-remove`) | v1 for appoint (new subaccount), fund, withdraw | LiteSVM with Phoenix's programs (`scripts/test-phoenix-flow.mjs`, 23 checks); the hub run stopped at registration (a fork bug, fixed), to re-run |
+| Phoenix perps | `/desk` (`phoenix-appoint`, `phoenix-fund`, `phoenix-withdraw`, `phoenix-remove`) | v1 for appoint (new subaccount), fund, withdraw | LiteSVM with Phoenix's programs (`scripts/test-phoenix-flow.mjs`, 23 checks); through the hub on a mainnet fork (register, appoint, fund, withdraw, remove) |
 
 `scripts/simulate-solana-action.mjs` builds any action with a stand-in
 treasury and simulates it on mainnet. `scripts/test-hub-mainnet-fork.mjs`
