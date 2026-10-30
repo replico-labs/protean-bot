@@ -230,7 +230,6 @@ if they swap.
 | Pump.fun | `pumpfun-buy`, `pumpfun-sell` | legacy (the operator opens the coin account first) | through the hub on a mainnet fork |
 | Kamino Lend | `kamino-deposit`, `kamino-withdraw`, `kamino-borrow`, `kamino-repay` (main market) | v1; a first SOL deposit is about 10 instructions | deposit and withdraw through the hub on a mainnet fork; borrowing added to the hub test, to run |
 | Tensor | `tensor-buy`, `tensor-list`, `tensor-delist` (token-metadata NFTs, programmable included) | v1 for a buy (944 bytes); list and delist fit legacy | through the hub on a mainnet fork (a programmable NFT) |
-| Magic Eden | not built | | M2 (github.com/magicoss/m2) checks its notary's signature on trades where the marketplace sets `requiresNotary` (on `nprob`% of them); a proposal can't carry Magic Eden's signature. `scripts/check-magic-eden.mjs` reads the mainnet settings |
 | Jupiter (fill orders) | `jup-swap`, `jup-cancel` | legacy (v1 when selling SOL, which is wrapped first) | `jup-swap` through the hub on a mainnet fork, filled by the keeper |
 | Phoenix perps | `/desk` (`phoenix-appoint`, `phoenix-fund`, `phoenix-withdraw`, `phoenix-remove`) | v1 for appoint (new subaccount), fund, withdraw | LiteSVM with Phoenix's programs (`scripts/test-phoenix-flow.mjs`, 23 checks); through the hub on a mainnet fork (register, appoint, fund, withdraw, remove) |
 
