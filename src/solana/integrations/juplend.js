@@ -47,14 +47,15 @@ export const protocol = {
   deployments: {
     "solana-mainnet": {
       lending: "jup3YeL8QhtSx1e253b2FDvsMNC87fDrgQZivbrndc9",
-      // Vaults (borrowing), as @jup-ag/lend/borrow's getVaultsProgramId("main") names it; checked against the SDK below.
-      vaults: "jupr81YtYssSyPt8jbnGuiWon5f6x9TcDEFxYe3Bdzi",
+      // Vaults (borrowing) per Jupiter Lend market, as @jup-ag/lend/borrow's getVaultsProgramId names them (its PROGRAM_IDS.vaults); checked against the SDK below.
+      vaults: { main: "jupr81YtYssSyPt8jbnGuiWon5f6x9TcDEFxYe3Bdzi", ethena: "jupo974WCqAUMD3RtpayTap1me7StQCWtEkBbDb6Ba3", galaxy: "jupGzLGoLzW1xac45pxMa6fMBtDSyQu4DxLk9F7Tqch" },
       // USDC's mint, as Phoenix's SDK pins it (rise-public rust/ix/src/constants.rs), for the `usdc` shortcut.
       usdc: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
     },
   },
 };
 
+// Lending (Earn) is in Jupiter Lend's main market; borrowing names its market (below).
 const MARKET = "main";
 
 /** `sol`, `usdc` or a mint address -> { mint, decimals, programId, isSol, label }. */
@@ -81,34 +82,44 @@ async function market(c, a) {
 
 const POSITION_MINT_OFFSET = 8 + 2 + 4; // Position: discriminator, vault_id (u16), nft_id (u32), position_mint
 
-/** The vaults program, read as the treasury, after checking the SDK names the pinned one. */
-async function vaultsProgram(c) {
-  const dep = deployment(protocol, c.network);
-  if (!getVaultsProgramId(MARKET).equals(dep.vaults)) fail("Jupiter Lend's SDK names another vaults program than the pinned one - refusing until that's re-checked.");
-  await requireProgram(c.network, dep.vaults, "Jupiter Lend's vaults program");
-  return getVaultsProgram({ connection: c.network.connection, signer: c.d.treasury, market: MARKET });
+const MARKETS = ["main", "ethena", "galaxy"];
+
+/** A borrowing market's name (`main`, `ethena` or `galaxy`: each its own vaults and liquidity programs). */
+function borrowMarket(word) {
+  const mk = String(word ?? "").toLowerCase();
+  if (!MARKETS.includes(mk)) fail(`Name Jupiter Lend's borrowing market: ${MARKETS.map((m) => `\`${m}\``).join(", ")}.`);
+  return mk;
 }
 
-/** The vault lending `debt` against `col` (a standard one: Jupiter's smart vaults aren't supported). */
+/** Market `mk`'s vaults program, read as the treasury, after checking the SDK names the pinned one. */
+async function vaultsProgram(c, mk) {
+  const dep = deployment(protocol, c.network);
+  const pinned = new anchor.web3.PublicKey(dep.vaults[mk]);
+  if (!getVaultsProgramId(mk).equals(pinned)) fail(`Jupiter Lend's SDK names another vaults program for its ${mk} market than the pinned one - refusing until that's re-checked.`);
+  await requireProgram(c.network, pinned, `Jupiter Lend's vaults program (${mk} market)`);
+  return getVaultsProgram({ connection: c.network.connection, signer: c.d.treasury, market: mk });
+}
+
 /**
  * Refuses a borrow while the token's pool on Jupiter's liquidity layer is
  * at its utilization cap (its TokenReserve's last_utilization against
  * max_utilization, 100% = 10_000): the borrow would fail at execution with
  * USER_MODULE_MAX_UTILIZATION_REACHED (6035).
  */
-async function requireBorrowable(c, debt) {
-  const liquidity = getLiquidityProgram({ connection: c.network.connection, signer: c.d.treasury, market: MARKET });
-  const reserve = await liquidity.account.tokenReserve.fetchNullable(borrowPda.getLiquidityReserve(debt.mint, MARKET));
+async function requireBorrowable(c, debt, mk) {
+  const liquidity = getLiquidityProgram({ connection: c.network.connection, signer: c.d.treasury, market: mk });
+  const reserve = await liquidity.account.tokenReserve.fetchNullable(borrowPda.getLiquidityReserve(debt.mint, mk));
   const name = debt.label.replace(/^of /, "");
-  if (!reserve) fail(`Jupiter Lend has no pool for ${name}.`);
-  if (reserve.lastUtilization >= reserve.maxUtilization) fail(`Jupiter Lend's pool for ${name} is at its utilization cap (${reserve.lastUtilization / 100}% used of ${reserve.maxUtilization / 100}%), so nothing can be borrowed from it until lenders add more or borrowers repay.`);
+  if (!reserve) fail(`Jupiter Lend's ${mk} market has no pool for ${name}.`);
+  if (reserve.lastUtilization >= reserve.maxUtilization) fail(`Jupiter Lend's pool for ${name} (${mk} market) is at its utilization cap (${reserve.lastUtilization / 100}% used of ${reserve.maxUtilization / 100}%), so nothing can be borrowed from it until lenders add more or borrowers repay.`);
 }
 
-async function vaultFor(program, col, debt) {
+/** The vault lending `debt` against `col` (a standard one: Jupiter's smart vaults aren't supported). */
+async function vaultFor(program, col, debt, mk) {
   const configs = await program.account.vaultConfig.all();
   // Standard vaults only, as the SDK's operate builder takes them (it refuses smart vaults; older standard vaults aren't all type 1).
   const found = configs.find(({ account: v }) => !isDexVault(Number(v.vaultType)) && v.supplyToken.equals(col.mint) && v.borrowToken.equals(debt.mint));
-  if (!found) fail(`Jupiter Lend has no vault lending ${debt.label} against ${col.label} (of the ${configs.length} vaults it has).`);
+  if (!found) fail(`Jupiter Lend's ${mk} market has no vault lending ${debt.label} against ${col.label} (of the ${configs.length} vaults it has).`);
   return Number(found.account.vaultId);
 }
 
@@ -127,10 +138,10 @@ async function positionOf(c, program, vaultId) {
 }
 
 /** Opens position `nftId` in vault `vaultId` as the operator and hands its NFT to the treasury, in one transaction. */
-function openPosition(c, vaultId, nftId) {
+function openPosition(c, vaultId, nftId, mk) {
   return async ({ operator, send }) => {
-    const program = getVaultsProgram({ connection: c.network.connection, signer: operator, market: MARKET });
-    const accounts = getInitPositionContext(vaultId, nftId, operator, MARKET);
+    const program = getVaultsProgram({ connection: c.network.connection, signer: operator, market: mk });
+    const accounts = getInitPositionContext(vaultId, nftId, operator, mk);
     const init = await program.methods.initPosition(vaultId, nftId).accounts(accounts).instruction();
     const theirs = v.tokenAccount(accounts.positionMint, c.d.treasury);
     await send([
@@ -239,20 +250,22 @@ export const actions = {
       { name: "<amount>", about: "collateral to add from the treasury (0 for none)" },
       { name: "<borrow>", about: "the token to borrow: `sol`, `usdc`, or a mint address" },
       { name: "<amount>", about: "how much to borrow (0 for none)" },
+      { name: "<market>", about: "Jupiter Lend's borrowing market: `main`, `ethena` or `galaxy`" },
     ],
     about: "Borrow on Jupiter Lend against collateral from the treasury (its vault for that pair). The bot opens the treasury's position the first time. If the collateral falls far enough in value, Jupiter Lend liquidates part of it.",
     async build(c) {
-      const program = await vaultsProgram(c);
+      const mk = borrowMarket(c.args[4]);
+      const program = await vaultsProgram(c, mk);
       const col = await asset(c, c.args[0]);
       const debt = await asset(c, c.args[2]);
       const colRaw = amountOf(col, c.args[1], "the collateral");
       const debtRaw = amountOf(debt, c.args[3], "the amount to borrow");
       if (colRaw === 0n && debtRaw === 0n) fail("Add collateral, borrow, or both.");
-      if (debtRaw > 0n) await requireBorrowable(c, debt);
-      const vaultId = await vaultFor(program, col, debt);
+      if (debtRaw > 0n) await requireBorrowable(c, debt, mk);
+      const vaultId = await vaultFor(program, col, debt, mk);
       const pos = await positionOf(c, program, vaultId);
       if (!pos && colRaw === 0n) fail(`The treasury has no ${col.label}/${debt.label} position on Jupiter Lend yet: add collateral with the first borrow.`);
-      const r = await getOperateIx({ vaultId, positionId: pos?.nftId ?? 0, colAmount: bn(colRaw), debtAmount: bn(debtRaw), connection: c.network.connection, signer: c.d.treasury, market: MARKET });
+      const r = await getOperateIx({ vaultId, positionId: pos?.nftId ?? 0, colAmount: bn(colRaw), debtAmount: bn(debtRaw), connection: c.network.connection, signer: c.d.treasury, market: mk });
       // A new position's init is the SDK's first instruction, signed by the treasury: the bot opens it instead (prepare).
       const sdkIxs = pos ? r.ixs : r.ixs.slice(1);
       const ixs = operateIxs(c, col, debt, sdkIxs, col.isSol ? colRaw : 0n);
@@ -261,8 +274,8 @@ export const actions = {
       return {
         instructions: ixs.map(v.stored),
         budget: col.isSol ? [{ mint: v.SOL_ASSET, amount: colRaw + rent }] : [...(colRaw > 0n ? [{ mint: col.mint, amount: colRaw }] : []), { mint: v.SOL_ASSET, amount: rent }],
-        summary: `${parts.join(" and ")} on Jupiter Lend (vault ${vaultId}, ${pos ? `the treasury's position #${pos.nftId}` : `a new position #${r.nftId}, opened by the bot and held by the treasury`}); if ${col.label} falls far enough against ${debt.label}, part of the collateral is liquidated`,
-        prepare: pos ? undefined : openPosition(c, vaultId, r.nftId),
+        summary: `${parts.join(" and ")} on Jupiter Lend (${mk} market, vault ${vaultId}, ${pos ? `the treasury's position #${pos.nftId}` : `a new position #${r.nftId}, opened by the bot and held by the treasury`}); if ${col.label} falls far enough against ${debt.label}, part of the collateral is liquidated`,
+        prepare: pos ? undefined : openPosition(c, vaultId, r.nftId, mk),
       };
     },
   },
@@ -274,13 +287,15 @@ export const actions = {
       { name: "<borrow>", about: "the position's borrowed token" },
       { name: "<repay|all>", about: "how much to repay, `all`, or 0" },
       { name: "<withdraw|all>", about: "collateral to take back, `all`, or 0" },
+      { name: "<market>", about: "the position's market: `main`, `ethena` or `galaxy`" },
     ],
     about: "Repay a Jupiter Lend borrow from the treasury and/or take collateral back.",
     async build(c) {
-      const program = await vaultsProgram(c);
+      const mk = borrowMarket(c.args[4]);
+      const program = await vaultsProgram(c, mk);
       const col = await asset(c, c.args[0]);
       const debt = await asset(c, c.args[1]);
-      const vaultId = await vaultFor(program, col, debt);
+      const vaultId = await vaultFor(program, col, debt, mk);
       const pos = await positionOf(c, program, vaultId);
       if (!pos) fail(`The treasury has no ${col.label}/${debt.label} position on Jupiter Lend.`);
       const repayAll = String(c.args[2]).toLowerCase() === "all";
@@ -298,7 +313,7 @@ export const actions = {
         debtAmountMode: repayAll ? "max" : "exact",
         connection: c.network.connection,
         signer: c.d.treasury,
-        market: MARKET,
+        market: mk,
       });
       const ixs = operateIxs(c, col, debt, r.ixs, debt.isSol ? repayRaw : 0n);
       // Spent: the repayment (for `all`, at most what the treasury holds of the token).
@@ -307,7 +322,7 @@ export const actions = {
       return {
         instructions: ixs.map(v.stored),
         budget: held > 0n ? [{ mint: debt.isSol ? v.SOL_ASSET : debt.mint, amount: held }] : [],
-        summary: `${parts.join(" and ")} on Jupiter Lend (vault ${vaultId}, the treasury's position #${pos.nftId})`,
+        summary: `${parts.join(" and ")} on Jupiter Lend (${mk} market, vault ${vaultId}, the treasury's position #${pos.nftId})`,
       };
     },
   },
