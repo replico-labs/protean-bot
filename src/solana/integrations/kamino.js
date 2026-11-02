@@ -100,6 +100,24 @@ async function obligationOf(c, m) {
   return (await m.market.getObligationByAddress(pda)) ?? type;
 }
 
+/**
+ * Refuses a borrow the reserve has no room for: its borrow limit less what's
+ * borrowed (with interest), and outside an elevation group its limit for
+ * that less what's borrowed outside one. Kamino's program panics on the
+ * second (a subtraction overflow in lending_checks.rs) instead of failing
+ * with an error.
+ */
+function requireBorrowRoom(m, a, raw, obligation) {
+  const st = a.reserve.state;
+  const fmt = (n) => v.formatUnits(n < 0n ? 0n : n, a.decimals);
+  const borrowed = BigInt(st.liquidity.borrowedAmountSf.toString()) >> 60n;
+  const room = BigInt(st.config.borrowLimit.toString()) - borrowed;
+  if (room < raw) fail(`${m.label}'s ${a.label} reserve has ${fmt(room)} ${a.label} of room under its borrow limit, less than the ${fmt(raw)} asked.`);
+  if (obligation.state.elevationGroup !== 0) return;
+  const outside = BigInt(st.config.borrowLimitOutsideElevationGroup.toString()) - BigInt(st.borrowedAmountOutsideElevationGroup.toString());
+  if (outside < raw) fail(`${m.label}'s ${a.label} reserve has ${fmt(outside)} ${a.label} of room for borrowing outside an elevation group (Kamino's correlated-asset mode), less than the ${fmt(raw)} asked: its cap is ${fmt(BigInt(st.config.borrowLimitOutsideElevationGroup.toString()))} and ${fmt(BigInt(st.borrowedAmountOutsideElevationGroup.toString()))} is borrowed that way.`);
+}
+
 /** A KaminoAction's instructions in order, minus compute budget (the transaction sets it) and the SDK's ATA creation (done here). */
 function actionIxs(action) {
   return [...action.setupIxs, ...action.inBetweenIxs, ...action.lendingIxs, ...action.postLendingIxs, ...action.cleanupIxs].map(fromKit);
@@ -142,6 +160,7 @@ async function build(c, kind, words) {
   if (kind === "borrow" && m.market.state.borrowDisabled) fail(`Kamino has turned borrowing off in ${m.label.replace(/^Kamino's /, "its ")}${m.market.getAddress() === m.dep.market.toBase58() ? "; another Kamino market can be named by its address instead of \`main\`" : ""}.`);
   // Kamino's flag on the obligation itself: it blocks borrowing outside an elevation group (Kamino's correlated-asset mode).
   if (kind === "borrow" && obligation.state.borrowingDisabled && obligation.state.elevationGroup === 0) fail("Kamino has borrowing turned off for the treasury's Kamino account (its obligation's borrowing_disabled flag), outside an elevation group.");
+  if (kind === "borrow") requireBorrowRoom(m, a, raw, obligation);
   const debt = vanilla ? undefined : obligation.getBorrowByReserve(a.reserve.address);
   if (kind === "repay" && !debt) fail(`The treasury owes ${m.label} no ${a.label}.`);
   const action = await kaminoAction(c, m, kind, a, obligation, all ? klend.U64_MAX : raw.toString());
@@ -238,7 +257,7 @@ export const actions = {
       return {
         instructions: ixs.map(v.stored),
         budget: [],
-        summary: all ? `withdraw everything the treasury lent in ${m.label} in ${a.label}, with interest` : `withdraw ${v.formatUnits(raw, a.decimals)} ${a.label} from ${m.label}`,
+        summary: all ? `withdraw all the ${a.label} the treasury lent in ${m.label}, with interest` : `withdraw ${v.formatUnits(raw, a.decimals)} ${a.label} from ${m.label}`,
       };
     },
   },

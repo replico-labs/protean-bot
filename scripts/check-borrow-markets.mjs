@@ -5,8 +5,9 @@
  *
  * Kamino: each market Kamino's API lists (api.kamino.finance/v2/
  * kamino-market), with whether borrowing is on (the market's
- * borrow_disabled), whether its USDC reserve lends 20 USDC (active, with a
- * borrow limit outside elevation groups and that much left), and if so
+ * borrow_disabled), whether its USDC reserve lends 20 USDC (active, with
+ * that much cash, room under its borrow limit and under its limit outside
+ * elevation groups), and if so
  * the tokens that back a loan there as collateral (active, loan-to-value
  * above 0, usable outside an elevation group, room under the deposit
  * limit), with an amount worth enough to borrow 20 USDC.
@@ -69,8 +70,12 @@ if (ONLY !== "juplend") {
     const usdc = reserves.find((r) => r.state.liquidity.mintPubkey.toString() === USDC);
     const borrowOn = market.borrowDisabled === 0;
     const left = usdc ? BigInt(usdc.state.liquidity.totalAvailableAmount.toString()) : 0n;
-    const usdcOpen = borrowOn && usdc && usdc.state.config.status === 0 && !usdc.state.config.borrowLimit.isZero() && BigInt(usdc.state.config.borrowLimitOutsideElevationGroup.toString()) >= 20_000_000n && left >= 20_000_000n;
-    console.log(`${entry.name} (${entry.lendingMarket})\n  borrowing ${borrowOn ? "on" : "OFF"}; ${usdc ? `USDC ${STATUS[usdc.state.config.status]}, ${(Number(left) / 1e6).toLocaleString("en-US")} left to borrow${usdc.state.config.borrowLimitOutsideElevationGroup.isZero() ? ", only inside an elevation group" : ""}` : "no USDC"}${usdcOpen ? "" : " - can't borrow 20 USDC"}`);
+    // Room under the borrow limit, and under the limit for borrowing outside an elevation group (what the bot checks too).
+    const limitRoom = usdc ? BigInt(usdc.state.config.borrowLimit.toString()) - (BigInt(usdc.state.liquidity.borrowedAmountSf.toString()) >> 60n) : 0n;
+    const outsideRoom = usdc ? BigInt(usdc.state.config.borrowLimitOutsideElevationGroup.toString()) - BigInt(usdc.state.borrowedAmountOutsideElevationGroup.toString()) : 0n;
+    const roomLeft = [left, limitRoom, outsideRoom].reduce((x, y) => (y < x ? y : x));
+    const usdcOpen = borrowOn && usdc && usdc.state.config.status === 0 && roomLeft >= 20_000_000n;
+    console.log(`${entry.name} (${entry.lendingMarket})\n  borrowing ${borrowOn ? "on" : "OFF"}; ${usdc ? `USDC ${STATUS[usdc.state.config.status]}, ${(Number(roomLeft < 0n ? 0n : roomLeft) / 1e6).toLocaleString("en-US")} left to borrow (cash ${(Number(left) / 1e6).toLocaleString("en-US")}, under the limit ${(Number(limitRoom < 0n ? 0n : limitRoom) / 1e6).toLocaleString("en-US")}, outside elevation groups ${(Number(outsideRoom < 0n ? 0n : outsideRoom) / 1e6).toLocaleString("en-US")})` : "no USDC"}${usdcOpen ? "" : " - can't borrow 20 USDC"}`);
     if (usdcOpen) {
       // Collateral that backs a USDC loan outside an elevation group: active, loan-to-value above 0, room under its deposit limit.
       for (const r of reserves) {

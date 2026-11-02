@@ -58,21 +58,21 @@ export const protocol = {
 // Lending (Earn) is in Jupiter Lend's main market; borrowing names its market (below).
 const MARKET = "main";
 
-/** `sol`, `usdc` or a mint address -> { mint, decimals, programId, isSol, label }. */
+/** `sol`, `usdc` or a mint address -> { mint, decimals, programId, isSol, label (after an amount), name }. */
 async function asset(c, word) {
   const dep = deployment(protocol, c.network);
   const w = String(word ?? "").toLowerCase();
   const mint = w === "sol" ? NATIVE_MINT : w === "usdc" ? dep.usdc : key(word, "the token's mint");
   const named = mint.equals(NATIVE_MINT) ? "SOL" : mint.equals(dep.usdc) ? "USDC" : null;
   const { decimals, programId } = await v.mintInfo(c.network, mint);
-  return { dep, mint, decimals, programId, isSol: mint.equals(NATIVE_MINT), label: named ?? `of token \`${mint.toBase58()}\`` };
+  return { dep, mint, decimals, programId, isSol: mint.equals(NATIVE_MINT), label: named ?? `of token \`${mint.toBase58()}\``, name: named ?? `token \`${mint.toBase58()}\`` };
 }
 
 /** The asset's Jupiter Lend market for the treasury, or a refusal if it has none. */
 async function market(c, a) {
   await requireProgram(c.network, a.dep.lending, "Jupiter Lend's lending program");
   const context = await getDepositContext({ asset: a.mint, signer: c.d.treasury, connection: c.network.connection, market: MARKET }).catch(() => null);
-  if (!context) fail(`Jupiter Lend has no lending market for ${a.label}.`);
+  if (!context) fail(`Jupiter Lend has no lending market for ${a.name}.`);
   const fToken = await v.mintInfo(c.network, context.fTokenMint);
   return { fTokenMint: context.fTokenMint, fTokenProgram: fToken.programId, fTokenAccount: v.tokenAccount(context.fTokenMint, c.d.treasury, fToken.programId) };
 }
@@ -109,7 +109,7 @@ async function vaultsProgram(c, mk) {
 async function requireBorrowable(c, debt, mk) {
   const liquidity = getLiquidityProgram({ connection: c.network.connection, signer: c.d.treasury, market: mk });
   const reserve = await liquidity.account.tokenReserve.fetchNullable(borrowPda.getLiquidityReserve(debt.mint, mk));
-  const name = debt.label.replace(/^of /, "");
+  const name = debt.name;
   if (!reserve) fail(`Jupiter Lend's ${mk} market has no pool for ${name}.`);
   if (reserve.lastUtilization >= reserve.maxUtilization) fail(`Jupiter Lend's pool for ${name} (${mk} market) is at its utilization cap (${reserve.lastUtilization / 100}% used of ${reserve.maxUtilization / 100}%), so nothing can be borrowed from it until lenders add more or borrowers repay.`);
 }
@@ -119,7 +119,7 @@ async function vaultFor(program, col, debt, mk) {
   const configs = await program.account.vaultConfig.all();
   // Standard vaults only, as the SDK's operate builder takes them (it refuses smart vaults; older standard vaults aren't all type 1).
   const found = configs.find(({ account: v }) => !isDexVault(Number(v.vaultType)) && v.supplyToken.equals(col.mint) && v.borrowToken.equals(debt.mint));
-  if (!found) fail(`Jupiter Lend's ${mk} market has no vault lending ${debt.label} against ${col.label} (of the ${configs.length} vaults it has).`);
+  if (!found) fail(`Jupiter Lend's ${mk} market has no vault lending ${debt.name} against ${col.name} (of the ${configs.length} vaults it has).`);
   return Number(found.account.vaultId);
 }
 
@@ -224,7 +224,7 @@ export const actions = {
       const a = await asset(c, c.args[0]);
       const m = await market(c, a);
       const shares = await c.network.connection.getTokenAccountBalance(m.fTokenAccount).then((b) => BigInt(b.value.amount)).catch(() => 0n);
-      if (shares === 0n) fail(`The treasury has nothing lent on Jupiter Lend in ${a.label}.`);
+      if (shares === 0n) fail(`The treasury has nothing lent on Jupiter Lend in ${a.name}.`);
       const all = String(c.args[1]).toLowerCase() === "all";
       const raw = all ? null : v.parseUnits(c.args[1], a.decimals);
       if (raw !== null && raw <= 0n) fail("Withdraw more than 0.");
@@ -238,7 +238,7 @@ export const actions = {
         instructions: ixs.map(v.stored),
         // fTokens spent: all of them, or for an amount at most all of them (the bound conviction budgets count).
         budget: [{ mint: m.fTokenMint, amount: shares }],
-        summary: all ? `withdraw everything the treasury lent on Jupiter Lend in ${a.label}, with interest` : `withdraw ${v.formatUnits(raw, a.decimals)} ${a.label} from Jupiter Lend`,
+        summary: all ? `withdraw everything the treasury lent on Jupiter Lend in ${a.name}, with interest` : `withdraw ${v.formatUnits(raw, a.decimals)} ${a.label} from Jupiter Lend`,
       };
     },
   },
@@ -264,7 +264,7 @@ export const actions = {
       if (debtRaw > 0n) await requireBorrowable(c, debt, mk);
       const vaultId = await vaultFor(program, col, debt, mk);
       const pos = await positionOf(c, program, vaultId);
-      if (!pos && colRaw === 0n) fail(`The treasury has no ${col.label}/${debt.label} position on Jupiter Lend yet: add collateral with the first borrow.`);
+      if (!pos && colRaw === 0n) fail(`The treasury has no ${col.name}/${debt.name} position on Jupiter Lend yet: add collateral with the first borrow.`);
       const r = await getOperateIx({ vaultId, positionId: pos?.nftId ?? 0, colAmount: bn(colRaw), debtAmount: bn(debtRaw), connection: c.network.connection, signer: c.d.treasury, market: mk });
       // A new position's init is the SDK's first instruction, signed by the treasury: the bot opens it instead (prepare).
       const sdkIxs = pos ? r.ixs : r.ixs.slice(1);
@@ -274,7 +274,7 @@ export const actions = {
       return {
         instructions: ixs.map(v.stored),
         budget: col.isSol ? [{ mint: v.SOL_ASSET, amount: colRaw + rent }] : [...(colRaw > 0n ? [{ mint: col.mint, amount: colRaw }] : []), { mint: v.SOL_ASSET, amount: rent }],
-        summary: `${parts.join(" and ")} on Jupiter Lend (${mk} market, vault ${vaultId}, ${pos ? `the treasury's position #${pos.nftId}` : `a new position #${r.nftId}, opened by the bot and held by the treasury`}); if ${col.label} falls far enough against ${debt.label}, part of the collateral is liquidated`,
+        summary: `${parts.join(" and ")} on Jupiter Lend (${mk} market, vault ${vaultId}, ${pos ? `the treasury's position #${pos.nftId}` : `a new position #${r.nftId}, opened by the bot and held by the treasury`}); if ${col.name} falls far enough against ${debt.name}, part of the collateral is liquidated`,
         prepare: pos ? undefined : openPosition(c, vaultId, r.nftId, mk),
       };
     },
@@ -297,7 +297,7 @@ export const actions = {
       const debt = await asset(c, c.args[1]);
       const vaultId = await vaultFor(program, col, debt, mk);
       const pos = await positionOf(c, program, vaultId);
-      if (!pos) fail(`The treasury has no ${col.label}/${debt.label} position on Jupiter Lend.`);
+      if (!pos) fail(`The treasury has no ${col.name}/${debt.name} position on Jupiter Lend.`);
       const repayAll = String(c.args[2]).toLowerCase() === "all";
       const withdrawAll = String(c.args[3]).toLowerCase() === "all";
       if (repayAll && debt.isSol) fail("To repay all of a SOL loan, give an amount a little above the debt (the rest comes back to the treasury).");
@@ -318,7 +318,7 @@ export const actions = {
       const ixs = operateIxs(c, col, debt, r.ixs, debt.isSol ? repayRaw : 0n);
       // Spent: the repayment (for `all`, at most what the treasury holds of the token).
       const held = repayAll ? await c.network.connection.getTokenAccountBalance(v.tokenAccount(debt.mint, c.d.treasury, debt.programId)).then((b) => BigInt(b.value.amount)).catch(() => 0n) : repayRaw;
-      const parts = [repayAll ? `repay the whole ${debt.label} loan` : repayRaw > 0n && `repay ${v.formatUnits(repayRaw, debt.decimals)} ${debt.label}`, withdrawAll ? `take back all the ${col.label} collateral` : withdrawRaw > 0n && `take back ${v.formatUnits(withdrawRaw, col.decimals)} ${col.label} of collateral`].filter(Boolean);
+      const parts = [repayAll ? `repay the whole ${debt.name} loan` : repayRaw > 0n && `repay ${v.formatUnits(repayRaw, debt.decimals)} ${debt.label}`, withdrawAll ? `take back all the ${col.name} collateral` : withdrawRaw > 0n && `take back ${v.formatUnits(withdrawRaw, col.decimals)} ${col.label} of collateral`].filter(Boolean);
       return {
         instructions: ixs.map(v.stored),
         budget: held > 0n ? [{ mint: debt.isSol ? v.SOL_ASSET : debt.mint, amount: held }] : [],
