@@ -93,12 +93,16 @@ const bt = await rpc.getBlockTime(slot).send();
 check(slot >= 300_000_000n && Math.abs(Number(bt) - 1_761_000_000) < 10, "kit getSlot/getBlockTime follow mainnet's clock", `${slot} ${bt}`);
 const ka = await rpc.getAccountInfo(address(mint.publicKey.toBase58()), { encoding: "base64" }).send();
 check(ka.value?.owner === X.toBase58(), "kit getAccountInfo");
-// Oracle refresh: re-fetched after 10s if nothing here wrote it.
-await conn.getAccountInfo(oracle);
+// A read doesn't copy an account in: mainnet's changes show until a transaction (ensure) copies it.
+check((await conn.getAccountInfo(oracle)).data[0] === 1, "read before copying: mainnet's");
 oracleVersion = 2;
-check((await conn.getAccountInfo(oracle)).data[0] === 1, "oracle copy kept within 10s");
+check((await conn.getAccountInfo(oracle)).data[0] === 2, "read again: mainnet's latest (reads aren't kept)");
+// Oracle refresh: once copied (as a transaction does), re-fetched after 10s if nothing here wrote it.
+await fork.ensure([oracle.toBase58()]);
+oracleVersion = 3;
+check((await conn.getAccountInfo(oracle)).data[0] === 2, "oracle copy kept within 10s");
 await new Promise((r) => setTimeout(r, 10_500));
-check((await conn.getAccountInfo(oracle)).data[0] === 2, "oracle copy refreshed after 10s");
+check((await conn.getAccountInfo(oracle)).data[0] === 3, "oracle copy refreshed after 10s");
 const cs = await conn.getAccountInfo(new PublicKey("SysvarC1ock11111111111111111111111111111111"));
 check(cs.data.readBigUInt64LE(16) === 700n && cs.data.readBigInt64LE(32) >= 1_761_000_010n, "Clock sysvar: mainnet's epoch, time running");
 // Unverified send: a co-signer that doesn't sign.

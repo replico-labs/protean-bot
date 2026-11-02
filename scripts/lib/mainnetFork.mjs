@@ -218,6 +218,33 @@ export async function startFork({ remoteUrl, port = 8899, log = () => {} }) {
   }
 
   const read = (k) => vm.getAccount(address(k));
+  const asLocal = (acct) => (acct ? { exists: true, data: fromB64(acct.data[0]), executable: Boolean(acct.executable), lamports: BigInt(acct.lamports), programAddress: acct.owner } : { exists: false });
+
+  /**
+   * Accounts as a client reading them sees them: the fork's copy of one it
+   * has (or wrote, or closed), else mainnet's right now, not kept. Only a
+   * transaction copies accounts in (ensure, all its new ones in one
+   * request), so the accounts it copies agree with each other: a Kamino
+   * reserve read while a proposal is built and its token vault copied when
+   * it executes would otherwise come from different moments, and a busy
+   * reserve's books wouldn't match its vault.
+   */
+  async function view(keys) {
+    await ensure(keys.filter(isOracleCopy));
+    const out = new Map();
+    const missing = [];
+    for (const k of new Set(keys)) {
+      const a = read(k);
+      if (a.exists || dirty.has(k)) out.set(k, a);
+      else missing.push(k);
+    }
+    for (let i = 0; i < missing.length; i += 100) {
+      const chunk = missing.slice(i, i + 100);
+      const { value } = await remote("getMultipleAccounts", [chunk, { encoding: "base64", commitment: "confirmed" }]);
+      value.forEach((acct, j) => out.set(chunk[j], asLocal(acct)));
+    }
+    return out;
+  }
   const context = () => ({ slot: Number(now().slot), apiVersion: "fork" });
 
   function matches(data, filters = []) {
@@ -234,17 +261,16 @@ export async function startFork({ remoteUrl, port = 8899, log = () => {} }) {
 
   async function programAccounts(program, cfg = {}) {
     if (!localPrograms.has(program)) {
+      // Mainnet's (not kept: see view), except where the fork has its own copy, plus the fork's own that match.
       const res = await remote("getProgramAccounts", [program, { ...cfg, encoding: "base64", withContext: false }]);
       const list = Array.isArray(res) ? res : res.value;
-      if (!cfg.dataSlice) {
-        for (const { pubkey, account } of list) if (!fetchedAt.has(pubkey) && !dirty.has(pubkey)) store(pubkey, account);
-      } else {
-        // Sliced: mainnet's slices, except where the fork's copy differs.
-        const out = new Map(list.map((r) => [r.pubkey, r.account]));
-        for (const a of vm.getProgramAccounts(address(program))) if (dirty.has(a.address)) out.delete(a.address);
-        for (const a of vm.getProgramAccounts(address(program))) if (matches(a.data, cfg.filters)) out.set(a.address, encodeAccount({ ...a, exists: true }, cfg));
-        return [...out].map(([pubkey, account]) => ({ pubkey, account }));
+      const out = new Map(list.map((r) => [r.pubkey, cfg.dataSlice ? r.account : encodeAccount(asLocal(r.account), cfg)]));
+      for (const k of [...out.keys()]) if (dirty.has(k) && !read(k).exists) out.delete(k);
+      for (const a of vm.getProgramAccounts(address(program))) {
+        if (matches(a.data, cfg.filters)) out.set(a.address, encodeAccount({ ...a, exists: true }, cfg));
+        else out.delete(a.address);
       }
+      return [...out].map(([pubkey, account]) => ({ pubkey, account }));
     }
     return vm
       .getProgramAccounts(address(program))
@@ -361,16 +387,15 @@ export async function startFork({ remoteUrl, port = 8899, log = () => {} }) {
     getMinimumBalanceForRentExemption: ([size]) => Number(vm.minimumBalanceForRentExemption(BigInt(size))),
     getSignaturesForAddress: () => [],
     async getAccountInfo([k, cfg]) {
-      await ensure([k]);
-      return { context: context(), value: encodeAccount(read(k), cfg) };
+      const v = await view([k]);
+      return { context: context(), value: encodeAccount(v.get(k), cfg) };
     },
     async getMultipleAccounts([ks, cfg]) {
-      await ensure(ks);
-      return { context: context(), value: ks.map((k) => encodeAccount(read(k), cfg)) };
+      const v = await view(ks);
+      return { context: context(), value: ks.map((k) => encodeAccount(v.get(k), cfg)) };
     },
     async getBalance([k]) {
-      await ensure([k]);
-      const a = read(k);
+      const a = (await view([k])).get(k);
       return { context: context(), value: a.exists ? Number(a.lamports) : 0 };
     },
     async getProgramAccounts([program, cfg = {}]) {
@@ -384,8 +409,8 @@ export async function startFork({ remoteUrl, port = 8899, log = () => {} }) {
       const out = new Map();
       for (const { pubkey, account } of res.value) {
         if (dirty.has(pubkey)) continue;
-        if (!fetchedAt.has(pubkey)) store(pubkey, account);
-        out.set(pubkey, encodeAccount(read(pubkey), cfg));
+        const local = read(pubkey);
+        out.set(pubkey, encodeAccount(local.exists ? local : asLocal(account), cfg));
       }
       for (const program of programs) {
         for (const a of vm.getProgramAccounts(address(program))) {
@@ -394,20 +419,17 @@ export async function startFork({ remoteUrl, port = 8899, log = () => {} }) {
           out.set(a.address, encodeAccount({ ...a, exists: true }, cfg));
         }
       }
-      for (const k of [...out.keys()]) if (!read(k).exists) out.delete(k);
+      for (const k of [...out.keys()]) if (dirty.has(k) && !read(k).exists) out.delete(k);
       return { context: context(), value: [...out].map(([pubkey, account]) => ({ pubkey, account })) };
     },
     async getTokenAccountBalance([k]) {
-      await ensure([k]);
-      const a = read(k);
+      const a = (await view([k])).get(k);
       if (!a.exists || !TOKEN_PROGRAMS.has(a.programAddress) || a.data.length < 165) throw new RpcError(-32602, "Invalid param: not a Token account");
       const mint = bs58.encode(a.data.slice(0, 32));
-      await ensure([mint]);
-      return { context: context(), value: uiAmount(u64(a.data, 64), read(mint).data[44]) };
+      return { context: context(), value: uiAmount(u64(a.data, 64), (await view([mint])).get(mint).data[44]) };
     },
     async getTokenSupply([k]) {
-      await ensure([k]);
-      const a = read(k);
+      const a = (await view([k])).get(k);
       if (!a.exists || !TOKEN_PROGRAMS.has(a.programAddress)) throw new RpcError(-32602, "Invalid param: not a Token mint");
       return { context: context(), value: uiAmount(u64(a.data, 36), a.data[44]) };
     },
