@@ -257,14 +257,15 @@ const STEPS = [
 
 /** The fill keeper (running in this process) fills the order through Jupiter: waits for the Treasury's USDC to rise. */
 async function swapFilled(was) {
-  const until = Date.now() + 120_000;
+  // The keeper tries every 30s; a route can fail a few times before one fills.
+  const until = Date.now() + 210_000;
   while (Date.now() < until) {
     const now = await held(USDC);
     if (now > was) return [true, `filled by the keeper: USDC ${fmt(now, 6)} (was ${fmt(was, 6)})`];
     await sleep(5_000);
   }
   const open = await fill.listOrders(net).catch(() => []);
-  return [false, `not filled within 2 minutes (${open.length} order(s) still open; the keeper's log above says why)`];
+  return [false, `not filled within 3½ minutes (${open.length} order(s) still open; the keeper's log above says why)`];
 }
 
 // ---- go ----

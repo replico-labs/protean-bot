@@ -144,6 +144,24 @@ export async function startFork({ remoteUrl, port = 8899, log = () => {} }) {
     return t;
   }
   syncClock();
+  /**
+   * Keeps the fork's clock from falling behind mainnet's: the slot runs on
+   * an estimate (SLOTS_PER_SECOND), and an account copied fresh carries
+   * mainnet's latest slot and time, which a program would otherwise see as
+   * in the future (Jupiter Lend's exchange prices, Kamino's staleness
+   * checks). Each copy reads mainnet's Clock in the same request; the fork
+   * only moves forward.
+   */
+  function catchUp(clockData) {
+    const t = now();
+    const slot = u64(clockData, 0);
+    const unix = i64(clockData, 32);
+    if (slot <= t.slot && unix <= t.unix) return;
+    start.wall = Date.now();
+    start.slot = slot > t.slot ? slot : t.slot;
+    start.unix = unix > t.unix ? unix : t.unix;
+    syncClock();
+  }
 
   // ---- accounts ----
   const isOracleCopy = (k) => fetchedAt.has(k) && ORACLE_OWNERS.has(owners.get(k)) && Date.now() - fetchedAt.get(k) > ORACLE_REFRESH_MS;
@@ -165,9 +183,11 @@ export async function startFork({ remoteUrl, port = 8899, log = () => {} }) {
       if (absent.has(k)) return false;
       return !vm.getAccount(address(k)).exists; // the fork's own: builtins, sysvars, default programs
     });
-    for (let i = 0; i < want.length; i += 100) {
-      const chunk = want.slice(i, i + 100);
-      const { value } = await remote("getMultipleAccounts", [chunk, { encoding: "base64", commitment: "confirmed" }]);
+    for (let i = 0; i < want.length; i += 99) {
+      const chunk = want.slice(i, i + 99);
+      const { value: all } = await remote("getMultipleAccounts", [[...chunk, CLOCK], { encoding: "base64", commitment: "confirmed" }]);
+      const value = all.slice(0, chunk.length);
+      if (all[chunk.length]) catchUp(fromB64(all[chunk.length].data[0]));
       const programs = [];
       value.forEach((acct, j) => {
         const k = chunk[j];

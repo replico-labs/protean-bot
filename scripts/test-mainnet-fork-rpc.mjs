@@ -93,6 +93,17 @@ const bt = await rpc.getBlockTime(slot).send();
 check(slot >= 300_000_000n && Math.abs(Number(bt) - 1_761_000_000) < 10, "kit getSlot/getBlockTime follow mainnet's clock", `${slot} ${bt}`);
 const ka = await rpc.getAccountInfo(address(mint.publicKey.toBase58()), { encoding: "base64" }).send();
 check(ka.value?.owner === X.toBase58(), "kit getAccountInfo");
+// Copying accounts in brings the fork's clock up to mainnet's when mainnet's is ahead (and never back).
+const before = await conn.getSlot();
+clock.writeBigUInt64LE(BigInt(before) + 5_000n, 0);
+clock.writeBigInt64LE(1_761_000_000n + 3_600n, 32);
+await fork.ensure([Keypair.generate().publicKey.toBase58()]);
+const after = await conn.getSlot();
+check(after >= before + 5_000 && Math.abs((await conn.getBlockTime(after)) - (1_761_000_000 + 3_600)) < 10, "a copy brings the clock up to mainnet's", `${before} -> ${after}`);
+clock.writeBigUInt64LE(300_000_000n, 0);
+clock.writeBigInt64LE(1_761_000_000n, 32);
+await fork.ensure([Keypair.generate().publicKey.toBase58()]);
+check((await conn.getSlot()) >= after, "and never back");
 // A read doesn't copy an account in: mainnet's changes show until a transaction (ensure) copies it.
 check((await conn.getAccountInfo(oracle)).data[0] === 1, "read before copying: mainnet's");
 oracleVersion = 2;
