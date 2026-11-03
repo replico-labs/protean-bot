@@ -17,8 +17,10 @@
  *      kamino-deposit, pumpfun-buy, tensor-buy, phoenix-appoint, jup-swap (then the fill
  *      keeper fills the order through Jupiter)
  *   2. jito-unstake, marinade-unstake, juplend-withdraw, juplend-repay,
- *      kamino-borrow, pumpfun-sell, tensor-list, phoenix-fund
- *   3. kamino-repay, tensor-delist, phoenix-withdraw
+ *      kamino-borrow, pumpfun-sell, tensor-list, phoenix-fund, and a
+ *      second jup-swap (the keeper is stopped first, so it stays open)
+ *   3. kamino-repay, tensor-delist, phoenix-withdraw, jup-cancel (that
+ *      order: its SOL back to the Treasury)
  *   4. kamino-withdraw, phoenix-remove
  *
  * Phoenix registers the Treasury through its API first, as `desk register`
@@ -224,6 +226,9 @@ const kaminoColRaw = async () => v.parseUnits(KAMINO_COL_AMOUNT, await colDecima
 const kaminoColLabel = KAMINO_COL === "sol" ? "SOL" : `token ${KAMINO_COL.slice(0, 4)}…`;
 
 // ---- the steps ----
+// A step's line can be a function (an address only known by then); its name, by default the line's action, is what `after` names.
+const lineOf = (s) => (typeof s.line === "function" ? s.line() : s.line);
+const nameOf = (s) => s.name ?? (typeof s.line === "function" ? "?" : s.line.split(" ")[0]);
 const trader = Keypair.generate().publicKey.toBase58();
 const fmt = (raw, decimals) => v.formatUnits(raw, decimals);
 const STEPS = [
@@ -237,6 +242,9 @@ const STEPS = [
   { round: 1, protocol: "tensor", needs: TENSOR_MINT, line: `tensor-buy ${TENSOR_MINT} ${process.env.HUB_TEST_TENSOR_MAX_SOL || "500"}`, check: async () => [(await held(TENSOR_MINT)) === 1n, `the Treasury holds ${await held(TENSOR_MINT)} of the NFT`] },
   { round: 1, protocol: "phoenix", line: `phoenix-appoint 1 ${trader}`, check: async () => [Boolean(await phx.readTrader(net, treasury, 1)), "subaccount 1 registered and delegated"] },
   { round: 1, protocol: "jupiter", needs: withFill, line: "jup-swap sol usdc 0.5 3 1", before: () => held(USDC), check: (was) => swapFilled(was) },
+  // The keeper is stopped after round 1, so this order stays open for jup-cancel.
+  { round: 2, protocol: "jupiter", needs: withFill, name: "jup-swap (to cancel)", line: "jup-swap sol usdc 0.2 3 1", check: orderOpened },
+  { round: 3, protocol: "jupiter", needs: withFill, name: "jup-cancel", after: "jup-swap (to cancel)", line: () => `jup-cancel ${toCancel}`, before: () => held(WSOL), check: orderCancelled },
   // round 2
   { round: 2, protocol: "jito", after: "jito-stake", line: "jito-unstake all", check: async () => [(await held(JITOSOL)) === 0n, `JitoSOL ${fmt(await held(JITOSOL), 9)} (a stake account holds it now)`] },
   { round: 2, protocol: "marinade", after: "marinade-stake", line: "marinade-unstake all", check: async () => [(await held(MSOL)) === 0n, `mSOL ${fmt(await held(MSOL), 9)}`] },
@@ -254,6 +262,22 @@ const STEPS = [
   // round 4
   { round: 4, protocol: "phoenix", after: "phoenix-withdraw", line: "phoenix-remove 1", check: async () => [true, "subaccount 1 delegated back to the Treasury"] },
 ];
+
+const WSOL = "So11111111111111111111111111111111111111112";
+let toCancel = "";
+/** The Treasury has one open order now, for 0.2 SOL: the one jup-cancel takes back. */
+async function orderOpened() {
+  const open = await fill.listOrders(net, treasury);
+  const o = open.find(({ account }) => account.amountIn.toString() === String(0.2 * LAMPORTS_PER_SOL));
+  if (o) toCancel = o.publicKey.toBase58();
+  return [Boolean(o), o ? `order \`${toCancel}\` open with 0.2 SOL (the keeper is stopped)` : `no open 0.2 SOL order (${open.length} open)`];
+}
+/** The order is gone and its 0.2 SOL is back in the Treasury, as wrapped SOL. */
+async function orderCancelled(was) {
+  const gone = !(await fill.readOrder(net, new PublicKey(toCancel)));
+  const now = await held(WSOL);
+  return [gone && now === was + BigInt(0.2 * LAMPORTS_PER_SOL), `order ${gone ? "closed" : "still open"}; wrapped SOL ${fmt(now, 9)} (was ${fmt(was, 9)})`];
+}
 
 /** The fill keeper (running in this process) fills the order through Jupiter: waits for the Treasury's USDC to rise. */
 async function swapFilled(was) {
@@ -299,17 +323,19 @@ try {
       record("Phoenix: Treasury registered (as desk register does)", false, err.message);
     }
   }
-  if (withFill) startFillKeeper({ platform: "telegram", notify: async (_chat, text) => console.log(`  [keeper → chat] ${text.split("\n")[0]}`) });
+  let stopKeeper = () => {};
+  if (withFill) stopKeeper = startFillKeeper({ platform: "telegram", notify: async (_chat, text) => console.log(`  [keeper → chat] ${text.split("\n")[0]}`) });
 
   const passed = new Set();
   const failedPhoenixRegistration = results.some((r) => r.step.startsWith("Phoenix: Treasury") && !r.ok);
   for (const round of [1, 2, 3, 4]) {
+    if (round === 2) stopKeeper();
     const steps = STEPS.filter((s) => s.round === round && wanted(s));
     if (!steps.length) continue;
-    console.log(`\nRound ${round}: ${steps.map((s) => s.line.split(" ")[0]).join(", ")}`);
+    console.log(`\nRound ${round}: ${steps.map(nameOf).join(", ")}`);
     const queued = [];
     for (const s of steps) {
-      const action = s.line.split(" ")[0];
+      const action = nameOf(s);
       if (s.after && !passed.has(s.after)) {
         record(action, false, `skipped: ${s.after} didn't pass`);
         continue;
@@ -318,7 +344,7 @@ try {
         record(action, false, "skipped: the Treasury isn't registered on Phoenix");
         continue;
       }
-      const reply = await run(CHAT, 1, `proposeaction ${s.line} Hub test ${action}`);
+      const reply = await run(CHAT, 1, `proposeaction ${lineOf(s)} Hub test ${lineOf(s).split(" ")[0]}`);
       const id = reply.match(/Proposal \*#(\d+)\*/)?.[1];
       if (!id) {
         record(`${action}: propose`, false, reply);
@@ -365,7 +391,7 @@ async function registerOnPhoenix() {
 // ---- summary ----
 const bad = results.filter((r) => !r.ok);
 console.log(`\n${results.length - bad.length} of ${results.length} passed${bad.length ? `; failed or skipped: ${bad.map((r) => r.step).join(", ")}` : ""}`);
-const skippedSteps = STEPS.filter((s) => s.needs !== undefined && !s.needs).map((s) => s.line.split(" ")[0]);
+const skippedSteps = STEPS.filter((s) => s.needs !== undefined && !s.needs).map(nameOf);
 if (skippedSteps.length) console.log(`Not run (set HUB_TEST_PUMP_MINT / HUB_TEST_TENSOR_MINT / build vortex_fill.so): ${skippedSteps.join(", ")}`);
 console.log(`Fork: ${JSON.stringify(fork.stats())}`);
 await fork.close();

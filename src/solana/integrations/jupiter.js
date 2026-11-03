@@ -61,8 +61,6 @@ function days(word) {
   return d;
 }
 
-const exists = async (c, account) => Boolean(await c.network.connection.getAccountInfo(account));
-
 export const actions = {
   "jup-swap": {
     models: "all",
@@ -90,13 +88,14 @@ export const actions = {
       const treasury = c.d.treasury;
       const source = v.tokenAccount(from.mint, treasury, from.programId);
       const receive = v.tokenAccount(to.mint, treasury, to.programId);
+      // Created idempotently whether or not they exist now: another proposal can close them before this one executes (Jupiter Lend and Kamino close the wrapped-SOL account).
       const ixs = [];
       if (from.isSol) {
         // The order takes wrapped SOL: wrap it first.
-        if (!(await exists(c, source))) ixs.push(createAssociatedTokenAccountIdempotentInstruction(treasury, source, treasury, NATIVE_MINT));
+        ixs.push(createAssociatedTokenAccountIdempotentInstruction(treasury, source, treasury, NATIVE_MINT));
         ixs.push(SystemProgram.transfer({ fromPubkey: treasury, toPubkey: source, lamports: amount }), createSyncNativeInstruction(source));
       }
-      if (!(await exists(c, receive))) ixs.push(createAssociatedTokenAccountIdempotentInstruction(treasury, receive, treasury, to.mint, to.programId));
+      ixs.push(createAssociatedTokenAccountIdempotentInstruction(treasury, receive, treasury, to.mint, to.programId));
       const deadline = (await v.clusterNow(c.network)) + Math.round(life * 86_400);
       const id = fill.newOrderId();
       ixs.push(
@@ -128,8 +127,14 @@ export const actions = {
       if (!o) fail("That order isn't open (it filled, was cancelled, or never existed).");
       if (!o.owner.equals(c.d.treasury)) fail("That order isn't this DAO's.");
       const programs = { in: (await v.mintInfo(c.network, o.mintIn)).programId, out: (await v.mintInfo(c.network, o.mintOut)).programId };
+      // The tokens go back to the order's refund account, and its receive account is named too: when they're the treasury's own token accounts, re-create them idempotently in case another proposal closed them.
+      const ixs = [];
+      for (const [account, mint, program] of [[o.refund, o.mintIn, programs.in], [o.receive, o.mintOut, programs.out]]) {
+        if (account.equals(v.tokenAccount(mint, c.d.treasury, program))) ixs.push(createAssociatedTokenAccountIdempotentInstruction(c.d.treasury, account, c.d.treasury, mint, program));
+      }
+      ixs.push(await fill.cancelIx(c.network, orderKey, o, c.d.treasury, programs));
       return {
-        instructions: [v.stored(await fill.cancelIx(c.network, orderKey, o, c.d.treasury, programs))],
+        instructions: ixs.map(v.stored),
         budget: [],
         summary: `cancel swap order \`${orderKey.toBase58()}\` and take its tokens back`,
       };
