@@ -88,7 +88,7 @@ function messageOf(tx) {
  * the fork's own controls (funding accounts, loading programs, sending
  * without signature checks).
  */
-export async function startFork({ remoteUrl, port = 8899, log = () => {} }) {
+export async function startFork({ remoteUrl, port = 8899, log = () => {}, logFailures = false }) {
   // No log limit: a fill's event comes after a Jupiter route's logs.
   const vm = new LiteSVM().withBlockhashCheck(false).withTransactionHistory(0n).withLogBytesLimit();
   const fetchedAt = new Map(); // mainnet copies nothing here has written: address -> when fetched
@@ -164,7 +164,7 @@ export async function startFork({ remoteUrl, port = 8899, log = () => {} }) {
   }
 
   // ---- accounts ----
-  const isOracleCopy = (k) => fetchedAt.has(k) && ORACLE_OWNERS.has(owners.get(k)) && Date.now() - fetchedAt.get(k) > ORACLE_REFRESH_MS;
+  const isOracleCopy = (k, maxAge = ORACLE_REFRESH_MS) => fetchedAt.has(k) && ORACLE_OWNERS.has(owners.get(k)) && Date.now() - fetchedAt.get(k) > maxAge;
 
   function store(k, acct) {
     if (dirty.has(k)) return;
@@ -175,11 +175,17 @@ export async function startFork({ remoteUrl, port = 8899, log = () => {} }) {
     absent.delete(k);
   }
 
-  /** Makes sure the fork has every account in `keys` that mainnet has, programs loaded. */
-  async function ensure(keys) {
+  /**
+   * Makes sure the fork has every account in `keys` that mainnet has,
+   * programs loaded. For a transaction (`fresh`), its oracle accounts are
+   * re-fetched too, with the clock in the same request: prices exactly as
+   * old against the fork's clock as they are on mainnet (Kamino refuses a
+   * borrow when a price is past its reserve's maximum age).
+   */
+  async function ensure(keys, { fresh = false } = {}) {
     const want = [...new Set(keys)].filter((k) => {
       if (dirty.has(k) || localPrograms.has(k)) return false;
-      if (fetchedAt.has(k)) return isOracleCopy(k);
+      if (fetchedAt.has(k)) return isOracleCopy(k, fresh ? 0 : ORACLE_REFRESH_MS);
       if (absent.has(k)) return false;
       return !vm.getAccount(address(k)).exists; // the fork's own: builtins, sysvars, default programs
     });
@@ -326,7 +332,7 @@ export async function startFork({ remoteUrl, port = 8899, log = () => {} }) {
   /** Runs `tx` (kit wire format, decoded) for real. Returns { signature, err, logs }. */
   async function execute(tx, { unverified = false } = {}) {
     const { m, keys } = await keysOf(tx);
-    await ensure(keys);
+    await ensure(keys, { fresh: true });
     const t = syncClock();
     const before = new Map(keys.map((k) => [k, read(k)]));
     if (unverified) vm.withSigverify(false);
@@ -350,6 +356,7 @@ export async function startFork({ remoteUrl, port = 8899, log = () => {} }) {
     const failed = res instanceof FailedTransactionMetadata;
     const meta = failed ? res.meta() : res;
     const signature = signatureOf(tx);
+    if (failed && logFailures) log(`  [fork] transaction failed: ${JSON.stringify(errJson(res.err()))}\n    ${meta.logs().slice(-30).join("\n    ")}`);
     const status = { slot: Number(t.slot), blockTime: Number(t.unix), err: failed ? errJson(res.err()) : null, logs: meta.logs(), units: Number(meta.computeUnitsConsumed()), m, signatures: Object.values(tx.signatures).map((s) => (s ? bs58.encode(s) : bs58.encode(new Uint8Array(64)))) };
     statuses.set(signature, status);
     for (const cb of waiters.get(signature) ?? []) cb(status);
@@ -359,7 +366,7 @@ export async function startFork({ remoteUrl, port = 8899, log = () => {} }) {
 
   async function simulate(tx, cfg = {}) {
     const { keys } = await keysOf(tx);
-    await ensure(keys);
+    await ensure(keys, { fresh: true });
     const t = syncClock();
     const off = cfg.sigVerify === false || cfg.replaceRecentBlockhash;
     if (off) vm.withSigverify(false);
@@ -467,6 +474,7 @@ export async function startFork({ remoteUrl, port = 8899, log = () => {} }) {
       const tx = decodeWire(wire, cfg.encoding);
       if (!cfg.skipPreflight) {
         const sim = await simulate(tx);
+        if (sim.value.err && logFailures) log(`  [fork] transaction refused in preflight: ${JSON.stringify(sim.value.err)}\n    ${sim.value.logs.slice(-30).join("\n    ")}`);
         if (sim.value.err) throw new RpcError(-32002, `Transaction simulation failed: ${JSON.stringify(sim.value.err)}`, { err: sim.value.err, logs: sim.value.logs, accounts: null, unitsConsumed: sim.value.unitsConsumed, returnData: null });
       }
       return (await execute(tx)).signature;

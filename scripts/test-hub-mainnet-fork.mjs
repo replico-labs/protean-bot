@@ -91,7 +91,7 @@ const MSOL = "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So";
 
 // ---- the fork, and the bot pointed at it ----
 console.log(`Forking mainnet from ${SOURCE.replace(/(api[-_]?key=|\/)[A-Za-z0-9-]{20,}/gi, "$1…")}`);
-const fork = await startFork({ remoteUrl: SOURCE, port: Number(process.env.HUB_FORK_PORT || 18899), log: console.log });
+const fork = await startFork({ remoteUrl: SOURCE, port: Number(process.env.HUB_FORK_PORT || 18899), log: console.log, logFailures: true });
 const { createRequire } = await import("node:module");
 const require = createRequire(import.meta.url);
 const IDL_FILES = { hub: "vortex_hub", tokenWeighted: "vortex_token_weighted", quadratic: "vortex_quadratic", optimistic: "vortex_optimistic", board: "vortex_board", conviction: "vortex_conviction", delegate: "vortex_delegate", liquid: "vortex_liquid", sortition: "vortex_sortition", sowellian: "vortex_sowellian", decisionMarkets: "vortex_decision_markets" };
