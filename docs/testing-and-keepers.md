@@ -12,9 +12,11 @@ What has been verified, how to run the end-to-end tests, the keepers, and what's
 - **Running live:**
   - Discord: a real server has run an optimistic DAO's proposals and treasury transfers.
   - WhatsApp: runs as its own Railway service.
+  - Slack: live, installed through "Add to Slack".
   - Pyth Entropy and Hermes prices: both have run on Monad testnet.
   - Opportunity Markets: one has run end to end through Telegram on Sepolia, FHE relayer included.
-- **Not yet run live:** anything on a mainnet, and a real Slack workspace. See [What's not verified yet](#whats-not-verified-yet).
+- **Solana mainnet protocols:** every Solana action passed as a proposal executed through the hub on a mainnet fork, 26 of 26 in one run (see [Solana](#solana)).
+- **Not yet run live:** anything on a mainnet. See [What's not verified yet](#whats-not-verified-yet).
 
 ## EVM: every model at once
 
@@ -107,6 +109,15 @@ All of these run against a local validator loaded with the Vortexes programs at 
 | `scripts/test-solana-pages.mjs` | proposal pages: the edit link, live data, the once-only submission, the "too late once people vote" rule |
 | `scripts/test-solana-pages-charts.mjs` | pages through the real HTTP API (GET, POST, password edits, history), `/proposal` charts, vote-close posts with charts and page links, and explorer links on replies and notices |
 
+The protocol actions (Jito, Marinade, Jupiter Lend, Kamino, Pump.fun, Tensor, Jupiter swaps through fill orders, the Phoenix desk) are mainnet-only, so they run on a mainnet fork in LiteSVM instead of a local validator. See [Solana integrations](solana-integrations.md#testing-when-theres-no-devnet) for the setup.
+
+| Script | Covers |
+|---|---|
+| `scripts/test-hub-mainnet-fork.mjs` | every protocol action as a proposal a board DAO passes and its Treasury executes through the hub, each result checked (26 steps; passed 26 of 26). Needs `VORTEXES_DEPLOY_DIR` and `SOLANA_MAINNET_RPC_URL` |
+| `scripts/test-mainnet-fork-rpc.mjs` | the fork itself, offline: copies, reads, the clock and oracle refreshes |
+| `scripts/test-phoenix-flow.mjs` | the Phoenix desk in LiteSVM with Phoenix's programs (23 checks) |
+| `scripts/check-borrow-markets.mjs` | not a test: lists Kamino and Jupiter Lend markets with room to borrow, and the settings for the hub test |
+
 ## Protocol addresses
 
 `npm run verify:integrations [network ...]` reads every external protocol address over the real RPCs and checks four things:
@@ -128,7 +139,7 @@ Pyth Entropy calls back by itself, usually within seconds, so randomness needs n
   - `/startsortition` uses the DAO's credit at the Entropy adapter first, and tops up only the shortfall from the caller's wallet.
   - A DAO can prefund its credit: anyone can call the adapter's `fund(governance)`, e.g. the Treasury through a proposal. After that, draws cost callers only gas.
 - **Sowellian oracle proposals** need no keeper: `/resolveviaoracle` posts Pyth's price and resolves in one go.
-- **Solana** needs no keepers. ORAO answers sortition draws itself, and the bot applies due model switches.
+- **Solana:** governance needs no keepers. ORAO answers sortition draws itself, and the bot applies due model switches. Swaps need the fill keeper (`src/solana/fillKeeper.js`, `<PREFIX>_FILL_KEEPER=true`): it quotes open fill orders every 30 s and fills each once a route meets its minimum. Anyone can fill an order; the program checks the minimum, so the keeper is never trusted with the funds.
 
 ## Known limitations
 
@@ -144,11 +155,11 @@ Pyth Entropy calls back by itself, usually within seconds, so randomness needs n
   - Uniswap, Aerodrome, Lido-via-Aerodrome and Seaport ran against those protocols' real compiled contracts. HyperSwap and kHYPE-via-HyperSwap ran against Uniswap's real v3 contracts (HyperSwap v3 is a Uniswap v3 fork).
   - Aave, HyperLend, shMON, Nad.fun, Perpl, Flaunch and HyperCore ran against stand-ins with the protocols' exact function signatures.
   - HyperCore's action bytes were also compared with those hyper-evm-lib produces.
-- A real Slack workspace.
+- **Solana protocol actions on mainnet itself:** they passed on a mainnet fork, not yet with real funds. The Phoenix desk's trades (as opposed to appointing, funding, withdrawing and removing) and the fill keeper over days of real orders haven't run either.
 
 ## Not built yet
 
 - Group-wide gas sponsorship with spending limits
-- Phoenix perps and desks on Solana (new Phoenix accounts need an access code, and it runs on mainnet only)
+- Tensor: Core assets, compressed NFTs and selling into bids
 
 [Back to the README](../README.md)

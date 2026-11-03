@@ -197,9 +197,11 @@ yet: they need `anchor build`).
 
 ### Desks on Solana
 
-The trading desk model (a trader appointed by proposal, trading within a
-mandate the bot enforces) carries over to Phoenix perps (above) and to
-Jupiter swaps through the fill adapter. Not designed yet.
+Desks are for perps only: on Solana that's Phoenix (above), where an
+appointed trader trades within a mandate the bot enforces. There are no spot
+desks. Spot trades and swaps are the DAO's own decisions, made by proposal
+through Vortexes' fill program (`jup-swap`): the vote sets the amount and the
+minimum, and any route can fill it without trusting the keeper.
 
 ## What's built
 
