@@ -230,7 +230,7 @@ if they swap.
 | Pump.fun | `pumpfun-buy`, `pumpfun-sell` | legacy (the operator opens the coin account first) | through the hub on a mainnet fork |
 | Kamino Lend | `kamino-deposit`, `kamino-withdraw`, `kamino-borrow`, `kamino-repay`, each naming the market (`main` or a market address) | v1; a first SOL deposit is about 10 instructions | deposit, borrow, repay and withdraw through the hub on a mainnet fork, in the primary market with SOL (1 SOL lent, 20 USDC borrowed and repaid in full, the SOL withdrawn) and in the JLP market with JLP. The primary (SOL/BTC) market had borrowing off for a while (`borrow_disabled`, 6088), which the bot refuses on when proposing; `scripts/check-borrow-markets.mjs` lists the markets and collateral that fit |
 | Tensor | `tensor-buy`, `tensor-list`, `tensor-delist` (token-metadata NFTs, programmable included) | v1 for a buy (944 bytes); list and delist fit legacy | through the hub on a mainnet fork (a programmable NFT) |
-| Jupiter (fill orders) | `jup-swap`, `jup-cancel` | legacy (v1 when selling SOL, which is wrapped first) | `jup-swap` through the hub on a mainnet fork, filled by the keeper; `jup-cancel` added to the hub test (a second order, left open with the keeper stopped, cancelled and its SOL back), to run |
+| Jupiter (fill orders) | `jup-swap`, `jup-cancel` | legacy (v1 when selling SOL, which is wrapped first) | `jup-swap` through the hub on a mainnet fork, filled by the keeper; `jup-cancel` through the hub on a mainnet fork (a second order, left open with the keeper stopped, cancelled and its SOL back) |
 | Phoenix perps | `/desk` (`phoenix-appoint`, `phoenix-fund`, `phoenix-withdraw`, `phoenix-remove`) | v1 for appoint (new subaccount), fund, withdraw | LiteSVM with Phoenix's programs (`scripts/test-phoenix-flow.mjs`, 23 checks); through the hub on a mainnet fork (register, appoint, fund, withdraw, remove) |
 
 `scripts/simulate-solana-action.mjs` builds any action with a stand-in
@@ -251,10 +251,10 @@ Most of these run on mainnet only. Testing doesn't need mainnet funds:
   Phoenix subaccount, the fill keeper's fill). Needs the Vortexes build
   (`VORTEXES_DEPLOY_DIR`) and a mainnet RPC; the header lists the options.
   `scripts/test-mainnet-fork-rpc.mjs` checks the fork itself offline.
-  Passed 24 of 24 in one run (Jito, Marinade, Jupiter Lend lending and
+  Passed 26 of 26 in one run (Jito, Marinade, Jupiter Lend lending and
   borrowing USDT, Kamino lending and borrowing USDC against SOL in the
   primary market, Pump.fun, Tensor, Phoenix, a Jupiter swap filled by the
-  keeper). The fork copies an account in only when a transaction uses it
+  keeper and another cancelled). The fork copies an account in only when a transaction uses it
   (all of a transaction's new accounts in one request), re-fetches the
   transaction's oracles, and brings its clock up to mainnet's with each
   copy: otherwise accounts copied at different moments disagree (a busy
