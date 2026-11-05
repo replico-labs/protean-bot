@@ -93,6 +93,22 @@ HyperCore is stood in for twice. On the chain, a CoreWriter stand-in logs each r
 
 Like the buttons test, both stand in for wallet storage and back up and restore `data/chats.json`, also when stopped part-way.
 
+## EVM protocols on a mainnet fork
+
+`scripts/test-evm-mainnet-fork.mjs` runs the protocol actions against the real protocols, on an anvil fork of Monad, Base or HyperEVM mainnet. It deploys the Board contracts onto the fork, makes a board DAO (two of three signers, a 1-second timelock), and runs each action through `/proposeaction`, `/confirm` and `/execute`, checking balances and lending positions after each one:
+
+- **Base:** Uniswap and Aerodrome swaps, Aave (supply, borrow, repay, collateral off, withdraw), Lido wstETH, Flaunch
+- **Monad:** a Uniswap swap, Aave, shMON (stake, instant unstake, queued unstake), Nad.fun, Perpl (deposit, open, close, withdraw)
+- **HyperEVM:** HyperLend, Kinetiq kHYPE through HyperSwap
+
+```bash
+anvil --fork-url <mainnet RPC> --code-size-limit 100000
+(cd ../Spaces && forge build)
+node --experimental-test-module-mocks scripts/test-evm-mainnet-fork.mjs --network base   # or monad, hyperevm
+```
+
+The header lists the options (a Flaunch coin and a Nad.fun token to trade, `FORK_ONLY`). HyperCore can't run on a fork: its balances and orders live in Hyperliquid's own engine, not in EVM contracts. Not run yet.
+
 ## Slack and links
 
 `node --experimental-test-module-mocks --test scripts/test-slack.mjs` needs no chain or workspace. It runs `/protean` with a stand-in result and a fake Slack client, and checks: labelled links and plain addresses; every model's buttons through its states, each fitting Telegram's 64 bytes; the amount and "are you sure" menus against a stand-in chain (shares of a balance, EVM trades' 1% minimum out); buttons on listener notices; the chart upload (joining the channel when needed, and the note when it can't post); and links.js's Telegram, Discord and WhatsApp forms.
@@ -154,6 +170,7 @@ Pyth Entropy calls back by itself, usually within seconds, so randomness needs n
 - **External protocol actions against the live protocols.** Each was tested on local chains through a real Board DAO:
   - Uniswap, Aerodrome, Lido-via-Aerodrome and Seaport ran against those protocols' real compiled contracts. HyperSwap and kHYPE-via-HyperSwap ran against Uniswap's real v3 contracts (HyperSwap v3 is a Uniswap v3 fork).
   - Aave, HyperLend, shMON, Nad.fun, Perpl, Flaunch and HyperCore ran against stand-ins with the protocols' exact function signatures.
+  - `scripts/test-evm-mainnet-fork.mjs` runs all of them but HyperCore against the real protocols on a mainnet fork; not run yet.
   - HyperCore's action bytes were also compared with those hyper-evm-lib produces.
 - **Solana protocol actions on mainnet itself:** they passed on a mainnet fork, not yet with real funds. The Phoenix desk's trades (as opposed to appointing, funding, withdrawing and removing) and the fill keeper over days of real orders haven't run either.
 
