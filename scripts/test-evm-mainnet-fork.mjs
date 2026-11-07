@@ -243,7 +243,7 @@ function baseSteps() {
     { name: "aave-repay", line: "aave-repay USDC all", check: async () => { const a = await account(d.pool); expect(a.debt === 0n, "no debt left"); return `debt $0, USDC ${await show(USDC, await held(USDC))}`; } },
     { name: "aave-collateral", line: "aave-collateral WETH off", check: async () => { const a = await account(d.pool); expect(a.collateral === 0n, "WETH no longer collateral"); return "collateral $0 (still supplied)"; } },
     { name: "aave-withdraw", line: "aave-withdraw WETH all", before: () => held(WETH), check: async (b) => { const w = await held(WETH); expect(w >= b + parseEther("2"), "2 WETH and interest back"); return `WETH ${formatEther(w)}`; } },
-    { name: "lido-buy-wsteth", line: "lido-buy-wsteth 0.5", check: async () => { const w = await held(WSTETH); expect(w > 0n, "wstETH bought"); return `wstETH ${formatEther(w)}`; } },
+    { name: "lido-buy-wsteth", line: "lido-buy-wsteth 0.5 maxgap=3%", check: async () => { const w = await held(WSTETH); expect(w > 0n, "wstETH bought"); return `wstETH ${formatEther(w)}`; } },
     { name: "lido-sell-wsteth", line: "lido-sell-wsteth all", before: native, check: async (b) => { expect((await held(WSTETH)) === 0n && (await native()) > b, "wstETH sold for ETH"); return `wstETH 0, ETH ${formatEther(await native())}`; } },
     coin
       ? { name: "flaunch-buy", line: `flaunch-buy ${coin} 0.01 5%`, check: async () => { const h = await held(coin); expect(h > 0n, "coin bought"); return `coin ${await show(coin, h)}`; } }
