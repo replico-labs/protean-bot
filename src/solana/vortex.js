@@ -3,6 +3,7 @@ import {
   Keypair,
   PublicKey,
   SystemProgram,
+  SYSVAR_CLOCK_PUBKEY,
   Transaction,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
@@ -52,9 +53,9 @@ const TEN_POW = 10n ** BigInt(TOKEN_DECIMALS);
 export const MODELS = ["tokenWeighted", "quadratic", "optimistic", "board", "conviction", "delegate", "liquid", "sortition", "sowellian", "decisionMarkets"];
 /** Models with a token of their own (decision markets' is its base token; members trade it rather than deposit it). */
 export const TOKEN_MODELS = ["tokenWeighted", "quadratic", "optimistic", "conviction", "delegate", "liquid", "sortition", "sowellian", "decisionMarkets"];
-/** Models whose members deposit the DAO's token to vote or stand. */
+/** Models whose members stake the DAO's token (in its stake pool, shared by every model) to vote or stand. */
 export const STAKE_MODELS = ["tokenWeighted", "quadratic", "optimistic", "conviction", "delegate", "liquid", "sortition", "sowellian"];
-/** Models with for/against/abstain votes on proposals, weighted by deposit. */
+/** Models with for/against/abstain votes on proposals, weighted by stake. */
 const VOTING_MODELS = ["tokenWeighted", "quadratic", "optimistic", "liquid"];
 /** Models whose council (seated by election or by lot) proposes and votes. */
 export const COUNCIL_MODELS = ["delegate", "sortition"];
@@ -112,20 +113,52 @@ export function programFor(network, model) {
 
 const seed = (s) => Buffer.from(s);
 const u64le = (n) => new BN(n).toArrayLike(Buffer, "le", 8);
+const u32le = (n) => {
+  const b = Buffer.alloc(4);
+  b.writeUInt32LE(Number(n));
+  return b;
+};
 const pda = (seeds, programId) => PublicKey.findProgramAddressSync(seeds, programId)[0];
 const bn = (v) => new BN(v.toString());
 
-/** All the addresses of hub DAO `dao` in governance program `gp`. */
-export function addresses(network, dao, gp) {
+/**
+ * A DAO's account in governance program `gp` for hub epoch `epoch`:
+ * `[governance, dao, epoch u32 LE]`. Every switch sets up a fresh one.
+ */
+export function governanceAddress(dao, gp, epoch) {
+  return pda([seed("governance"), dao.toBuffer(), u32le(epoch)], gp);
+}
+
+/**
+ * vortex-stake's addresses for hub DAO `dao`: one pool per token, a stake
+ * per member per pool, and what a governance has locked of a stake.
+ */
+export function stakeAddresses(network, dao) {
+  const sp = network.programs.stake;
+  const stakeOf = (pool, owner) => pda([seed("stake"), pool.toBuffer(), owner.toBuffer()], sp);
+  const converter = (fromPool, toPool) => pda([seed("converter"), fromPool.toBuffer(), toPool.toBuffer()], sp);
+  return {
+    poolOf: (mint) => pda([seed("pool"), dao.toBuffer(), mint.toBuffer()], sp),
+    poolVault: (pool) => pda([seed("vault"), pool.toBuffer()], sp),
+    stakeOf,
+    lockOf: (pool, owner, governance) => pda([seed("lock"), stakeOf(pool, owner).toBuffer(), governance.toBuffer()], sp),
+    converter,
+    converterVault: (c) => pda([seed("converter_vault"), c.toBuffer()], sp),
+  };
+}
+
+/** All the addresses of hub DAO `dao` in governance program `gp`, for hub epoch `epoch` (the DAO's current one unless it's a switch being set up). */
+export function addresses(network, dao, gp, epoch = 1) {
   const hub = network.programs.hub;
-  const governance = pda([seed("governance"), dao.toBuffer()], gp);
+  const governance = governanceAddress(dao, gp, epoch);
   return {
     dao,
+    epoch,
     treasury: pda([seed("treasury"), dao.toBuffer()], hub),
     executor: pda([seed("executor"), dao.toBuffer()], hub),
     governance,
-    vault: pda([seed("vault"), governance.toBuffer()], gp),
-    bondVault: pda([seed("bond_vault"), governance.toBuffer()], gp),
+    // optimistic: one bond vault per token proposals were made in
+    bondVault: (mint) => pda([seed("bond_vault"), governance.toBuffer(), mint.toBuffer()], gp),
     voter: (owner) => pda([seed("voter"), governance.toBuffer(), owner.toBuffer()], gp),
     proposal: (id) => pda([seed("proposal"), governance.toBuffer(), u64le(id)], gp),
     vote: (proposal, owner) => pda([seed("vote"), proposal.toBuffer(), owner.toBuffer()], gp),
@@ -135,17 +168,20 @@ export function addresses(network, dao, gp) {
     recallVote: (recall, owner) => pda([seed("recall_vote"), recall.toBuffer(), owner.toBuffer()], gp),
     // liquid
     override: (proposal, delegate) => pda([seed("override"), proposal.toBuffer(), delegate.toBuffer()], gp),
-    // sortition
+    // sortition: who can be drawn
     pool: pda([seed("pool"), governance.toBuffer()], gp),
-    // sowellian
-    escrow: pda([seed("escrow"), governance.toBuffer()], gp),
+    // sowellian: one escrow per token proposals were made in
+    escrow: (mint) => pda([seed("escrow"), governance.toBuffer(), mint.toBuffer()], gp),
     approvalVote: (proposal, owner) => pda([seed("approval_vote"), proposal.toBuffer(), owner.toBuffer()], gp),
     adjudicationVote: (proposal, owner) => pda([seed("adjudication_vote"), proposal.toBuffer(), owner.toBuffer()], gp),
     // sowellian and decision markets
     position: (proposal, owner) => pda([seed("position"), proposal.toBuffer(), owner.toBuffer()], gp),
-    // decision markets
-    baseVault: pda([seed("base_vault"), governance.toBuffer()], gp),
+    // decision markets: one base vault per token
+    baseVault: (mint) => pda([seed("base_vault"), governance.toBuffer(), mint.toBuffer()], gp),
     quoteVault: pda([seed("quote_vault"), governance.toBuffer()], gp),
+    // the hub's council records
+    waiting: (proposal) => pda([seed("waiting"), dao.toBuffer(), proposal.toBuffer()], hub),
+    ...stakeAddresses(network, dao),
   };
 }
 
@@ -444,10 +480,14 @@ export function daoTokenAddress(network, dao) {
   return pda([seed("token"), dao.toBuffer()], network.programs.hub);
 }
 
-/** The DAO's token on record at the hub, or null (DAOs created before the record existed). */
+/** The DAO's token on record at the hub, or null if it has none (a board DAO that never recorded one). */
 export async function readDaoToken(network, dao) {
-  const record = await clients(network).hub.account.daoToken.fetchNullable(daoTokenAddress(network, dao));
-  return record?.mint ?? null;
+  return (await readTokenRecord(network, dao))?.mint ?? null;
+}
+
+/** The hub's whole token record: { mint, pool } (the current stake pool), or null. */
+export async function readTokenRecord(network, dao) {
+  return clients(network).hub.account.daoToken.fetchNullable(daoTokenAddress(network, dao));
 }
 
 /**
@@ -456,10 +496,21 @@ export async function readDaoToken(network, dao) {
  * deliberate change of token, or a first record for an older DAO. `gp` is
  * the program running the DAO now.
  */
-export async function setDaoTokenIx(network, dao, gp, authority, payer, mint) {
+export async function setDaoTokenIx(network, dao, gp, authority, payer, mint, epoch = 1) {
   return clients(network)
     .hub.methods.setDaoToken(mint)
-    .accountsStrict({ authority, payer, dao, governance: addresses(network, dao, gp).governance, daoToken: daoTokenAddress(network, dao), systemProgram: SystemProgram.programId })
+    .accountsStrict({ authority, payer, dao, governance: governanceAddress(dao, gp, epoch), daoToken: daoTokenAddress(network, dao), systemProgram: SystemProgram.programId })
+    .instruction();
+}
+
+/** vortex-stake's create_pool: the DAO's pool for `mint` (anyone may open one; `payer` pays its rent). */
+export async function createPoolIx(network, dao, payer, mint, tokenProgram) {
+  tokenProgram ??= (await mintInfo(network, mint)).programId;
+  const st = stakeAddresses(network, dao);
+  const pool = st.poolOf(mint);
+  return clients(network)
+    .stake.methods.createPool()
+    .accountsStrict({ payer, hubDao: dao, mint, pool, vault: st.poolVault(pool), tokenProgram, systemProgram: SystemProgram.programId })
     .instruction();
 }
 
@@ -473,29 +524,32 @@ export async function setDaoTokenIx(network, dao, gp, authority, payer, mint) {
  */
 export async function initGovernanceIx(network, model, dao, authority, payer, opts = {}) {
   const gp = network.programs[model];
-  const a = addresses(network, dao, gp);
+  const epoch = opts.epoch ?? 1;
+  const a = addresses(network, dao, gp, epoch);
   const program = clients(network)[model];
+  const e = epoch;
   if (model === "board") {
     return program.methods
-      .initGovernance(opts.signers, boardConfig(network, opts.signers.length))
+      .initGovernance(e, opts.signers, boardConfig(network, opts.signers.length))
       .accountsStrict({ authority, payer, hubDao: dao, governance: a.governance, systemProgram: SystemProgram.programId })
       .instruction();
   }
   const { decimals, programId: tokenProgram } = await mintInfo(network, opts.mint);
+  const daoToken = daoTokenAddress(network, dao);
   if (model === "decisionMarkets") {
     const quoteMint = opts.quoteMint ?? NATIVE_MINT;
     const quote = await mintInfo(network, quoteMint);
     return program.methods
-      .initGovernance(marketsConfig(network, decimals, quote.decimals))
+      .initGovernance(e, marketsConfig(network, decimals, quote.decimals))
       .accountsStrict({
         authority,
         payer,
         hubDao: dao,
         governance: a.governance,
         baseMint: opts.mint,
-        daoToken: daoTokenAddress(network, dao),
+        daoToken,
         quoteMint,
-        baseVault: a.baseVault,
+        baseVault: a.baseVault(opts.mint),
         quoteVault: a.quoteVault,
         baseTokenProgram: tokenProgram,
         quoteTokenProgram: quote.programId,
@@ -503,25 +557,30 @@ export async function initGovernanceIx(network, model, dao, authority, payer, op
       })
       .instruction();
   }
-  const accounts = { authority, payer, hubDao: dao, governance: a.governance, mint: opts.mint, daoToken: daoTokenAddress(network, dao), vault: a.vault, tokenProgram, systemProgram: SystemProgram.programId };
+  // Token models keep no vault: members stake in the DAO's pool (vortex-stake).
+  const accounts = { authority, payer, hubDao: dao, governance: a.governance, daoToken, systemProgram: SystemProgram.programId };
   switch (model) {
     case "tokenWeighted":
     case "quadratic":
     case "liquid":
-      return program.methods.initGovernance(votingConfig(network)).accountsStrict(accounts).instruction();
+      return program.methods.initGovernance(e, votingConfig(network)).accountsStrict(accounts).instruction();
     case "sortition":
-      return program.methods.initGovernance(opts.council, sortitionConfig(network, opts.council.length)).accountsStrict({ ...accounts, pool: a.pool }).instruction();
+      return program.methods.initGovernance(e, opts.council, sortitionConfig(network, opts.council.length)).accountsStrict({ ...accounts, pool: a.pool }).instruction();
     case "sowellian":
-      return program.methods.initGovernance(sowellianConfig(network, decimals)).accountsStrict({ ...accounts, escrow: a.escrow }).instruction();
+      return program.methods.initGovernance(e, sowellianConfig(network, decimals)).accountsStrict(accounts).instruction();
     case "optimistic":
-      return program.methods.initGovernance(optimisticConfig(network, decimals)).accountsStrict({ ...accounts, bondVault: a.bondVault }).instruction();
+      return program.methods.initGovernance(e, optimisticConfig(network, decimals)).accountsStrict(accounts).instruction();
     case "conviction": {
+      // Conviction keeps the token for its spending-budget asset list.
       const supply = (await getMint(network.connection, opts.mint, "confirmed", tokenProgram)).supply;
       const { config, solWeight, tokenWeight } = convictionSetup(network, supply);
-      return program.methods.initGovernance(config, solWeight, tokenWeight).accountsStrict(accounts).instruction();
+      return program.methods
+        .initGovernance(e, config, solWeight, tokenWeight)
+        .accountsStrict({ authority, payer, hubDao: dao, governance: a.governance, mint: opts.mint, daoToken, tokenProgram, systemProgram: SystemProgram.programId })
+        .instruction();
     }
     case "delegate":
-      return program.methods.initGovernance(opts.council, delegateConfig(network, opts.council.length)).accountsStrict(accounts).instruction();
+      return program.methods.initGovernance(e, opts.council, delegateConfig(network, opts.council.length)).accountsStrict(accounts).instruction();
     default:
       throw new Error(`unknown model ${model}`);
   }
@@ -534,7 +593,7 @@ export async function initGovernanceIx(network, model, dao, authority, payer, op
  * token's mint authority, so new tokens can only ever be minted by a
  * passed proposal. Delegate and sortition also take their first `council`.
  */
-export async function createTokenDao(network, { name, initialSupply, model = "tokenWeighted", council }) {
+export async function createTokenDao(network, { name, initialSupply, model = "tokenWeighted", council, keepMintAuthority = false }) {
   if (!TOKEN_MODELS.includes(model)) throw new Error(`${model} has no token`);
   const operator = requireOperator();
   const conn = network.connection;
@@ -557,10 +616,12 @@ export async function createTokenDao(network, { name, initialSupply, model = "to
   const { dao, ix: create } = await createDaoIx(network, operator.publicKey, createKey.publicKey, name, gp);
   const a = addresses(network, dao, gp);
   const record = await setDaoTokenIx(network, dao, gp, operator.publicKey, operator.publicKey, mint.publicKey);
+  const pool = await createPoolIx(network, dao, operator.publicKey, mint.publicKey);
   const init = await initGovernanceIx(network, model, dao, operator.publicKey, operator.publicKey, { mint: mint.publicKey, council });
-  await send(network, [create, record, init], [operator, createKey]);
+  await send(network, [create, record, pool, init], [operator, createKey]);
 
-  await send(network, [createSetAuthorityInstruction(mint.publicKey, operator.publicKey, AuthorityType.MintTokens, a.treasury)], [operator]);
+  // A prop firm's launch keeps minting a moment longer, to hand it to the vault instead (src/solana/funds.js).
+  if (!keepMintAuthority) await send(network, [createSetAuthorityInstruction(mint.publicKey, operator.publicKey, AuthorityType.MintTokens, a.treasury)], [operator]);
   return { dao, treasury: a.treasury, governance: a.governance, mint: mint.publicKey };
 }
 
@@ -585,15 +646,55 @@ export async function readDao(network, dao) {
   const { hub } = clients(network);
   const record = await hub.account.dao.fetch(dao);
   const model = modelOf(network, record.governanceProgram);
-  const a = addresses(network, dao, record.governanceProgram);
-  return { record, model, gp: record.governanceProgram, ...a };
+  const a = addresses(network, dao, record.governanceProgram, record.epoch);
+  const token = await readTokenRecord(network, dao);
+  // `mint` and `stakePool`: the DAO's token and current stake pool (null for a board DAO without one).
+  return { record, model, gp: record.governanceProgram, ...a, mint: token?.mint ?? null, stakePool: token?.pool ?? null };
 }
 
+/**
+ * A model's governance account. Token models' `mint` (what the rest of
+ * the bot reads) is the DAO's token on record at the hub; decision
+ * markets' is its base mint.
+ */
 export async function readGovernance(network, model, governance) {
   const g = await clients(network)[model].account.governance.fetch(governance);
-  // Decision markets' token is its base mint; `mint` is what the rest of the bot reads.
   if (model === "decisionMarkets") g.mint = g.baseMint;
+  else if (model !== "board") g.mint = (await readTokenRecord(network, g.hubDao))?.mint ?? null;
   return g;
+}
+
+/** A member's stake in `pool` (vortex-stake), or null if they never staked there. */
+export async function readStake(network, dao, pool, owner) {
+  return clients(network).stake.account.stake.fetchNullable(stakeAddresses(network, dao).stakeOf(pool, owner));
+}
+
+export async function readStakePool(network, pool) {
+  return clients(network).stake.account.pool.fetchNullable(pool);
+}
+
+/**
+ * What the commands read about a member: their stake in the DAO's current
+ * pool (`amount`, `locked`, `stakeLockedUntil`), merged with the model's
+ * own record of them where it has one (liquid, conviction, sortition).
+ * `amount` is the stake. Null if neither exists.
+ */
+export async function readMember(network, model, d, owner) {
+  const [stake, voter] = await Promise.all([
+    d.stakePool ? readStake(network, d.dao, d.stakePool, owner) : null,
+    ["liquid", "conviction", "sortition"].includes(model) ? readVoter(network, model, d.voter(owner)) : null,
+  ]);
+  if (!stake && !voter) return null;
+  // A member with stake but no record in the model yet: not supporting, delegating or in the draw pool.
+  const none = { supporting: PublicKey.default, supportWeight: new BN(0), delegate: PublicKey.default, delegators: 0, delegatedPower: new BN(0), powerLockedUntil: new BN(0), lockedUntil: new BN(0), eligible: false };
+  return {
+    ...none,
+    ...(voter ?? {}),
+    amount: stake?.amount ?? new BN(0),
+    locked: stake?.locked ?? new BN(0),
+    stakeLockedUntil: stake?.lockedUntil ?? new BN(0),
+    hasVoter: Boolean(voter),
+  };
 }
 
 export async function readProposal(network, model, proposal) {
@@ -612,10 +713,17 @@ export async function readRecall(network, recall) {
   return clients(network).delegate.account.recall.fetchNullable(recall);
 }
 
-/** The cluster's clock (unix seconds), which proposal timing is measured against. */
+/**
+ * The cluster's clock (unix seconds), which proposal timing is measured
+ * against: the Clock sysvar the programs read (unix_timestamp, the i64 at
+ * byte 32, after slot, epoch_start_timestamp, epoch and
+ * leader_schedule_epoch). Asking getBlockTime for the newest slot fails
+ * while the RPC hasn't stored that block yet ("Block not available").
+ */
 export async function clusterNow(network) {
-  const slot = await network.connection.getSlot("confirmed");
-  return (await network.connection.getBlockTime(slot)) ?? Math.floor(Date.now() / 1000);
+  const info = await network.connection.getAccountInfo(SYSVAR_CLOCK_PUBKEY, "confirmed");
+  if (info?.data?.length >= 40) return Number(Buffer.from(info.data).readBigInt64LE(32));
+  return Math.floor(Date.now() / 1000);
 }
 
 const toNum = (v) => (typeof v === "number" ? v : Number(v.toString()));
@@ -872,41 +980,61 @@ export function formatUnits(raw, decimals) {
 }
 
 // ---------------------------------------------------------------
-// members: deposits
+// members: staking (vortex-stake, shared by every model)
 // ---------------------------------------------------------------
 
-async function depositAccounts(network, member, d, governance) {
-  const { programId: tokenProgram } = await mintInfo(network, governance.mint);
+async function stakeAccounts(network, member, dao, pool) {
+  const p = await readStakePool(network, pool);
+  if (!p) throw userError("This DAO has no stake pool for that token.");
+  const st = stakeAddresses(network, dao);
   return {
     owner: member.publicKey,
-    governance: d.governance,
-    voter: d.voter(member.publicKey),
-    ownerTokenAccount: tokenAccount(governance.mint, member.publicKey, tokenProgram),
-    vault: d.vault,
-    mint: governance.mint,
-    tokenProgram,
+    pool,
+    stake: st.stakeOf(pool, member.publicKey),
+    ownerTokenAccount: tokenAccount(p.mint, member.publicKey, p.tokenProgram),
+    vault: p.vault,
+    mint: p.mint,
+    tokenProgram: p.tokenProgram,
   };
 }
 
-/** Liquid: the member's delegate's record, which their deposits and withdrawals keep in step (null if they haven't delegated). */
-async function delegateVoterOf(network, d, owner) {
-  const voter = await readVoter(network, "liquid", d.voter(owner));
-  return voter && !voter.delegate.equals(PublicKey.default) ? d.voter(voter.delegate) : null;
-}
-
-/** Deposits `raw` DAO tokens from the member's wallet into the DAO's vault (any staking model). */
+/**
+ * Stakes `raw` DAO tokens from the member's wallet in the DAO's current
+ * pool. Every token model reads it, so it stays put through switches.
+ * (`model` and `governance` are unused; kept so callers read as before.)
+ */
 export async function deposit(network, model, member, d, governance, raw) {
-  const accounts = await depositAccounts(network, member, d, governance);
-  if (model === "liquid") accounts.delegateVoter = await delegateVoterOf(network, d, member.publicKey);
-  const ix = await clients(network)[model].methods.deposit(bn(raw)).accountsStrict({ ...accounts, systemProgram: SystemProgram.programId }).instruction();
+  if (!d.stakePool) throw userError("This DAO has no token to stake.");
+  const accounts = await stakeAccounts(network, member, d.dao, d.stakePool);
+  const ix = await clients(network)
+    .stake.methods.stake(bn(raw))
+    .accountsStrict({ ...accounts, daoToken: daoTokenAddress(network, d.dao), systemProgram: SystemProgram.programId })
+    .instruction();
   return send(network, [ix], [member]);
 }
 
-export async function withdraw(network, model, member, d, governance, raw) {
-  const accounts = await depositAccounts(network, member, d, governance);
-  if (model === "liquid") accounts.delegateVoter = await delegateVoterOf(network, d, member.publicKey);
-  const ix = await clients(network)[model].methods.withdraw(bn(raw)).accountsStrict(accounts).instruction();
+/**
+ * Takes `raw` back out of a pool of the DAO's: the current one unless
+ * `pool` is given (an old token's, after a token change). Only what
+ * isn't locked, once the votes it was cast in have ended.
+ */
+export async function withdraw(network, model, member, d, governance, raw, pool = d.stakePool) {
+  if (!pool) throw userError("This DAO has no token to unstake.");
+  const accounts = await stakeAccounts(network, member, d.dao, pool);
+  const ix = await clients(network).stake.methods.withdraw(bn(raw)).accountsStrict(accounts).instruction();
   return send(network, [ix], [member]);
+}
+
+/** The member's stakes in every pool the DAO has had (current first), for /unstake after a token change. */
+export async function memberStakes(network, d, owner, mints = []) {
+  const st = stakeAddresses(network, d.dao);
+  const pools = [...new Set([d.stakePool, ...mints.map((m) => st.poolOf(m))].filter(Boolean).map((p) => p.toBase58()))].map((k) => new PublicKey(k));
+  const out = [];
+  for (const pool of pools) {
+    const s = await readStake(network, d.dao, pool, owner);
+    if (s && BigInt(s.amount.toString()) > 0n) out.push({ pool, current: d.stakePool?.equals(pool) ?? false, stake: s, mint: (await readStakePool(network, pool)).mint });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------
@@ -992,24 +1120,53 @@ function unwrapSolIx(owner) {
   return createCloseAccountInstruction(tokenAccount(NATIVE_MINT, owner), owner, owner);
 }
 
-/** Decision markets' token accounts for `owner`, and the shared `tokens` accounts its instructions take. */
-async function marketAccounts(network, d, g, owner) {
-  const [base, quote] = await Promise.all([mintInfo(network, g.baseMint), mintInfo(network, g.quoteMint)]);
+/**
+ * Decision markets' token accounts for `owner`, and the shared `tokens`
+ * accounts its instructions take. The base side is proposal `p`'s own
+ * (the token it was seeded in), or the governance's current one when
+ * proposing.
+ */
+async function marketAccounts(network, d, g, owner, p = null) {
+  const baseMint = p?.baseMint ?? g.baseMint;
+  const baseVault = p?.baseVault ?? g.baseVault;
+  const [base, quote] = await Promise.all([mintInfo(network, baseMint), mintInfo(network, g.quoteMint)]);
   return {
-    ownerBase: tokenAccount(g.baseMint, owner, base.programId),
+    baseMint,
+    ownerBase: tokenAccount(baseMint, owner, base.programId),
     ownerQuote: tokenAccount(g.quoteMint, owner, quote.programId),
     base,
     quote,
     tokens: {
       governance: d.governance,
-      baseVault: g.baseVault,
+      baseVault,
       quoteVault: g.quoteVault,
-      baseMint: g.baseMint,
+      baseMint,
       quoteMint: g.quoteMint,
       baseTokenProgram: base.programId,
       quoteTokenProgram: quote.programId,
     },
   };
+}
+
+/** After a token change: moves new decision-markets proposals onto the DAO's new token. Anyone; the operator pays. */
+export async function syncBaseToken(network, d) {
+  const operator = requireOperator();
+  if (!d.mint) throw userError("This DAO has no token on record.");
+  const { programId } = await mintInfo(network, d.mint);
+  const ix = await clients(network)
+    .decisionMarkets.methods.syncBaseToken()
+    .accountsStrict({
+      payer: operator.publicKey,
+      governance: d.governance,
+      hubDao: d.dao,
+      daoToken: daoTokenAddress(network, d.dao),
+      baseMint: d.mint,
+      baseVault: d.baseVault(d.mint),
+      baseTokenProgram: programId,
+      systemProgram: SystemProgram.programId,
+    })
+    .instruction();
+  return send(network, [ix], [operator]);
 }
 
 /** Whether a decision markets DAO's quote token is wrapped SOL (the bot wraps and unwraps it for members). */
@@ -1032,11 +1189,20 @@ export async function propose(network, member, d, model, instructions, descripti
   const proposal = d.proposal(id);
   const program = clients(network)[model];
   const base = { proposer: member.publicKey, governance: d.governance, hubDao: d.dao, proposal, systemProgram: SystemProgram.programId };
+  // Token models fix the DAO's current pool on the proposal; the proposer's stake there (if any) meets the threshold.
+  const pooled = async () => {
+    const stake = d.stakeOf(d.stakePool, member.publicKey);
+    const hasStake = Boolean(await network.connection.getAccountInfo(stake));
+    return { daoToken: daoTokenAddress(network, d.dao), pool: d.stakePool, proposerStake: hasStake ? stake : null };
+  };
   let ix;
   if (VOTING_MODELS.includes(model) || model === "conviction") {
-    const voter = d.voter(member.publicKey);
-    const hasVoter = Boolean(await network.connection.getAccountInfo(voter));
-    const accounts = { ...base, voter: hasVoter ? voter : null };
+    const accounts = { ...base, ...(await pooled()) };
+    if (model === "liquid") {
+      // Liquid also reads the proposer's record: delegations to them count toward the threshold.
+      const voter = d.voter(member.publicKey);
+      accounts.voter = (await network.connection.getAccountInfo(voter)) ? voter : null;
+    }
     if (model === "conviction") {
       const lines = new Map();
       for (const b of budget) {
@@ -1056,13 +1222,21 @@ export async function propose(network, member, d, model, instructions, descripti
     const { programId: tokenProgram } = await mintInfo(network, g.mint);
     ix = await program.methods
       .propose(new BN(id), description, instructions, criteria)
-      .accountsStrict({ ...base, proposerTokenAccount: tokenAccount(g.mint, member.publicKey, tokenProgram), escrow: g.escrow, mint: g.mint, tokenProgram })
+      .accountsStrict({
+        ...base,
+        daoToken: daoTokenAddress(network, d.dao),
+        pool: d.stakePool,
+        proposerTokenAccount: tokenAccount(g.mint, member.publicKey, tokenProgram),
+        escrow: d.escrow(g.mint),
+        mint: g.mint,
+        tokenProgram,
+      })
       .instruction();
   } else if (model === "decisionMarkets") {
     const m = await marketAccounts(network, d, g, member.publicKey);
     ix = await program.methods
       .propose(new BN(id), description, instructions, bn(seeds.base), bn(seeds.quote))
-      .accountsStrict({ ...base, proposerBase: m.ownerBase, proposerQuote: m.ownerQuote, tokens: m.tokens })
+      .accountsStrict({ ...base, daoToken: daoTokenAddress(network, d.dao), proposerBase: m.ownerBase, proposerQuote: m.ownerQuote, tokens: m.tokens })
       .instruction();
     const pre = quoteIsSol(g) ? wrapSolIxs(member.publicKey, seeds.quote) : [];
     const signature = await send(network, [...pre, ix], [member]);
@@ -1083,8 +1257,16 @@ export async function propose(network, member, d, model, instructions, descripti
 export async function vote(network, member, d, model, id, choice) {
   const proposal = d.proposal(id);
   const program = clients(network)[model];
+  const owner = member.publicKey;
+  if (COUNCIL_MODELS.includes(model)) {
+    const ix = await program.methods.castVote({ [choice]: {} }).accountsStrict({ member: owner, governance: d.governance, proposal }).instruction();
+    return send(network, [ix], [member]);
+  }
+  // Votes count the stake in the pool the proposal was made with, and hold it until the vote ends.
+  const p = await readProposal(network, model, proposal);
+  if (!p) throw userError(`There's no proposal #${id}.`);
+  const staked = { hubDao: d.dao, pool: p.pool, stake: d.stakeOf(p.pool, owner), stakeProgram: network.programs.stake };
   if (model === "liquid") {
-    const owner = member.publicKey;
     const voter = await readVoter(network, model, d.voter(owner));
     const delegated = voter && !voter.delegate.equals(PublicKey.default) ? voter.delegate : null;
     const ix = delegated
@@ -1094,6 +1276,7 @@ export async function vote(network, member, d, model, id, choice) {
             owner,
             governance: d.governance,
             proposal,
+            ...staked,
             voter: d.voter(owner),
             delegateVoter: d.voter(delegated),
             delegateRecord: d.vote(proposal, delegated),
@@ -1104,24 +1287,23 @@ export async function vote(network, member, d, model, id, choice) {
           .instruction()
       : await program.methods
           .castVote({ [choice]: {} })
-          .accountsStrict({ owner, governance: d.governance, proposal, voter: d.voter(owner), overrides: d.override(proposal, owner), voteRecord: d.vote(proposal, owner), systemProgram: SystemProgram.programId })
-          .instruction();
-    return send(network, [ix], [member]);
-  }
-  const ix =
-    COUNCIL_MODELS.includes(model)
-      ? await program.methods.castVote({ [choice]: {} }).accountsStrict({ member: member.publicKey, governance: d.governance, proposal }).instruction()
-      : await program.methods
-          .castVote({ [choice]: {} })
           .accountsStrict({
-            owner: member.publicKey,
+            owner,
             governance: d.governance,
             proposal,
-            voter: d.voter(member.publicKey),
-            voteRecord: d.vote(proposal, member.publicKey),
+            ...staked,
+            voter: d.voter(owner),
+            overrides: d.override(proposal, owner),
+            voteRecord: d.vote(proposal, owner),
             systemProgram: SystemProgram.programId,
           })
           .instruction();
+    return send(network, [ix], [member]);
+  }
+  const ix = await program.methods
+    .castVote({ [choice]: {} })
+    .accountsStrict({ owner, governance: d.governance, proposal, ...staked, voteRecord: d.vote(proposal, owner), systemProgram: SystemProgram.programId })
+    .instruction();
   return send(network, [ix], [member]);
 }
 
@@ -1177,19 +1359,20 @@ export async function queue(network, d, model, id) {
     const ix = await program.methods.finalizeUnchallenged().accountsStrict({ governance: d.governance, proposal }).instruction();
     return send(network, [ix], [operator]);
   }
-  const g = await readGovernance(network, model, d.governance);
-  const { programId: tokenProgram } = await mintInfo(network, g.mint);
-  const treasuryAta = tokenAccount(g.mint, d.treasury, tokenProgram);
-  const challengerAta = tokenAccount(g.mint, p.challenger, tokenProgram);
+  // The bond is in the token the proposal was made with.
+  const mint = p.mint;
+  const { programId: tokenProgram } = await mintInfo(network, mint);
+  const treasuryAta = tokenAccount(mint, d.treasury, tokenProgram);
+  const challengerAta = tokenAccount(mint, p.challenger, tokenProgram);
   const ix = await program.methods
     .finalizeChallenge()
-    .accountsStrict({ governance: d.governance, proposal, bondVault: g.bondVault, treasuryTokenAccount: treasuryAta, challengerTokenAccount: challengerAta, mint: g.mint, tokenProgram })
+    .accountsStrict({ governance: d.governance, proposal, bondVault: d.bondVault(mint), treasuryTokenAccount: treasuryAta, challengerTokenAccount: challengerAta, mint, tokenProgram })
     .instruction();
   return send(
     network,
     [
-      createAssociatedTokenAccountIdempotentInstruction(operator.publicKey, treasuryAta, d.treasury, g.mint, tokenProgram),
-      createAssociatedTokenAccountIdempotentInstruction(operator.publicKey, challengerAta, p.challenger, g.mint, tokenProgram),
+      createAssociatedTokenAccountIdempotentInstruction(operator.publicKey, treasuryAta, d.treasury, mint, tokenProgram),
+      createAssociatedTokenAccountIdempotentInstruction(operator.publicKey, challengerAta, p.challenger, mint, tokenProgram),
       ix,
     ],
     [operator]
@@ -1206,17 +1389,72 @@ export async function execute(network, d, model, id) {
   const proposal = d.proposal(id);
   const p = await readProposal(network, model, proposal);
   if (!p) throw userError(`There's no proposal #${id}.`);
-  const remaining = [];
-  for (const ix of p.core.instructions) {
-    for (const m of ix.accounts) remaining.push({ pubkey: m.pubkey, isSigner: false, isWritable: m.isWritable });
-    remaining.push({ pubkey: ix.programId, isSigner: false, isWritable: false });
+  if (d.record.council) {
+    // With a security council on, a passed proposal waits for it instead of running.
+    const ix = await clients(network)
+      .hub.methods.submitToCouncil()
+      .accountsStrict({ payer: operator.publicKey, dao: d.dao, executor: d.executor, governanceProgram: d.gp, governance: d.governance, proposal, waiting: d.waiting(proposal), systemProgram: SystemProgram.programId })
+      .instruction();
+    const signature = await send(network, [ix], [operator]);
+    return Object.assign(new String(signature), { awaitingCouncil: true });
   }
   const ix = await clients(network)
     .hub.methods.execute()
     .accountsStrict({ dao: d.dao, executor: d.executor, governanceProgram: d.gp, governance: d.governance, proposal })
-    .remainingAccounts(remaining)
+    .remainingAccounts(remainingFor(p.core.instructions))
     .instruction();
   return send(network, [ix], [operator], { computeUnits: 400_000 });
+}
+
+/** Every account a proposal's stored instructions use, and the programs they call (the treasury signs inside the hub). */
+function remainingFor(instructions) {
+  const remaining = [];
+  for (const ix of instructions) {
+    for (const m of ix.accounts) remaining.push({ pubkey: m.pubkey, isSigner: false, isWritable: m.isWritable });
+    remaining.push({ pubkey: ix.programId, isSigner: false, isWritable: false });
+  }
+  return remaining;
+}
+
+// ---------------------------------------------------------------
+// the security council (on the hub's DAO record)
+// ---------------------------------------------------------------
+
+/** The hub's record of a proposal waiting for the council, or null. */
+export async function readWaiting(network, d, proposal) {
+  return clients(network).hub.account.waiting.fetchNullable(d.waiting(proposal));
+}
+
+/** A council signer confirms (or rejects) proposal `id` of the running model. */
+export async function councilVote(network, signer, d, id, confirm = true) {
+  const proposal = d.proposal(id);
+  const method = confirm ? "councilConfirm" : "councilReject";
+  const ix = await clients(network).hub.methods[method]().accountsStrict({ signer: signer.publicKey, dao: d.dao, waiting: d.waiting(proposal) }).instruction();
+  return send(network, [ix], [signer]);
+}
+
+/** Runs a proposal the council confirmed (or a signer replacement after their tenure). Anyone; the operator pays. */
+export async function runConfirmed(network, d, model, id) {
+  const operator = requireOperator();
+  const proposal = d.proposal(id);
+  const p = await readProposal(network, model, proposal);
+  if (!p) throw userError(`There's no proposal #${id}.`);
+  const ix = await clients(network)
+    .hub.methods.runConfirmed()
+    .accountsStrict({ dao: d.dao, waiting: d.waiting(proposal), proposal })
+    .remainingAccounts(remainingFor(p.core.instructions))
+    .instruction();
+  return send(network, [ix], [operator], { computeUnits: 400_000 });
+}
+
+/** The hub's set_council, for the treasury to sign inside a proposal (turns it on, or replaces the signers). */
+export async function setCouncilIx(network, d, signers, required, tenureSeconds) {
+  return stored(await clients(network).hub.methods.setCouncil(signers, required, new BN(tenureSeconds)).accountsStrict({ treasury: d.treasury, dao: d.dao }).instruction());
+}
+
+/** The hub's clear_council (turns it off; the council itself must confirm the proposal). */
+export async function clearCouncilIx(network, d) {
+  return stored(await clients(network).hub.methods.clearCouncil().accountsStrict({ treasury: d.treasury, dao: d.dao }).instruction());
 }
 
 // ---------------------------------------------------------------
@@ -1225,17 +1463,22 @@ export async function execute(network, d, model, id) {
 
 /** Challenges proposal `id`, posting the DAO's bond from the member's wallet. */
 export async function challenge(network, member, d, governance, id) {
-  const { programId: tokenProgram } = await mintInfo(network, governance.mint);
+  const proposal = d.proposal(id);
+  const p = await readProposal(network, "optimistic", proposal);
+  if (!p) throw userError(`There's no proposal #${id}.`);
+  const mint = p.mint;
+  const { programId: tokenProgram } = await mintInfo(network, mint);
   const ix = await clients(network)
     .optimistic.methods.challenge()
     .accountsStrict({
       challenger: member.publicKey,
       governance: d.governance,
-      proposal: d.proposal(id),
-      challengerTokenAccount: tokenAccount(governance.mint, member.publicKey, tokenProgram),
-      bondVault: governance.bondVault,
-      mint: governance.mint,
+      proposal,
+      challengerTokenAccount: tokenAccount(mint, member.publicKey, tokenProgram),
+      bondVault: d.bondVault(mint),
+      mint,
       tokenProgram,
+      systemProgram: SystemProgram.programId,
     })
     .instruction();
   return send(network, [ix], [member]);
@@ -1244,13 +1487,17 @@ export async function challenge(network, member, d, governance, id) {
 /** Returns the bond of a cancelled, challenged proposal to its challenger. Anyone; the operator pays. */
 export async function reclaimBond(network, d, governance, id, challenger) {
   const operator = requireOperator();
-  const { programId: tokenProgram } = await mintInfo(network, governance.mint);
-  const to = tokenAccount(governance.mint, challenger, tokenProgram);
+  const proposal = d.proposal(id);
+  const p = await readProposal(network, "optimistic", proposal);
+  if (!p) throw userError(`There's no proposal #${id}.`);
+  const mint = p.mint;
+  const { programId: tokenProgram } = await mintInfo(network, mint);
+  const to = tokenAccount(mint, challenger, tokenProgram);
   const ix = await clients(network)
     .optimistic.methods.reclaimBond()
-    .accountsStrict({ governance: d.governance, proposal: d.proposal(id), bondVault: governance.bondVault, challengerTokenAccount: to, mint: governance.mint, tokenProgram })
+    .accountsStrict({ governance: d.governance, proposal, bondVault: d.bondVault(mint), challengerTokenAccount: to, mint, tokenProgram })
     .instruction();
-  return send(network, [createAssociatedTokenAccountIdempotentInstruction(operator.publicKey, to, challenger, governance.mint, tokenProgram), ix], [operator]);
+  return send(network, [createAssociatedTokenAccountIdempotentInstruction(operator.publicKey, to, challenger, mint, tokenProgram), ix], [operator]);
 }
 
 // ---------------------------------------------------------------
@@ -1259,22 +1506,49 @@ export async function reclaimBond(network, d, governance, id, challenger) {
 
 /** Backs proposal `id` with the member's whole deposit (moving their support from another proposal, if any). */
 export async function support(network, member, d, id) {
+  const owner = member.publicKey;
   const proposal = d.proposal(id);
-  const voter = await readVoter(network, "conviction", d.voter(member.publicKey));
+  const p = await readProposal(network, "conviction", proposal);
+  if (!p) throw userError(`There's no proposal #${id}.`);
+  const voter = await readVoter(network, "conviction", d.voter(owner));
   const current = voter?.supporting;
   const previous = current && !current.equals(PublicKey.default) && !current.equals(proposal) ? current : null;
+  // Support locks the stake (with the member's signature) in the pool the proposal was made with.
   const ix = await clients(network)
     .conviction.methods.support()
-    .accountsStrict({ owner: member.publicKey, governance: d.governance, voter: d.voter(member.publicKey), proposal, previous })
+    .accountsStrict({
+      owner,
+      governance: d.governance,
+      hubDao: d.dao,
+      voter: d.voter(owner),
+      proposal,
+      previous,
+      pool: p.pool,
+      stake: d.stakeOf(p.pool, owner),
+      lock: d.lockOf(p.pool, owner, d.governance),
+      stakeProgram: network.programs.stake,
+      systemProgram: SystemProgram.programId,
+    })
     .instruction();
   return send(network, [ix], [member]);
 }
 
-/** Stops backing the member's current proposal. */
+/** Stops backing the member's current proposal, releasing its lock on their stake. */
 export async function withdrawSupport(network, member, d, supporting) {
+  const owner = member.publicKey;
+  const voter = await readVoter(network, "conviction", d.voter(owner));
+  const pool = voter?.supportPool ?? d.stakePool;
   const ix = await clients(network)
     .conviction.methods.withdrawSupport()
-    .accountsStrict({ owner: member.publicKey, governance: d.governance, voter: d.voter(member.publicKey), proposal: supporting })
+    .accountsStrict({
+      owner,
+      governance: d.governance,
+      voter: d.voter(owner),
+      proposal: supporting,
+      stake: d.stakeOf(pool, owner),
+      lock: d.lockOf(pool, owner, d.governance),
+      stakeProgram: network.programs.stake,
+    })
     .instruction();
   return send(network, [ix], [member]);
 }
@@ -1290,29 +1564,42 @@ export async function startElection(network, d) {
   const id = toNum(g.electionCount) + 1;
   const ix = await clients(network)
     .delegate.methods.startElection(new BN(id))
-    .accountsStrict({ payer: operator.publicKey, governance: d.governance, election: d.election(id), systemProgram: SystemProgram.programId })
+    .accountsStrict({ payer: operator.publicKey, governance: d.governance, hubDao: d.dao, daoToken: daoTokenAddress(network, d.dao), pool: d.stakePool, election: d.election(id), systemProgram: SystemProgram.programId })
     .instruction();
   await send(network, [ix], [operator]);
   return id;
 }
 
+/** An election's pool (the one current when it started): candidacy and ballots read stake there. */
+async function electionPool(network, d, election) {
+  const e = await readElection(network, election);
+  if (!e) throw userError("There's no such election.");
+  return e.pool;
+}
+
 export async function declareCandidacy(network, member, d, electionId) {
+  const election = d.election(electionId);
+  const pool = await electionPool(network, d, election);
   const ix = await clients(network)
     .delegate.methods.declareCandidacy()
-    .accountsStrict({ candidate: member.publicKey, governance: d.governance, election: d.election(electionId), voter: d.voter(member.publicKey) })
+    .accountsStrict({ candidate: member.publicKey, governance: d.governance, hubDao: d.dao, election, pool, stake: d.stakeOf(pool, member.publicKey), stakeProgram: network.programs.stake })
     .instruction();
   return send(network, [ix], [member]);
 }
 
 export async function voteInElection(network, member, d, electionId, candidates) {
   const election = d.election(electionId);
+  const pool = await electionPool(network, d, election);
   const ix = await clients(network)
     .delegate.methods.voteInElection(candidates)
     .accountsStrict({
       owner: member.publicKey,
       governance: d.governance,
+      hubDao: d.dao,
       election,
-      voter: d.voter(member.publicKey),
+      pool,
+      stake: d.stakeOf(pool, member.publicKey),
+      stakeProgram: network.programs.stake,
       ballot: d.ballot(election, member.publicKey),
       systemProgram: SystemProgram.programId,
     })
@@ -1333,7 +1620,16 @@ export async function initiateRecall(network, member, d, target) {
   const id = toNum(g.recallCount) + 1;
   const ix = await clients(network)
     .delegate.methods.initiateRecall(new BN(id), target)
-    .accountsStrict({ initiator: member.publicKey, governance: d.governance, voter: d.voter(member.publicKey), recall: d.recall(id), systemProgram: SystemProgram.programId })
+    .accountsStrict({
+      initiator: member.publicKey,
+      governance: d.governance,
+      hubDao: d.dao,
+      daoToken: daoTokenAddress(network, d.dao),
+      pool: d.stakePool,
+      stake: d.stakeOf(d.stakePool, member.publicKey),
+      recall: d.recall(id),
+      systemProgram: SystemProgram.programId,
+    })
     .instruction();
   await send(network, [ix], [member]);
   return id;
@@ -1341,13 +1637,18 @@ export async function initiateRecall(network, member, d, target) {
 
 export async function voteRecall(network, member, d, recallId, choice) {
   const recall = d.recall(recallId);
+  const r = await readRecall(network, recall);
+  if (!r) throw userError(`There's no recall #${recallId}.`);
   const ix = await clients(network)
     .delegate.methods.voteRecall({ [choice]: {} })
     .accountsStrict({
       owner: member.publicKey,
       governance: d.governance,
+      hubDao: d.dao,
       recall,
-      voter: d.voter(member.publicKey),
+      pool: r.pool,
+      stake: d.stakeOf(r.pool, member.publicKey),
+      stakeProgram: network.programs.stake,
       recallVote: d.recallVote(recall, member.publicKey),
       systemProgram: SystemProgram.programId,
     })
@@ -1365,19 +1666,44 @@ export async function finalizeRecall(network, d, recallId) {
 // liquid: delegation
 // ---------------------------------------------------------------
 
-/** Delegates the member's whole deposit to `to` (one hop: `to` can't have delegated themselves). */
+/** Delegates the member's unlocked stake to `to`, locking it while delegated (one hop: `to` can't have delegated themselves). */
 export async function delegateTo(network, member, d, to) {
+  const owner = member.publicKey;
   const ix = await clients(network)
     .liquid.methods.delegate(to)
-    .accountsStrict({ owner: member.publicKey, governance: d.governance, voter: d.voter(member.publicKey), delegateVoter: d.voter(to), systemProgram: SystemProgram.programId })
+    .accountsStrict({
+      owner,
+      governance: d.governance,
+      hubDao: d.dao,
+      daoToken: daoTokenAddress(network, d.dao),
+      pool: d.stakePool,
+      stake: d.stakeOf(d.stakePool, owner),
+      lock: d.lockOf(d.stakePool, owner, d.governance),
+      voter: d.voter(owner),
+      delegateVoter: d.voter(to),
+      stakeProgram: network.programs.stake,
+      systemProgram: SystemProgram.programId,
+    })
     .instruction();
   return send(network, [ix], [member]);
 }
 
+/** Takes the delegation back and releases the stake it locked. */
 export async function undelegate(network, member, d, delegate) {
+  const owner = member.publicKey;
+  const voter = await readVoter(network, "liquid", d.voter(owner));
+  const pool = voter?.pool ?? d.stakePool;
   const ix = await clients(network)
     .liquid.methods.undelegate()
-    .accountsStrict({ owner: member.publicKey, governance: d.governance, voter: d.voter(member.publicKey), delegateVoter: d.voter(delegate) })
+    .accountsStrict({
+      owner,
+      governance: d.governance,
+      voter: d.voter(owner),
+      delegateVoter: d.voter(delegate),
+      stake: d.stakeOf(pool, owner),
+      lock: d.lockOf(pool, owner, d.governance),
+      stakeProgram: network.programs.stake,
+    })
     .instruction();
   return send(network, [ix], [member]);
 }
@@ -1406,7 +1732,7 @@ export function drawSeed(governance, number, nonce) {
 }
 
 export async function readPool(network, d) {
-  return clients(network).sortition.account.pool.fetchNullable(d.pool);
+  return clients(network).sortition.account.drawPool.fetchNullable(d.pool);
 }
 
 /** The open draw's randomness request: "missing", "pending" or "fulfilled". */
@@ -1416,18 +1742,45 @@ export async function drawStatus(network, g) {
   return info.data[8] === 1 ? "fulfilled" : "pending";
 }
 
+/** Joins the draw pool, locking the eligibility threshold of the member's stake (they sign). */
 export async function joinPool(network, member, d) {
+  const owner = member.publicKey;
   const ix = await clients(network)
     .sortition.methods.joinPool()
-    .accountsStrict({ owner: member.publicKey, governance: d.governance, pool: d.pool, voter: d.voter(member.publicKey) })
+    .accountsStrict({
+      owner,
+      governance: d.governance,
+      hubDao: d.dao,
+      pool: d.pool,
+      voter: d.voter(owner),
+      daoToken: daoTokenAddress(network, d.dao),
+      stakePool: d.stakePool,
+      stake: d.stakeOf(d.stakePool, owner),
+      lock: d.lockOf(d.stakePool, owner, d.governance),
+      stakeProgram: network.programs.stake,
+      systemProgram: SystemProgram.programId,
+    })
     .instruction();
   return send(network, [ix], [member]);
 }
 
+/** Leaves the draw pool, releasing what joining locked. */
 export async function leavePool(network, member, d) {
+  const owner = member.publicKey;
+  const voter = await readVoter(network, "sortition", d.voter(owner));
+  const pool = voter?.stakePool ?? d.stakePool;
+  const locked = voter && BigInt(voter.locked.toString()) > 0n;
   const ix = await clients(network)
     .sortition.methods.leavePool()
-    .accountsStrict({ owner: member.publicKey, governance: d.governance, pool: d.pool, voter: d.voter(member.publicKey) })
+    .accountsStrict({
+      owner,
+      governance: d.governance,
+      pool: d.pool,
+      voter: d.voter(owner),
+      stake: d.stakeOf(pool, owner),
+      lock: locked ? d.lockOf(pool, owner, d.governance) : null,
+      stakeProgram: network.programs.stake,
+    })
     .instruction();
   return send(network, [ix], [member]);
 }
@@ -1498,11 +1851,19 @@ export async function readPosition(network, model, position) {
 }
 
 /** The approval vote ("for" | "against" | "abstain"), weighted by the member's deposit. */
+/** The proposal's pool, and the member's stake in it, for a sowellian stake-weighted vote. */
+async function sowellianStake(network, d, proposal, owner) {
+  const p = await readProposal(network, "sowellian", proposal);
+  if (!p) throw userError("There's no such proposal.");
+  return { hubDao: d.dao, pool: p.pool, stake: d.stakeOf(p.pool, owner), stakeProgram: network.programs.stake };
+}
+
 export async function approvalVote(network, member, d, id, choice) {
   const proposal = d.proposal(id);
+  const owner = member.publicKey;
   const ix = await clients(network)
     .sowellian.methods.castApprovalVote({ [choice]: {} })
-    .accountsStrict({ owner: member.publicKey, governance: d.governance, proposal, voter: d.voter(member.publicKey), voteRecord: d.approvalVote(proposal, member.publicKey), systemProgram: SystemProgram.programId })
+    .accountsStrict({ owner, governance: d.governance, proposal, ...(await sowellianStake(network, d, proposal, owner)), voteRecord: d.approvalVote(proposal, owner), systemProgram: SystemProgram.programId })
     .instruction();
   return send(network, [ix], [member]);
 }
@@ -1510,9 +1871,10 @@ export async function approvalVote(network, member, d, id, choice) {
 /** The adjudication vote on a challenged resolution ("success" | "failure"). */
 export async function adjudicationVote(network, member, d, id, outcome) {
   const proposal = d.proposal(id);
+  const owner = member.publicKey;
   const ix = await clients(network)
     .sowellian.methods.castAdjudicationVote({ [outcome]: {} })
-    .accountsStrict({ owner: member.publicKey, governance: d.governance, proposal, voter: d.voter(member.publicKey), voteRecord: d.adjudicationVote(proposal, member.publicKey), systemProgram: SystemProgram.programId })
+    .accountsStrict({ owner, governance: d.governance, proposal, ...(await sowellianStake(network, d, proposal, owner)), voteRecord: d.adjudicationVote(proposal, owner), systemProgram: SystemProgram.programId })
     .instruction();
   return send(network, [ix], [member]);
 }
@@ -1535,10 +1897,14 @@ export async function sowellianSettle(network, d, id) {
   return step;
 }
 
-async function sowellianTokenAccounts(network, g, owner) {
-  const { programId: tokenProgram } = await mintInfo(network, g.mint);
-  return { ownerTokenAccount: tokenAccount(g.mint, owner, tokenProgram), escrow: g.escrow, mint: g.mint, tokenProgram };
+/** A sowellian proposal's token accounts: its own token (the one it was made with) and escrow. */
+async function sowellianTokenAccounts(network, d, id, owner) {
+  const p = await readProposal(network, "sowellian", d.proposal(id));
+  if (!p) throw userError(`There's no proposal #${id}.`);
+  const { programId: tokenProgram } = await mintInfo(network, p.mint);
+  return { ownerTokenAccount: tokenAccount(p.mint, owner, tokenProgram), escrow: d.escrow(p.mint), mint: p.mint, tokenProgram, pool: p.pool };
 }
+const withoutPool = ({ pool, ...rest }) => rest;
 
 /** Backs YES or NO ("yes" | "no") with `raw` DAO tokens from the member's wallet. */
 export async function takePosition(network, member, d, g, id, side, raw) {
@@ -1550,7 +1916,7 @@ export async function takePosition(network, member, d, g, id, side, raw) {
       governance: d.governance,
       proposal,
       position: d.position(proposal, member.publicKey),
-      ...(await sowellianTokenAccounts(network, g, member.publicKey)),
+      ...withoutPool(await sowellianTokenAccounts(network, d, id, member.publicKey)),
       systemProgram: SystemProgram.programId,
     })
     .instruction();
@@ -1561,7 +1927,7 @@ export async function takePosition(network, member, d, g, id, side, raw) {
 export async function proposeResolution(network, member, d, g, id, outcome) {
   const ix = await clients(network)
     .sowellian.methods.proposeResolution({ [outcome]: {} })
-    .accountsStrict({ owner: member.publicKey, governance: d.governance, proposal: d.proposal(id), ...(await sowellianTokenAccounts(network, g, member.publicKey)) })
+    .accountsStrict({ owner: member.publicKey, governance: d.governance, proposal: d.proposal(id), ...(await sowellianTokenAccounts(network, d, id, member.publicKey)) })
     .instruction();
   return send(network, [ix], [member]);
 }
@@ -1570,7 +1936,7 @@ export async function proposeResolution(network, member, d, g, id, outcome) {
 export async function challengeResolution(network, member, d, g, id) {
   const ix = await clients(network)
     .sowellian.methods.challengeResolution()
-    .accountsStrict({ owner: member.publicKey, governance: d.governance, proposal: d.proposal(id), ...(await sowellianTokenAccounts(network, g, member.publicKey)) })
+    .accountsStrict({ owner: member.publicKey, governance: d.governance, proposal: d.proposal(id), ...(await sowellianTokenAccounts(network, d, id, member.publicKey)) })
     .instruction();
   return send(network, [ix], [member]);
 }
@@ -1591,34 +1957,34 @@ export async function resolveViaOracle(network, d, id, priceUpdate) {
 /** Collects the member's position payout (or refund, if the proposal was cancelled or voided). */
 export async function claimPosition(network, member, d, g, id) {
   const proposal = d.proposal(id);
-  const t = await sowellianTokenAccounts(network, g, member.publicKey);
+  const t = withoutPool(await sowellianTokenAccounts(network, d, id, member.publicKey));
   const ix = await clients(network)
     .sowellian.methods.claimPosition()
     .accountsStrict({ owner: member.publicKey, governance: d.governance, proposal, position: d.position(proposal, member.publicKey), ...t })
     .instruction();
-  return send(network, [createAssociatedTokenAccountIdempotentInstruction(member.publicKey, t.ownerTokenAccount, member.publicKey, g.mint, t.tokenProgram), ix], [member]);
+  return send(network, [createAssociatedTokenAccountIdempotentInstruction(member.publicKey, t.ownerTokenAccount, member.publicKey, t.mint, t.tokenProgram), ix], [member]);
 }
 
 /** Takes back the bonds owed to the member on this proposal (as proposer, resolver or challenger). */
 export async function claimBond(network, member, d, g, id) {
-  const t = await sowellianTokenAccounts(network, g, member.publicKey);
+  const t = withoutPool(await sowellianTokenAccounts(network, d, id, member.publicKey));
   const ix = await clients(network)
     .sowellian.methods.claimBond()
     .accountsStrict({ owner: member.publicKey, governance: d.governance, proposal: d.proposal(id), ...t })
     .instruction();
-  return send(network, [createAssociatedTokenAccountIdempotentInstruction(member.publicKey, t.ownerTokenAccount, member.publicKey, g.mint, t.tokenProgram), ix], [member]);
+  return send(network, [createAssociatedTokenAccountIdempotentInstruction(member.publicKey, t.ownerTokenAccount, member.publicKey, t.mint, t.tokenProgram), ix], [member]);
 }
 
-/** Sends forfeited bonds to the treasury's token account. Anyone; the operator pays. */
-export async function sweepToTreasury(network, d, g) {
+/** Sends a proposal's forfeited bonds to the treasury's token account. Anyone; the operator pays. */
+export async function sweepToTreasury(network, d, g, id) {
   const operator = requireOperator();
-  const { programId: tokenProgram } = await mintInfo(network, g.mint);
-  const to = tokenAccount(g.mint, d.treasury, tokenProgram);
+  const t = await sowellianTokenAccounts(network, d, id, operator.publicKey);
+  const to = tokenAccount(t.mint, d.treasury, t.tokenProgram);
   const ix = await clients(network)
     .sowellian.methods.sweepToTreasury()
-    .accountsStrict({ governance: d.governance, treasuryTokenAccount: to, escrow: g.escrow, mint: g.mint, tokenProgram })
+    .accountsStrict({ governance: d.governance, proposal: d.proposal(id), treasuryTokenAccount: to, escrow: t.escrow, mint: t.mint, tokenProgram: t.tokenProgram })
     .instruction();
-  return send(network, [createAssociatedTokenAccountIdempotentInstruction(operator.publicKey, to, d.treasury, g.mint, tokenProgram), ix], [operator]);
+  return send(network, [createAssociatedTokenAccountIdempotentInstruction(operator.publicKey, to, d.treasury, t.mint, t.tokenProgram), ix], [operator]);
 }
 
 // ---------------------------------------------------------------
@@ -1633,7 +1999,7 @@ export async function sweepToTreasury(network, d, g) {
 async function sendMarketIx(network, member, g, m, ix, wrap = 0n) {
   const owner = member.publicKey;
   const sol = quoteIsSol(g);
-  const pre = [createAssociatedTokenAccountIdempotentInstruction(owner, m.ownerBase, owner, g.baseMint, m.base.programId)];
+  const pre = [createAssociatedTokenAccountIdempotentInstruction(owner, m.ownerBase, owner, m.baseMint, m.base.programId)];
   if (sol) pre.push(...(wrap > 0n ? wrapSolIxs(owner, wrap) : [createAssociatedTokenAccountIdempotentInstruction(owner, m.ownerQuote, owner, NATIVE_MINT)]));
   else pre.push(createAssociatedTokenAccountIdempotentInstruction(owner, m.ownerQuote, owner, g.quoteMint, m.quote.programId));
   return send(network, [...pre, ix, ...(sol ? [unwrapSolIx(owner)] : [])], [member]);
@@ -1642,7 +2008,7 @@ async function sendMarketIx(network, member, g, m, ix, wrap = 0n) {
 /** Splits `base` DAO tokens and `quote` quote tokens (raw; SOL is wrapped for it) into equal pass and fail balances. */
 export async function split(network, member, d, g, id, base, quote) {
   const proposal = d.proposal(id);
-  const m = await marketAccounts(network, d, g, member.publicKey);
+  const m = await marketAccounts(network, d, g, member.publicKey, await readProposal(network, "decisionMarkets", proposal));
   const ix = await clients(network)
     .decisionMarkets.methods.split(bn(base), bn(quote))
     .accountsStrict({ owner: member.publicKey, proposal, position: d.position(proposal, member.publicKey), ownerBase: m.ownerBase, ownerQuote: m.ownerQuote, tokens: m.tokens, systemProgram: SystemProgram.programId })
@@ -1653,7 +2019,7 @@ export async function split(network, member, d, g, id, base, quote) {
 /** Merges pairs of pass and fail balances back into the underlying, while trading lasts. */
 export async function merge(network, member, d, g, id, base, quote) {
   const proposal = d.proposal(id);
-  const m = await marketAccounts(network, d, g, member.publicKey);
+  const m = await marketAccounts(network, d, g, member.publicKey, await readProposal(network, "decisionMarkets", proposal));
   const ix = await clients(network)
     .decisionMarkets.methods.merge(bn(base), bn(quote))
     .accountsStrict({ owner: member.publicKey, governance: d.governance, proposal, position: d.position(proposal, member.publicKey), ownerBase: m.ownerBase, ownerQuote: m.ownerQuote, tokens: m.tokens })
@@ -1674,7 +2040,7 @@ export async function trade(network, member, d, id, market, sideIn, amountIn, mi
 /** Pays out the member's winning-side balances 1:1, once the proposal is settled. */
 export async function redeem(network, member, d, g, id) {
   const proposal = d.proposal(id);
-  const m = await marketAccounts(network, d, g, member.publicKey);
+  const m = await marketAccounts(network, d, g, member.publicKey, await readProposal(network, "decisionMarkets", proposal));
   const ix = await clients(network)
     .decisionMarkets.methods.redeem()
     .accountsStrict({ owner: member.publicKey, governance: d.governance, proposal, position: d.position(proposal, member.publicKey), ownerBase: m.ownerBase, ownerQuote: m.ownerQuote, tokens: m.tokens })
@@ -1684,7 +2050,7 @@ export async function redeem(network, member, d, g, id) {
 
 /** The proposer takes back what's left in the winning pool (their seed plus fees, after trades). */
 export async function reclaimLiquidity(network, member, d, g, id) {
-  const m = await marketAccounts(network, d, g, member.publicKey);
+  const m = await marketAccounts(network, d, g, member.publicKey, await readProposal(network, "decisionMarkets", d.proposal(id)));
   const ix = await clients(network)
     .decisionMarkets.methods.reclaimLiquidity()
     .accountsStrict({ proposer: member.publicKey, governance: d.governance, proposal: d.proposal(id), proposerBase: m.ownerBase, proposerQuote: m.ownerQuote, tokens: m.tokens })
@@ -1720,9 +2086,128 @@ export async function addAssetIx(network, d, mint, weight) {
 export async function applySwitch(network, d) {
   const operator = requireOperator();
   const next = d.record.pendingSwitch.program;
-  const newGovernance = addresses(network, d.dao, next).governance;
+  const newGovernance = governanceAddress(d.dao, next, d.record.epoch + 1);
   const ix = await clients(network).hub.methods.applySwitch().accountsStrict({ dao: d.dao, model: modelPda(network, next), newGovernance }).instruction();
   return send(network, [ix], [operator]);
+}
+
+// ---------------------------------------------------------------
+// token changes: new pools and the converter (vortex-stake)
+// ---------------------------------------------------------------
+
+/**
+ * vortex-stake's open_converter, for the treasury to sign inside a proposal: `rateNum` new tokens per `rateDen` old,
+ * into the current pool, funded with `fund` raw new tokens from the treasury in the same instruction (0n: none).
+ */
+export async function openConverterIx(network, d, fromMint, toMint, rateNum, rateDen, fund = 0n, tokenProgram) {
+  const fromPool = d.poolOf(fromMint);
+  const toPool = d.poolOf(toMint);
+  const converter = d.converter(fromPool, toPool);
+  tokenProgram ??= (await mintInfo(network, toMint)).programId;
+  return stored(
+    await clients(network)
+      .stake.methods.openConverter(bn(rateNum), bn(rateDen), bn(fund))
+      .accountsStrict({
+        treasury: d.treasury,
+        hubDao: d.dao,
+        daoToken: daoTokenAddress(network, d.dao),
+        fromPool,
+        toPool,
+        mint: toMint,
+        converter,
+        converterVault: d.converterVault(converter),
+        treasuryAccount: fund > 0n ? tokenAccount(toMint, d.treasury, tokenProgram) : null,
+        tokenProgram,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction()
+  );
+}
+
+/** A treasury transfer of `raw` new tokens into a converter's vault (topping it up), for a proposal. */
+export async function fundConverterIx(network, d, fromMint, toMint, raw, known) {
+  const converter = d.converter(d.poolOf(fromMint), d.poolOf(toMint));
+  const { decimals, programId } = known ?? (await mintInfo(network, toMint));
+  return stored(createTransferCheckedInstruction(tokenAccount(toMint, d.treasury, programId), toMint, d.converterVault(converter), d.treasury, raw, decimals, [], programId));
+}
+
+/** vortex-stake's close_converter (what's left goes back to the treasury), for a proposal. */
+export async function closeConverterIx(network, d, fromMint, toMint) {
+  const converter = d.converter(d.poolOf(fromMint), d.poolOf(toMint));
+  const { programId } = await mintInfo(network, toMint);
+  return stored(
+    await clients(network)
+      .stake.methods.closeConverter()
+      .accountsStrict({ treasury: d.treasury, converter, converterVault: d.converterVault(converter), treasuryAccount: tokenAccount(toMint, d.treasury, programId), mint: toMint, tokenProgram: programId })
+      .instruction()
+  );
+}
+
+/** The converter from `fromMint`'s pool into `toMint`'s, with its funding, or null. */
+export async function readConverter(network, d, fromMint, toMint) {
+  const address = d.converter(d.poolOf(fromMint), d.poolOf(toMint));
+  const c = await clients(network).stake.account.converter.fetchNullable(address);
+  if (!c) return null;
+  const funded = await network.connection.getTokenAccountBalance(c.vault).catch(() => null);
+  return { ...c, address, funded: funded ? BigInt(funded.value.amount) : 0n };
+}
+
+/** A member converts `raw` of their old stake (in `fromMint`'s pool) into stake in the current pool, at the converter's rate. */
+export async function convert(network, member, d, fromMint, raw) {
+  const owner = member.publicKey;
+  const fromPool = d.poolOf(fromMint);
+  const toPool = d.stakePool;
+  const [from, to] = await Promise.all([readStakePool(network, fromPool), readStakePool(network, toPool)]);
+  if (!from || !to) throw userError("This DAO has no such pool.");
+  const converter = d.converter(fromPool, toPool);
+  const treasuryFrom = tokenAccount(from.mint, d.treasury, from.tokenProgram);
+  const ix = await clients(network)
+    .stake.methods.convert(bn(raw))
+    .accountsStrict({
+      owner,
+      converter,
+      converterVault: d.converterVault(converter),
+      fromPool,
+      fromStake: d.stakeOf(fromPool, owner),
+      fromVault: from.vault,
+      fromMint: from.mint,
+      treasuryFromAccount: treasuryFrom,
+      toPool,
+      toStake: d.stakeOf(toPool, owner),
+      toVault: to.vault,
+      toMint: to.mint,
+      fromTokenProgram: from.tokenProgram,
+      toTokenProgram: to.tokenProgram,
+      systemProgram: SystemProgram.programId,
+    })
+    .instruction();
+  // The treasury's account for the old token receives what's converted.
+  return send(network, [createAssociatedTokenAccountIdempotentInstruction(owner, treasuryFrom, d.treasury, from.mint, from.tokenProgram), ix], [member]);
+}
+
+/**
+ * A new token for a DAO to move to: the operator creates the mint, mints
+ * `initialSupply` to the treasury, and hands the mint authority to the
+ * treasury, so only a passed proposal can mint more. Nothing changes for
+ * the DAO until a proposal records it (/settoken).
+ */
+export async function createTokenForTreasury(network, d, initialSupply, mint = Keypair.generate()) {
+  const operator = requireOperator();
+  const conn = network.connection;
+  const treasuryAta = getAssociatedTokenAddressSync(mint.publicKey, d.treasury, true);
+  const rent = await conn.getMinimumBalanceForRentExemption(MINT_SIZE);
+  await send(
+    network,
+    [
+      SystemProgram.createAccount({ fromPubkey: operator.publicKey, newAccountPubkey: mint.publicKey, lamports: rent, space: MINT_SIZE, programId: TOKEN_PROGRAM_ID }),
+      createInitializeMint2Instruction(mint.publicKey, TOKEN_DECIMALS, operator.publicKey, null),
+      createAssociatedTokenAccountIdempotentInstruction(operator.publicKey, treasuryAta, d.treasury, mint.publicKey),
+      createMintToInstruction(mint.publicKey, treasuryAta, operator.publicKey, BigInt(initialSupply) * TEN_POW),
+      createSetAuthorityInstruction(mint.publicKey, operator.publicKey, AuthorityType.MintTokens, d.treasury),
+    ],
+    [operator, mint]
+  );
+  return mint.publicKey;
 }
 
 // ---------------------------------------------------------------

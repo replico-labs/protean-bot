@@ -10,9 +10,11 @@ import { SETUP_COMMANDS } from "./commands/setup.js";
 import { TOKEN_COMMANDS } from "./commands/tokens.js";
 import { MODEL_COMMANDS } from "./commands/models.js";
 import { SWITCH_COMMANDS } from "./commands/switch.js";
+import { CHANGE_COMMANDS } from "./commands/changes.js";
 import { SOWELLIAN_COMMANDS } from "./commands/sowellian.js";
 import { MARKET_COMMANDS } from "./commands/markets.js";
 import { OPPORTUNITY_COMMANDS } from "./commands/opportunity.js";
+import { FUNDS_COMMANDS } from "./commands/funds.js";
 
 export { UserError };
 
@@ -89,6 +91,7 @@ const SECTION_ORDER = {
   "Decision markets": "markets",
   "Guard wrapper": "guard",
   "Opportunity Market": "opportunity",
+  Money: "welcome",
 };
 
 const help = {
@@ -132,6 +135,9 @@ export const COMMANDS = {
   ...TOKEN_COMMANDS,
   ...MODEL_COMMANDS,
   ...SWITCH_COMMANDS,
+  // After MODEL_COMMANDS: its council covers the security council too.
+  ...CHANGE_COMMANDS,
+  ...FUNDS_COMMANDS,
   ...SOWELLIAN_COMMANDS,
   ...MARKET_COMMANDS,
   ...OPPORTUNITY_COMMANDS,

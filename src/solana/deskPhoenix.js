@@ -8,6 +8,8 @@ import { getSolanaOperator } from "./config.js";
 import { createPhoenixAgentKey, getPhoenixAgentKey, getSolanaAddress } from "./wallets.js";
 import * as v from "./vortex.js";
 import * as phx from "./phoenix.js";
+import { deskOwner } from "./funds.js";
+import { withVaultPause } from "../deskMandate.js";
 
 /**
  * The trading desk on Solana: Phoenix perps, run like the HyperCore desk
@@ -47,7 +49,7 @@ const usage = (cmd) => {
     `\`${d} pause\` / \`${d} resume\` - chat admins or the DAO's creator stop new positions at once (closing stays allowed)`,
     `\`${d} long|short <market> <size> at <limitPrice>\` / \`${d} close <market> <size|all> at <limitPrice>\` - a trader trades, no vote`,
     `\`${d} mine\` - a trader's own position and how much of their limits they use`,
-    "Each trader's key can trade their subaccount but never withdraw: Phoenix allows that only to the Treasury, by proposal.",
+    "Each trader's key can trade their subaccount but never withdraw: Phoenix allows that only to the Treasury (in a prop firm, its vault), by proposal.",
   ].join("\n");
 };
 
@@ -89,7 +91,7 @@ async function refresh(chat, c) {
   const now = await v.clusterNow(c.network);
   const authorityOf = new Map();
   const delegate = async (sub) => {
-    if (!authorityOf.has(sub)) authorityOf.set(sub, (await phx.readTrader(c.network, c.d.treasury, sub))?.positionAuthority ?? null);
+    if (!authorityOf.has(sub)) authorityOf.set(sub, (await phx.readTrader(c.network, c.owner.authority, sub))?.positionAuthority ?? null);
     return authorityOf.get(sub);
   };
   const news = [];
@@ -97,10 +99,10 @@ async function refresh(chat, c) {
   for (const [id, p] of Object.entries(rec.pending)) {
     const proposal = await v.readProposal(c.network, c.model, c.d.proposal(Number(id))).catch(() => null);
     const state = proposal ? v.proposalState(c.model, proposal, c.governance, now) : "Unknown";
-    const target = p.kind === "appoint" ? p.agent : c.d.treasury.toBase58();
+    const target = p.kind === "appoint" ? p.agent : c.owner.authority.toBase58();
     if ((await delegate(p.sub)) === target) {
       changes.push({ id, p, done: true });
-      news.push(p.kind === "appoint" ? `📈 \`${p.address}\` now trades Phoenix subaccount ${p.sub} (${mandateText(p.mandate, UNIT)}).` : `📉 Subaccount ${p.sub} is back with the Treasury; its trader's key is destroyed.`);
+      news.push(p.kind === "appoint" ? `📈 \`${p.address}\` now trades Phoenix subaccount ${p.sub} (${mandateText(p.mandate, UNIT)}).` : `📉 Subaccount ${p.sub} is back with ${c.owner?.name ?? "the Treasury"}; its trader's key is destroyed.`);
     } else if (CLOSED.has(state) || (state === "Executed" && proposal)) {
       // Executed but not delegated as planned (a newer proposal moved it), or never passed.
       changes.push({ id, p, done: false });
@@ -156,6 +158,8 @@ export async function runPhoenixDesk(ctx, c, { propose, isCreator }) {
   const [sub = "", ...args] = ctx.args;
   try {
     if (c.network.id !== "solana-mainnet") throw new DeskError(`The trading desk on Solana runs on Phoenix, which is on mainnet only - not ${c.network.name}.`);
+    // A prop firm's desk trades its vault's Phoenix account; anyone else's, the Treasury's.
+    c = { ...c, owner: await deskOwner(c.network, c.d) };
     switch (sub.toLowerCase()) {
       case "":
       case "status":
@@ -199,13 +203,14 @@ export async function runPhoenixDesk(ctx, c, { propose, isCreator }) {
 async function register(c) {
   const operator = getSolanaOperator();
   if (!operator) throw new DeskError("This bot has no Solana operator wallet to pay for registering.");
-  if (await phx.readTrader(c.network, c.d.treasury, phx.CROSS)) return "✅ The Treasury is already registered on Phoenix.";
-  const sig = await phx.registerWithPhoenix(c.network, operator, c.d.treasury);
-  return `✅ The Treasury is registered on Phoenix (its cross account receives deposits).\nTx: \`${sig}\`\nNext: someone \`desk apply\`s as a trader.`;
+  if (await phx.readTrader(c.network, c.owner.authority, phx.CROSS)) return `✅ ${c.owner.Name} is already registered on Phoenix.`;
+  const sig = await phx.registerWithPhoenix(c.network, operator, c.owner.authority);
+  const venues = c.owner.vault ? `\nThe vault is valued from its Phoenix accounts once they're named: propose \`vaultvenues <PerpAssetMap> ${await phx.traderAccount(c.owner.authority, phx.CROSS)},<each trader's subaccount>\` before funding.` : "";
+  return `✅ ${c.owner.Name} is registered on Phoenix (its cross account receives deposits).\nTx: \`${sig}\`${venues}\nNext: someone \`desk apply\`s as a trader.`;
 }
 
 async function apply(chat, c, words, propose) {
-  if (!(await phx.readTrader(c.network, c.d.treasury, phx.CROSS))) throw new DeskError("The Treasury isn't on Phoenix yet: run `desk register` first.");
+  if (!(await phx.readTrader(c.network, c.owner.authority, phx.CROSS))) throw new DeskError(`${c.owner.Name} isn't on Phoenix yet: run \`desk register\` first.`);
   const mandate = parseMandate(words);
   if (mandate.markets !== "all") {
     const listed = await phx.marketSymbols(c.network);
@@ -231,7 +236,7 @@ async function apply(chat, c, words, propose) {
     cur.pending[String(made.id)] = { kind: "appoint", sub, agentId, agent, platform: chat.platform, userId: String(chat.userId), address, mandate };
     return cur;
   });
-  const fresh = !(await phx.readTrader(c.network, c.d.treasury, sub));
+  const fresh = !(await phx.readTrader(c.network, c.owner.authority, sub));
   return { ...made.reply, text: `${made.reply.text}\n\n${fresh ? "Once it runs, fund the subaccount with a `desk fund` proposal." : ""}`.trim() };
 }
 
@@ -291,12 +296,14 @@ async function status(chat, c, cmd) {
   const news = await refresh(chat, c);
   const rec = recordOf(chat);
   const lines = [...news, ...(news.length ? [""] : []), "*Trading desk* (Phoenix)"];
-  if (!(await phx.readTrader(c.network, c.d.treasury, phx.CROSS))) {
-    lines.push(`The Treasury isn't registered on Phoenix yet: \`${cmd("desk")} register\`.`);
+  if (!(await phx.readTrader(c.network, c.owner.authority, phx.CROSS))) {
+    lines.push(`${c.owner.Name} isn't registered on Phoenix yet: \`${cmd("desk")} register\`.`);
     return reply(lines.join("\n"));
   }
+  if (c.owner.vault) lines.push(`Trades the prop firm's vault \`${c.owner.authority.toBase58()}\`: depositors' money, valued from its Phoenix accounts at each window.`);
+  if (c.owner.vault?.paused) lines.push("⏸️ The vault has paused trading (a drawdown, or a proposal): no new positions until a proposal resumes it (`vaultresume`).");
   if (rec.paused) lines.push(`⏸️ Paused${rec.paused.by ? ` by ${rec.paused.by}` : ""}: no new positions until \`${cmd("desk")} resume\`.`);
-  const [subs, marks] = await Promise.all([phx.subaccounts(c.network, c.d.treasury), phx.markPrices(c.network)]);
+  const [subs, marks] = await Promise.all([phx.subaccounts(c.network, c.owner.authority), phx.markPrices(c.network)]);
   lines.push(`Cross account (deposits waiting to be assigned): ${fmt(subs[phx.CROSS]?.collateral ?? 0, 2)} ${UNIT}`);
   const traders = tradersOf(rec);
   if (!traders.length) lines.push(`No trader yet. A would-be trader starts with \`${cmd("desk")} apply <markets> max=<size>\`.`);
@@ -327,7 +334,7 @@ async function mine(chat, c, cmd) {
   const n = list.findIndex((t) => isTrader(t, chat));
   if (n < 0) throw new DeskError(`You aren't one of the desk's traders - \`${cmd("desk")}\` shows who is.`);
   const t = list[n];
-  const [subs, marks] = await Promise.all([phx.subaccounts(c.network, c.d.treasury), phx.markPrices(c.network)]);
+  const [subs, marks] = await Promise.all([phx.subaccounts(c.network, c.owner.authority), phx.markPrices(c.network)]);
   const s = subs[t.sub] ?? { collateral: 0, positions: [] };
   const positions = phx.withMarks(s.positions, marks);
   const notional = positions.reduce((sum, p) => sum + p.size * p.mark, 0);
@@ -367,11 +374,11 @@ async function trade(chat, c, words) {
   if (!operator) throw new DeskError("This bot has no Solana operator wallet to pay the fee.");
   const agent = await getPhoenixAgentKey(t.agentId);
   if (!agent) throw new DeskError("Your trading key is gone - the DAO has to appoint you again.");
-  const onChain = await phx.readTrader(c.network, c.d.treasury, t.sub);
+  const onChain = await phx.readTrader(c.network, c.owner.authority, t.sub);
   if (onChain?.positionAuthority !== t.agent) throw new DeskError(`Subaccount ${t.sub} isn't delegated to your key any more.`);
 
   const m = await phx.market(c.network, request.market);
-  const [subs, marks] = await Promise.all([phx.subaccounts(c.network, c.d.treasury), phx.markPrices(c.network)]);
+  const [subs, marks] = await Promise.all([phx.subaccounts(c.network, c.owner.authority), phx.markPrices(c.network)]);
   const s = subs[t.sub] ?? { collateral: 0, positions: [] };
   if (!s.collateral && request.kind === "open") throw new DeskError("Your subaccount has no collateral yet - it needs a `desk fund` proposal first.");
   const positions = phx.withMarks(s.positions, marks);
@@ -389,7 +396,7 @@ async function trade(chat, c, words) {
     if (held && held.side !== request.side) throw new DeskError(`You hold a ${m.symbol} ${held.side} - close it before opening a ${request.side}.`);
     const notional = ((held?.size ?? 0) + Number(request.size)) * Number(request.price);
     const leverage = (notional / s.collateral).toFixed(2);
-    checkOpen(rec, t, { market: m.symbol.toUpperCase(), leverage, notional, symbol: UNIT, dayPnl: today.pnl });
+    checkOpen(withVaultPause(rec, { vaultPaused: Boolean(c.owner.vault?.paused) }), t, { market: m.symbol.toUpperCase(), leverage, notional, symbol: UNIT, dayPnl: today.pnl });
     side = request.side === "long" ? rise.Side.Bid : rise.Side.Ask;
     size = request.size;
     what = `${request.side} ${request.size} ${m.symbol} at ${request.price} or better (${leverage}x on the subaccount)`;
@@ -406,13 +413,13 @@ async function trade(chat, c, words) {
   const ix = rise.buildPlaceMarketOrderIxResolved({
     exchange,
     market: { marketAddress: m.marketAddress, splineCollection: m.splineCollection },
-    trader: { authority: c.d.treasury.toBase58(), positionAuthority: t.agent, traderAccount: await phx.traderAccount(c.d.treasury, t.sub) },
+    trader: { authority: c.owner.authority.toBase58(), positionAuthority: t.agent, traderAccount: await phx.traderAccount(c.owner.authority, t.sub) },
     orderPacket: rise.buildMarketOrderPacketFromMarketParams({ side, priceLimitUsd: String(request.price), baseUnits: String(size) }, { tickSize: m.tickSize, baseLotsDecimals: m.baseLotsDecimals }),
   });
   if (agent.publicKey.toBase58() !== t.agent) throw new Error("The stored trading key doesn't match its record");
   const sig = await v.send(c.network, [phx.web3Instruction(ix)], [operator, agent]);
 
-  const after = ((await phx.subaccounts(c.network, c.d.treasury))[t.sub]?.positions ?? []).find((p) => p.symbol.toUpperCase() === m.symbol.toUpperCase());
+  const after = ((await phx.subaccounts(c.network, c.owner.authority))[t.sub]?.positions ?? []).find((p) => p.symbol.toUpperCase() === m.symbol.toUpperCase());
   const signed = (p) => (p ? (p.side === "long" ? p.size : -p.size) : 0);
   const filled = Math.abs(signed(after) - signed(held));
   // A close realizes PnL; the bot counts it at the limit price, the worst the close could fill at.

@@ -212,15 +212,44 @@ export const MODEL_COMMANDS = {
       `Voters: \`${ctx.cmd("voteinelection")} ${electionId} <candidates...>\` after that, for ${blocksToDuration(election.votingEndBlock - election.candidacyDeadline)}. ` +
       `Only tokens staked before this election opened count.`,
   }),
-  declarecandidacy: adapterWrite({
+  declarecandidacy: {
     section: "Council",
     models: ["delegate"],
-    description: "Stand in an open election",
-    fn: "declareCandidacy",
-    notSupported: "This DAO uses {model} governance, which has no elections.",
-    idLabel: "Election ID",
-    done: (ctx, id) => `✅ You're a candidate in election #${id}.`,
-  }),
+    usage: "<electionId> [seat]",
+    description: "Run for a council seat in an open election (seat 1 if not given; /seats lists them)",
+    options: [
+      { name: "id", description: "Election ID", required: true, type: "integer" },
+      { name: "seat", description: "Seat number, from 1", required: false, type: "integer" },
+    ],
+    async run(ctx) {
+      const { address, adapter } = requireAdapterFn(ctx, "declareCandidacy", "This DAO uses {model} governance, which has no elections.");
+      const id = parseId(ctx.args[0], `${ctx.cmd("declarecandidacy")} <electionId> [seat]`);
+      const seat = ctx.args[1] === undefined ? 1 : Number(ctx.args[1]);
+      if (!Number.isInteger(seat) || seat < 1) throw new UserError(`Seats are numbered from 1: \`${ctx.cmd("declarecandidacy")} ${id} 2\`.`);
+      const { client } = await userClient(ctx);
+      await adapter.declareCandidacy(client, address, id, seat - 1);
+      return reply(`✅ You're running for seat ${seat} in election #${id}.`);
+    },
+  },
+  seats: {
+    section: "Council",
+    models: ["delegate"],
+    usage: "[electionId]",
+    description: "The council by seat; with an election, each seat's candidates and votes",
+    options: [{ name: "id", description: "Election ID", required: false, type: "integer" }],
+    async run(ctx) {
+      const { address, adapter } = requireAdapterFn(ctx, "getSeats", "This DAO uses {model} governance, which has no council seats.");
+      const electionId = ctx.args[0] ? parseId(ctx.args[0], `${ctx.cmd("seats")} [electionId]`) : null;
+      const seats = await adapter.getSeats(address, electionId);
+      const lines = seats.map((s) => {
+        const head = `*Seat ${s.seat}*${s.label ? ` (${s.label})` : ""}: ${s.holder ? `\`${short(s.holder)}\`` : "vacant"}`;
+        if (electionId === null) return head;
+        const runs = s.candidates.length ? s.candidates.map((c) => `  \`${short(c.address)}\` ${formatEther(c.votes)} votes`).join("\n") : "  nobody running: the holder stays";
+        return `${head}\n${runs}`;
+      });
+      return reply([electionId === null ? "*Council seats*" : `*Election #${electionId}, by seat*`, ...lines].join("\n"));
+    },
+  },
   voteinelection: {
     section: "Council",
     models: ["delegate"],
@@ -248,7 +277,10 @@ export const MODEL_COMMANDS = {
     fn: "finalizeElection",
     notSupported: "This DAO uses {model} governance, which has no elections.",
     idLabel: "Election ID",
-    done: (ctx) => `✅ Election finalized. Use \`${ctx.cmd("council")}\` to see the new roster.`,
+    done: (ctx, id, r) =>
+      r?.drawRequested
+        ? `🎲 Seats in election #${id} are tied, so they're being drawn by lot. Run \`${ctx.cmd("finalizeelection")} ${id}\` again in a minute to seat the council.`
+        : `✅ Election finalized. \`${ctx.cmd("seats")}\` shows the new council.`,
   }),
 
   // --- Delegate: recalls ---

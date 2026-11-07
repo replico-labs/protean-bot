@@ -20,7 +20,7 @@ const TOPICS = {
   markets: "📈 Markets",
   guard: "🛡 Guard wrapper",
   opportunity: "🎯 Opportunity Market",
-  welcome: "🎁 Welcome tokens",
+  welcome: "💰 Money: allowances, raises, vault",
 };
 const ORDER = Object.keys(TOPICS);
 

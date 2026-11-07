@@ -14,6 +14,7 @@ function usage(ctx, model) {
     "",
     `Proposes moving this DAO to another governance model. Models: ${SUPPORTED_MODELS.join(", ")}.`,
     "Delegate and Sortition need a starting council and Board its signers: list their addresses after the model.",
+    "Any direction, Board included, and the running model too (a fresh setup with new rules). A DAO with no token adds `token=new:<name>:<symbol>:<supply>` or `token=<ERC20>`.",
     "The Treasury, token and everyone's stake stay where they are; only the governance contract changes, once the proposal passes and executes.",
     "",
     `Example: \`${ctx.cmd("switchmodel")} quadratic Move to quadratic voting\``,
@@ -40,7 +41,10 @@ export const SWITCH_COMMANDS = {
       // Addresses are the new council/signers; name=value words are this
       // DAO's own proposal settings (Sowellian, Decision Markets); the rest
       // is the description.
-      const { options, rest: words } = takeModelOptions(fromModel, rest);
+      // token=new:<name>:<symbol>:<supply> or token=<ERC20>: a token for a DAO that has none (Board-born).
+      const tokenWord = rest.find((w) => /^token=/i.test(w));
+      const tokenSpec = tokenWord ? tokenWord.slice(6) : null;
+      const { options, rest: words } = takeModelOptions(fromModel, rest.filter((w) => w !== tokenWord));
       const members = words.filter((w) => isAddress(w, { strict: false }));
       const description = words.filter((w) => !isAddress(w, { strict: false })).join(" ") || `Switch this DAO to ${toModel} governance`;
       checkModelOptions(fromModel, options);
@@ -52,13 +56,14 @@ export const SWITCH_COMMANDS = {
         members,
         guardWrapperAddress: getChatGuardWrapper(ctx.chatId, ctx.platform),
         nftWrapperAddress: getChatNftWrapper(ctx.chatId, ctx.platform),
+        tokenSpec,
       });
 
       const { client } = await userClient(ctx, { forceFullTopup: true });
       const { proposalId } = await proposeForModel({ model: fromModel, client, governanceAddress: governance, actions: plan.actions, description, options });
 
       const lines = [
-        `✅ Proposal #${proposalId}: switch from ${fromModel} to *${toModel}* governance.`,
+        toModel === fromModel ? `✅ Proposal #${proposalId}: a fresh *${toModel}* setup for this DAO.` : `✅ Proposal #${proposalId}: switch from ${fromModel} to *${toModel}* governance.`,
         "",
         `New governance (deployed when it executes): \`${plan.newGovernance}\``,
         `Treasury \`${short(plan.treasury)}\` stays put${plan.staking !== "0x0000000000000000000000000000000000000000" ? `, and so does every member's stake in \`${short(plan.staking)}\`` : ""}.`,
@@ -72,12 +77,11 @@ export const SWITCH_COMMANDS = {
     },
   },
 
-  // Solana DAOs answer this themselves (src/solana/commands.js): each model
-  // keeps its own vault there. Here so Discord registers the command.
+  // Solana DAOs answer this themselves (src/solana/commands.js). Here so Discord registers the command.
   migrate: {
     section: "Your wallet",
     usage: "",
-    description: "Solana DAOs: move your stake from the models a DAO ran before into the current one",
+    description: "Where your stake is (it stays put through model switches)",
     options: [],
     async run() {
       return reply("Nothing to move: an EVM DAO keeps one staking contract through every model switch, so your stake is already where it needs to be.", { ephemeral: true });

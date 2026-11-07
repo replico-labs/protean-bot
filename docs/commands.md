@@ -9,7 +9,7 @@ Every command, and the buttons and help menu that run them. `/help` only shows t
 - `/createboarddao <name> <signer1> <signer2> ... <network>`: a Board (multisig) DAO, with no token.
 - `/register <address> [model] [network]` / `/unregister`: link or unlink an existing DAO. `/register` checks the address really is that model's contract on that network.
 - `/network`: the chat's chain, and the networks the bot supports.
-- `/deploywelcomedistributor <amountPerClaim> <cap>` / `/setdistributor <address>`: welcome tokens for new members. They're sent automatically on join, or with `/claim`.
+- `/launch <model> <name> <symbol> <supply> <forSale> <softCap> <hardCap> <days>`: start a new DAO from a raise. When it ends the founder accepts an amount (`/launch finish <amount>`) and the DAO is made with the money in its Treasury, the sale's tokens in its Distributor and the rest of the supply in its Treasury. `propfirm` instead of the tokens for sale makes a prop firm: its token is its vault's shares, minted from the money. On Solana, add `<currency mint>` before the caps and `solana` at the end.
 - `/deploynftwrapper`: the DAO's NFT wrapper (see [NFTs](governance-models.md#nfts)).
 - `/deployguardwrapper <requiredApprovals> <tenureSeconds> <signer...>` / `/registerguardwrapper <address>` / `/handovertowrapper <address>`: a security council (see [Guard wrapper](governance-models.md#guard-wrapper)).
 - **Spaces in arguments:**
@@ -25,7 +25,7 @@ Every command, and the buttons and help menu that run them. `/help` only shows t
 
 **The DAO**
 - `/dao`: name, network, the governance, token and treasury addresses in full (each linked to the explorer), and the full model-specific config. Solana DAOs also show the DAO and governance accounts.
-- `/treasury` · `/contribute` (the treasury address, sent privately)
+- `/treasury` · `/contribute` (the treasury address, sent privately; with an amount, a contribution to the chat's raise)
 - `/proposals` · `/proposal <id>`: a list, or one proposal in full, shown in its model's own vote shape, with its chart and page
 
 **Proposing and deciding**
@@ -37,6 +37,19 @@ Every command, and the buttons and help menu that run them. `/help` only shows t
 - `/propose <target> <value> <data> <description>`: raw calldata, for anything else.
 - `/vote <id> for|against|abstain [reason]` · `/queue <id>` · `/execute <id> [nativeValue]` · `/cancel <id>`
 - `/switchmodel <model> [council or signers…] [description]`: move the DAO to another model (below).
+
+## Money: allowances, the Distributor, raises and vaults
+
+Built in `src/funds.js` (EVM) and `src/solana/funds.js` (Solana); the commands are in `src/platforms/commands/funds.js` and `src/solana/fundsCommands.js`. Design: `docs/contracts-roadmap-design.md`.
+
+- `/allowance`: the treasury's monthly allowances. `grant <address> <amount> <token|native> <months>` (Solana: `sol`, `token` or a mint), `change <id> <amount> <months>` and `revoke <id>` are proposals; `claim <id>` is the recipient taking this month's payment. A month not claimed lapses; an allowance runs at most 12 months.
+- `/distributor`: everything the DAO has promised someone. `open` makes it (anyone; the bot's operator runs it), then `fund <amount>`, `grant <address|@member> <amount> [cliff=<days>] [vest=<days>]` and `welcome <amount> <cap>` are proposals. A grant to a @member goes to their chat account, so they can claim it from whatever wallet the bot holds for them.
+- `/claim`: takes what the Distributor holds for you: grants, a raise you joined, a welcome grant.
+- `/welcome @member` (Telegram: reply to them): a council member approves a new member's welcome grant. When someone joins a group whose Distributor gives welcome grants, the bot asks the council to.
+- `/raise`: the DAO's raise. `open <softCap> <hardCap> <days> <tokensForSale> [currency=<token>] [min=] [max=] [cliff=] [vest=] [decide=<days>]` (Solana: `open <currency mint> <softCap> <hardCap> <days|30m|12h> <tokensForSale>`), `accept <amount>` by proposal when it ends, `settle` once accepted. Contributions go past the hard cap; the DAO accepts anything from the soft cap up and everyone gets tokens and refunds pro rata.
+- `/contribute <amount>` and `/refund`: join the raise; take back what wasn't accepted (everything if it didn't go ahead).
+- `/vault`: a prop firm's vault, whose shares are the DAO's token. `deposit <amount>` and `redeem <shares>` are priced at the next window; `cancel` before it, `claim` after; `window` processes a due window. By proposal: `pause`, `resume`, `allow <address>`, and the venues it's valued from (EVM: `valuer hypercore` or `valuer perpl <desk> <marketIds>` per Perpl desk; Solana: `venues <perpAssetMap> <trader,...>`). On Solana `vault create <asset mint> [raise=1]` makes an existing DAO with no token supply a prop firm. A prop firm's `/desk` trades the vault's money (see trading.md).
+- Delegate council seats: `/seats [election]`, `/declarecandidacy <election> [seat]`, `/voteinelection` with one candidate per seat, `/finalizeelection` (a tied seat is drawn by lot: run it again once the draw is in). `delegate-set-seat-label` (Solana: `seatlabel`) names a seat.
 
 ## Buttons and the help menu
 

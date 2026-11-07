@@ -144,7 +144,28 @@ const POOL_OPTIONS = [
 const SWAP_OPTIONS = [
   { name: "fee", description: "pool fee tier (100, 500, 3000, 10000) or auto - every standard tier, best quote now", default: "auto" },
   ...POOL_OPTIONS.slice(1),
+  { name: "maxImpact", description: "how far below the pool's own price (after its fee) the quote may be before the swap is refused", default: "5%" },
 ];
+
+const Q192 = 2n ** 192n;
+
+/**
+ * What `amountIn` would buy at the pool's current price, after its fee:
+ * what the swap gives if the pool were deep. A quote far below it means a
+ * thin pool, where most of the money would be lost to the price moving.
+ */
+export function spotOut(sqrtPriceX96, fee, zeroForOne, amountIn) {
+  if (sqrtPriceX96 === 0n) return 0n;
+  const p2 = sqrtPriceX96 * sqrtPriceX96;
+  const out = zeroForOne ? (amountIn * p2) / Q192 : (amountIn * Q192) / p2;
+  return (out * BigInt(1_000_000 - fee)) / 1_000_000n;
+}
+
+/** The quote's shortfall from the pool's own price, in basis points (0 when it's at or above). */
+export function impactBps(quote, spot) {
+  if (spot === 0n || quote >= spot) return 0;
+  return Number(((spot - quote) * 10_000n) / spot);
+}
 
 function deployment(ctx) {
   const d = protocol.deployments[ctx.network.id];
@@ -286,8 +307,18 @@ export const actions = [
       let quoteNote = "";
       if (String(minText).endsWith("%")) {
         const quote = autoQuote ?? (await quoteExactIn(ctx, d, key, zeroForOne, amountIn));
+        // A thin pool quotes far below its own price: refuse rather than
+        // let a proposal give most of the money away to price impact.
+        const spot = spotOut(await readSqrtPrice(ctx, d, key), key.fee, zeroForOne, amountIn);
+        const impact = impactBps(quote, spot);
+        const maxImpact = parsePercentBps(ctx.options.maxImpact, 500);
+        if (impact > maxImpact) {
+          throw new IntegrationError(
+            `This pool is too thin for ${await formatAmount(ctx, tokenIn, amountIn)}: it quotes ${await formatAmount(ctx, tokenOut, quote, { approx: true })}, ${(impact / 100).toFixed(1)}% below its own price (${await formatAmount(ctx, tokenOut, spot, { approx: true })}). Swap less, use another DEX, or allow it with maxImpact=<n>%.`
+          );
+        }
         minOut = minusBps(quote, parsePercentBps(minText));
-        quoteNote = ` (quoted ${await formatAmount(ctx, tokenOut, quote, { approx: true })} now, less ${minText})`;
+        quoteNote = ` (quoted ${await formatAmount(ctx, tokenOut, quote, { approx: true })} now, less ${minText}${impact >= 100 ? `; ${(impact / 100).toFixed(1)}% price impact` : ""})`;
       } else {
         minOut = await parseAmount(ctx, tokenOut, minText);
       }

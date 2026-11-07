@@ -29,6 +29,9 @@ mock.module(new URL("../src/walletStore.js", import.meta.url).href, {
     createAgentKey: async () => null,
     getAgentAccount: async () => null,
     deleteAgentKey: async () => {},
+    // Phoenix's agent keys (deskPhoenix.js); unused here.
+    PHOENIX_AGENT_PLATFORM: "phoenix-agent",
+    deletePhoenixAgentKey: async () => {},
     isWalletStoreConfigured: () => true,
     // The EVM side's, loaded alongside but never used here.
     createWalletRecord: async () => null,

@@ -2,7 +2,7 @@
 import "../logRedaction.js";
 import bolt from "@slack/bolt";
 import { COMMANDS, runCommand, ADMIN_COMMANDS } from "./commands.js";
-import { attemptClaim } from "./commands/setup.js";
+import { welcomeOnJoin } from "./commands/funds.js";
 import { getChatNetwork, recordSlackTeam, getSlackTeam, getSlackChannelsWithoutTeam } from "../db.js";
 import { runOnNetwork } from "../networks.js";
 import { startEventListener } from "../eventListener.js";
@@ -229,16 +229,13 @@ export async function handleButton({ ack, body, action, respond, client }) {
 }
 
 /**
- * Telegram's automatic welcome grant: when someone joins a channel with a
- * welcome distributor linked, send them their tokens. Silent unless it
- * worked - failures surface when they run `/protean claim` themselves.
+ * Someone joined a channel whose Distributor gives welcome grants: ask a
+ * council member to approve theirs.
  */
 export async function handleMemberJoined(event, client) {
-  const ctx = { platform: "slack", chatId: event.channel, userId: event.user };
-  const result = await runOnNetwork(getChatNetwork(ctx.chatId, ctx.platform), () => attemptClaim(ctx)).catch((err) => ({ status: "error", error: err.message }));
-  if (result.status === "sent") {
-    await client.chat.postMessage({ channel: event.channel, text: `🎉 Welcome, <@${event.user}>! Sent your welcome tokens.` });
-  }
+  const ctx = { platform: "slack", chatId: event.channel, userId: event.user, cmd: (sub) => `${SLASH_COMMAND} ${sub}` };
+  const text = await runOnNetwork(getChatNetwork(ctx.chatId, ctx.platform), () => welcomeOnJoin(ctx, `<@${event.user}>`)).catch(() => null);
+  if (text) await client.chat.postMessage({ channel: event.channel, text: slackText(text) });
 }
 
 /**

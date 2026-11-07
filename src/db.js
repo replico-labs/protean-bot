@@ -194,7 +194,7 @@ export function getChatModel(chatId, platform = "telegram") {
   return db[key(chatId, platform)]?.model ?? "tokenWeighted";
 }
 
-/** Link a chat's WelcomeDistributor address (optional, separate from Governance). */
+/** Link a chat's Distributor (src/funds.js; older chats may hold a WelcomeDistributor here). */
 export function registerDistributor(chatId, distributorAddress, platform = "telegram") {
   updateDb((db) => {
     const k = key(chatId, platform);
@@ -202,10 +202,27 @@ export function registerDistributor(chatId, distributorAddress, platform = "tele
   });
 }
 
-/** Get the WelcomeDistributor address linked to a chat, or null if unset. */
+/** The Distributor linked to a chat, or null if unset. */
 export function getChatDistributor(chatId, platform = "telegram") {
   const db = readDb();
   return db[key(chatId, platform)]?.distributorAddress ?? null;
+}
+
+/**
+ * A chat's money records (src/funds.js): its current raise, its prop-firm
+ * vault, and a launch in progress ({ id, raise, network } before the DAO
+ * exists; the launch's DAO is registered when it finishes).
+ */
+export function setChatFunds(chatId, fields, platform = "telegram") {
+  updateDb((db) => {
+    const k = key(chatId, platform);
+    db[k] = { ...db[k], funds: { ...(db[k]?.funds ?? {}), ...fields }, platform };
+  });
+}
+
+/** { raise?, vault?, launch? } for a chat (empty when none). */
+export function getChatFunds(chatId, platform = "telegram") {
+  return readDb()[key(chatId, platform)]?.funds ?? {};
 }
 
 /** Link a chat's NFTMarketplaceWrapper address (optional, separate from Governance/Treasury). */
@@ -234,6 +251,19 @@ export function registerGuardWrapper(chatId, guardWrapperAddress, platform = "te
 export function getChatGuardWrapper(chatId, platform = "telegram") {
   const db = readDb();
   return db[key(chatId, platform)]?.guardWrapperAddress ?? null;
+}
+
+/** Link a chat's stake converter (after a token change; /convert uses it). */
+export function registerConverter(chatId, converterAddress, platform = "telegram") {
+  updateDb((db) => {
+    const k = key(chatId, platform);
+    db[k] = { ...db[k], converterAddress, platform };
+  });
+}
+
+/** The stake converter linked to a chat, or null. */
+export function getChatConverter(chatId, platform = "telegram") {
+  return readDb()[key(chatId, platform)]?.converterAddress ?? null;
 }
 
 /**

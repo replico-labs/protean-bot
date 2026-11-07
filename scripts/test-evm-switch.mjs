@@ -173,7 +173,11 @@ const refused = async (what, args) => {
     check(err.userFacing === true, `${what}: ${err.message.split("\n")[0].slice(0, 110)}`);
   }
 };
-await refused("same model", { fromModel: "tokenWeighted", governance, toModel: "tokenWeighted" });
+// A fresh copy of the running model is a switch like any other (new rules, same Treasury and stake).
+{
+  const plan = await buildSwitch({ fromModel: "tokenWeighted", governance, toModel: "tokenWeighted" });
+  check(getAddress(plan.newGovernance) !== getAddress(governance) && plan.notes.some((n) => /fresh tokenWeighted setup/.test(n)), "same model: a fresh setup at a new address");
+}
 await refused("old governance", { fromModel: "conviction", governance: old, toModel: "quadratic" });
 await refused("board without signers", { fromModel: "tokenWeighted", governance, toModel: "board" });
 

@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 /**
- * Deploys all ten governance factories (plus WMON, a stand-in Pyth Entropy,
- * the Entropy randomness adapter, and MockPyth under the price adapter) to
+ * Deploys all ten governance factories, the WrapperFactory, the DistributionFactory,
+ * VaultFactory and Launcher (plus WMON, a stand-in Pyth Entropy, the Entropy
+ * randomness adapter, a 6-decimal stand-in USDC, and MockPyth under the price adapter) to
  * a local anvil chain, from Spaces' compiled artifacts, and prints the env
  * lines the bot needs - so scripts/test-evm-models.mjs can run against a
  * throwaway chain first.
  *
  *   anvil --chain-id 10143 --block-time 1
- *   (cd ../Spaces && FOUNDRY_PROFILE=size-limited forge build && forge build test/PythAdapters.t.sol)
+ *   (cd ../Spaces && FOUNDRY_PROFILE=size-limited forge build && forge build test/PythAdapters.t.sol test/PropFirmVault.t.sol)
  *   node scripts/deploy-local-evm.mjs [--spaces ../Spaces] [--rpc http://127.0.0.1:8545] > .env.local-evm
  *
  * The deployer is anvil's first default account unless DEPLOYER_KEY is set.
@@ -53,16 +54,23 @@ async function tokenImpls() {
 }
 
 const env = {};
-const tokenModel = async (envName, governance, factory) => {
+const tokenModel = async (envName, governance, factory, extra = []) => {
   const [token, staked, treasury] = await tokenImpls();
-  env[envName] = await deploy(factory, [token, staked, treasury, await deploy(governance)]);
+  env[envName] = await deploy(factory, [token, staked, treasury, await deploy(governance), ...extra]);
 };
+
+// Pyth Entropy stand-in (Spaces' test/PythAdapters.t.sol): the test script
+// reveals its numbers itself, the way Entropy's keeper does on a real chain.
+// Sortition draws from it, and Delegate draws tied council seats.
+const entropy = await deploy("FeeEntropy", [], "PythAdapters.t.sol");
+env.SORTITION_RANDOMNESS_SOURCE = await deploy("PythEntropyRandomnessAdapter", [entropy, 200_000], "PythEntropyRandomnessAdapter.sol");
+env.LOCAL_FEE_ENTROPY = entropy;
 
 await tokenModel("FACTORY_ADDRESS", "Governance", "DAOFactory");
 await tokenModel("QUADRATIC_FACTORY_ADDRESS", "QuadraticGovernance", "QuadraticDAOFactory");
 await tokenModel("LIQUID_FACTORY_ADDRESS", "LiquidGovernance", "LiquidDAOFactory");
 await tokenModel("OPTIMISTIC_FACTORY_ADDRESS", "OptimisticGovernance", "OptimisticDAOFactory");
-await tokenModel("DELEGATE_FACTORY_ADDRESS", "DelegateGovernance", "DelegateDAOFactory");
+await tokenModel("DELEGATE_FACTORY_ADDRESS", "DelegateGovernance", "DelegateDAOFactory", [env.SORTITION_RANDOMNESS_SOURCE]);
 await tokenModel("SORTITION_FACTORY_ADDRESS", "SortitionGovernance", "SortitionDAOFactory");
 await tokenModel("CONVICTION_FACTORY_ADDRESS", "ConvictionGovernance", "ConvictionDAOFactory");
 await tokenModel("SOWELLIAN_FACTORY_ADDRESS", "SowellianGovernance", "SowellianDAOFactory");
@@ -78,11 +86,23 @@ const wmon = await deploy("WMON");
   env.DECISION_MARKETS_FACTORY_ADDRESS = await deploy("DecisionMarketsDAOFactory", [token, staked, treasury, governance, wmon, conditionalToken, conditionalVault, pair]);
 }
 
-// Pyth Entropy stand-in (Spaces' test/PythAdapters.t.sol): the test script
-// reveals its numbers itself, the way Entropy's keeper does on a real chain.
-const entropy = await deploy("FeeEntropy", [], "PythAdapters.t.sol");
-env.SORTITION_RANDOMNESS_SOURCE = await deploy("PythEntropyRandomnessAdapter", [entropy, 200_000], "PythEntropyRandomnessAdapter.sol");
-env.LOCAL_FEE_ENTROPY = entropy;
+// Security councils, NFT wrappers and stake converters: clones from one WrapperFactory.
+env.WRAPPER_FACTORY_ADDRESS = await deploy("WrapperFactory", [await deploy("GuardWrapper"), await deploy("NFTMarketplaceWrapper"), await deploy("StakeConverter")]);
+
+// Distributors and raises, prop-firm vaults, and the Launcher, which may
+// call every token model's factory (Spaces' script/DeployLaunchFactory.s.sol).
+env.DISTRIBUTION_FACTORY_ADDRESS = await deploy("DistributionFactory", [await deploy("Distributor"), await deploy("Raise")]);
+env.VAULT_FACTORY_ADDRESS = await deploy("VaultFactory", [await deploy("PropFirmVault")]);
+env.LAUNCHER_ADDRESS = await deploy("Launcher", [env.DISTRIBUTION_FACTORY_ADDRESS, env.VAULT_FACTORY_ADDRESS, account.address]);
+{
+  const { abi } = artifact("Launcher");
+  for (const k of ["FACTORY_ADDRESS", "QUADRATIC_FACTORY_ADDRESS", "LIQUID_FACTORY_ADDRESS", "OPTIMISTIC_FACTORY_ADDRESS", "DELEGATE_FACTORY_ADDRESS", "CONVICTION_FACTORY_ADDRESS", "SOWELLIAN_FACTORY_ADDRESS", "DECISION_MARKETS_FACTORY_ADDRESS"]) {
+    const hash = await wallet.writeContract({ address: env.LAUNCHER_ADDRESS, abi, functionName: "approveFactory", args: [env[k], true] });
+    await publicClient.waitForTransactionReceipt({ hash });
+  }
+}
+// A 6-decimal stand-in for USDC (raises in a token, vaults' asset).
+env.LOCAL_USDC = await deploy("USDC6", [], "PropFirmVault.t.sol");
 
 // Pyth's MockPyth (prices valid an hour, 1 wei per update) under the real
 // PythPriceFeedAdapter, for Sowellian's oracle track. A stand-in Hermes has

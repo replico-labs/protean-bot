@@ -1,17 +1,17 @@
-// The DAO token record and /migrate, end to end against a local validator, through the bot's
-// own Solana commands (wallet storage stood in for in memory, as in test-solana-local.mjs).
-// Writes to data/chats.json (back it up first).
+// Token changes, the converter, the security council and a switch, end to end against a local
+// validator, through the bot's own Solana commands (wallet storage stood in for in memory, as in
+// test-solana-local.mjs). Writes to data/chats.json (back it up first).
 //
-// A token-weighted DAO is created (its token goes on record at the hub in the same
-// transaction), passes a switch to quadratic (set up on the recorded token), and a member's
-// stake sitting in a vault the DAO isn't using is moved by /migrate into the one it is.
-// The hub's 2-day switch delay can't pass on a local validator, so the stake to move is put
-// straight into quadratic's vault while token-weighted still runs the DAO - /migrate treats
-// every model but the current one the same way.
+// A token-weighted DAO is created (its token and stake pool go on record at the hub), moves to
+// a new token with a 2-for-1 converter in one proposal - same governance, members convert or
+// unstake their old stake - then, in one round of votes, turns a security council on, pays
+// someone with the council's confirmation, turns the council off (the council confirms), and
+// starts a switch to quadratic set up for the next epoch on the current token. The hub's 2-day
+// switch delay can't pass on a local validator, so the switch is left pending.
 //
-// 1. In the Vortexes repo: anchor build, then start a fresh validator with the eleven programs
-//    at their declare_id! addresses.
-// 2. node --experimental-test-module-mocks --test scripts/test-solana-switch.mjs   (~4 minutes)
+// 1. In the Vortexes repo: build the programs, then start a fresh validator with the thirteen
+//    programs (vortex-stake included) at their declare_id! addresses.
+// 2. node --experimental-test-module-mocks --test scripts/test-solana-switch.mjs   (~7 minutes)
 import { test, mock } from "node:test";
 import assert from "node:assert";
 import { Keypair, LAMPORTS_PER_SOL, SystemProgram, PublicKey, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
@@ -30,6 +30,9 @@ mock.module(new URL("../src/walletStore.js", import.meta.url).href, {
     createAgentKey: async () => null,
     getAgentAccount: async () => null,
     deleteAgentKey: async () => {},
+    // Phoenix's agent keys (deskPhoenix.js); unused here.
+    PHOENIX_AGENT_PLATFORM: "phoenix-agent",
+    deletePhoenixAgentKey: async () => {},
     isWalletStoreConfigured: () => true,
     createWalletRecord: async () => null,
     getWalletAccount: async () => null,
@@ -95,7 +98,7 @@ async function setUpHub() {
   }
 }
 
-test("the DAO's token on record, a switch that keeps it, and /migrate", { timeout: 900_000 }, async () => {
+test("a token change with a converter, the security council, and a switch that keeps everyone's stake", { timeout: 1_200_000 }, async () => {
   await conn.confirmTransaction(await conn.requestAirdrop(op.publicKey, 100 * LAMPORTS_PER_SOL), "confirmed");
   await setUpHub();
   const T = -300;
@@ -104,46 +107,89 @@ test("the DAO's token on record, a switch that keeps it, and /migrate", { timeou
   assert.match(out, /\(token-weighted\) created/);
   const link = getChatSolana(T, "telegram");
   const dao = new PublicKey(link.dao);
-  const d = await v.readDao(net, dao);
-  const g = await v.readGovernance(net, "tokenWeighted", d.governance);
-  // The treasury pays the new model's rent when the switch runs.
-  await sendAndConfirmTransaction(conn, new Transaction().add(SystemProgram.transfer({ fromPubkey: op.publicKey, toPubkey: d.treasury, lamports: LAMPORTS_PER_SOL / 2 })), [op]);
-  const recorded = await v.readDaoToken(net, dao);
-  assert.ok(recorded?.equals(g.mint), "the token goes on record when the DAO is created");
+  let d = await v.readDao(net, dao);
+  const oldMint = d.mint;
+  // The treasury pays for new accounts (the new pool, the converter, the next model's setup).
+  await sendAndConfirmTransaction(conn, new Transaction().add(SystemProgram.transfer({ fromPubkey: op.publicKey, toPubkey: d.treasury, lamports: LAMPORTS_PER_SOL })), [op]);
+  assert.ok(oldMint, "the token goes on record (with its stake pool) when the DAO is created");
 
   const A = addressIn(await run(T, 1, "wallet"));
+  const B = addressIn(await run(T, 2, "wallet"));
   assert.match(await run(T, 1, `tip 600 ${A}`), /Sent 600 SWT/);
   assert.match(await run(T, 1, "stake 300"), /Staked 300 SWT/);
   assert.match(await run(T, 1, "migrate"), /nothing to move/);
+  assert.match(await run(T, 1, `proposeaction settoken ${oldMint.toBase58()} Same token`), /already the DAO's token/);
 
-  // A switch to quadratic: set up on the recorded token.
-  out = await run(T, 1, "proposeaction switchquadratic Move to quadratic");
-  assert.match(out, /switch this DAO to quadratic governance \(same treasury and token `/);
-  assert.doesNotMatch(out, /records that token/, "already on record");
-  const id = Number(out.match(/Proposal \*#(\d+)\*/)[1]);
-  // A deliberate change of token is its own action.
-  const other = Keypair.generate().publicKey;
-  assert.match(await run(T, 1, `proposeaction settoken ${g.mint.toBase58()} Same token`), /already the DAO's token/);
-  assert.match(await run(T, 1, `proposeaction settoken ${other.toBase58()} x`), /mint|token/i);
+  // A token change and its converter fit one legacy transaction only with a short description: the bot says so up front.
+  out = await run(T, 1, `proposeaction settoken new:5000 rate=2 fund=1000 ${"A rather long description of why this DAO is moving to a new token. ".repeat(2)}`);
+  assert.match(out, /don't fit in one Solana transaction with that description: keep it under \d+ characters[\s\S]*openconverter/);
 
+  // 1. A new token, with a 2-for-1 converter funded from the treasury, in one proposal.
+  out = await run(T, 1, "proposeaction settoken new:5000 rate=2 fund=1000 Move to a new token");
+  assert.match(out, /change the DAO's token from `.*` to `.*` \(a new token; its supply is already in the treasury\); opens a converter \(2:1\) funded with 1,?000 new tokens/);
+  let id = Number(out.match(/Proposal \*#(\d+)\*/)[1]);
   assert.match(await run(T, 1, `vote ${id} for`), /Voted \*for\*/);
   await waitPast(await clock(), 122);
   assert.match(await run(T, 1, `queue ${id}`), new RegExp(`Queued #${id}`));
   await waitPast(await clock(), 31);
   assert.match(await run(T, 1, `execute ${id}`), /executed/);
-  const qv = v.addresses(net, dao, net.programs.quadratic);
-  const qg = await v.readGovernance(net, "quadratic", qv.governance);
-  assert.ok(qg.mint.equals(g.mint), "quadratic is set up on the same token");
-  assert.ok((await v.readDao(net, dao)).record.pendingSwitch, "the switch waits out its delay");
+  d = await v.readDao(net, dao);
+  assert.ok(!d.mint.equals(oldMint), "the hub's record points at the new token");
+  assert.strictEqual(d.record.epoch, 1, "the same governance");
 
-  // Stake in a vault the DAO isn't using now: /migrate brings it over.
-  const alice = await getOrCreateSolanaKeypair(1, "telegram");
-  await v.deposit(net, "quadratic", alice, qv, qg, 100n * 10n ** 6n);
-  out = await run(T, 1, "migrate");
-  assert.match(out, /Quadratic: took out 100 SWT/i);
-  assert.match(out, /Staked 100 SWT in Token-weighted/i);
-  const voter = await v.readVoter(net, "tokenWeighted", d.voter(alice.publicKey));
-  assert.strictEqual(BigInt(voter.amount.toString()), 400n * 10n ** 6n);
-  assert.strictEqual(BigInt((await v.readVoter(net, "quadratic", qv.voter(alice.publicKey))).amount.toString()), 0n);
-  assert.match(await run(T, 1, "migrate"), /nothing to move/);
+  out = await run(T, 1, "balance");
+  assert.match(out, /Staked here: 0\b/);
+  assert.match(out, /Also staked in an old token's pool/);
+  assert.match(await run(T, 1, "convert 100"), /Converted 100 old stake into 200 SWT/);
+  assert.match(await run(T, 1, "balance"), /Staked here: 200\b/);
+  assert.match(await run(T, 1, "migrate"), /still have stake in a pool for a token this DAO used before:[\s\S]*200/);
+  assert.match(await run(T, 1, `unstake 50 ${oldMint.toBase58()}`), /Unstaked 50 of the old token/);
+  assert.match(await run(T, 1, "convert 600"), /free to convert/);
+  assert.match(await run(T, 1, `proposeaction openconverter ${oldMint.toBase58()} rate=1:1 Another`), /already a converter from that token/);
+
+  // 2. A council, a payment it must confirm, a converter top-up and a switch; then the council off.
+  out = await run(T, 1, `council on ${A},${B} 1 0 Council on`);
+  assert.match(out, /turn on a security council of 2 \(1 must confirm each passed proposal/);
+  const on = Number(out.match(/Proposal \*#(\d+)\*/)[1]);
+  const pay = Number((await run(T, 1, `propose ${B} 0.002 SOL Paid under the council`)).match(/Proposal \*#(\d+)\*/)[1]);
+  assert.match(await run(T, 1, "council off Council off"), /no security council/);
+  out = await run(T, 1, "proposeaction switchquadratic Move to quadratic");
+  assert.match(out, /switch this DAO to quadratic governance \(same treasury, token `.*` and everyone's stake\)/);
+  const sw = Number(out.match(/Proposal \*#(\d+)\*/)[1]);
+  out = await run(T, 1, `proposeaction fundconverter ${oldMint.toBase58()} 100 Top up the converter`);
+  assert.match(out, /add 100 to the converter from/);
+  const topUp = Number(out.match(/Proposal \*#(\d+)\*/)[1]);
+  const passAll = async (ids) => {
+    for (const p of ids) assert.match(await run(T, 1, `vote ${p} for`), /Voted \*for\*/);
+    await waitPast(await clock(), 122);
+    for (const p of ids) assert.match(await run(T, 1, `queue ${p}`), new RegExp(`Queued #${p}`));
+    await waitPast(await clock(), 31);
+  };
+  await passAll([on, pay, sw, topUp]);
+
+  const before = (await v.readConverter(net, d, oldMint, d.mint)).funded;
+  assert.match(await run(T, 1, `execute ${topUp}`), /executed/);
+  assert.strictEqual((await v.readConverter(net, d, oldMint, d.mint)).funded - before, 100_000_000n, "the top-up lands in the converter");
+  assert.match(await run(T, 1, `execute ${on}`), /executed/);
+  assert.match(await run(T, 1, "council"), /Security council\*: 1 of 2 confirm each passed proposal/);
+  assert.match(await run(T, 1, `execute ${pay}`), /waits for the security council/);
+  assert.match(await run(T, 3, `council confirm ${pay}`), /Only security council signers/);
+  assert.match(await run(T, 2, `council confirm ${pay}`), /has the 1 confirmations it needs/);
+  assert.match(await run(T, 1, `execute ${pay}`), /security council confirmed it/);
+
+  const off = Number((await run(T, 1, "council off Council off")).match(/Proposal \*#(\d+)\*/)[1]);
+  await passAll([off]);
+  assert.match(await run(T, 1, `execute ${off}`), /waits for the security council/);
+  await run(T, 1, `council confirm ${off}`);
+  assert.match(await run(T, 1, `execute ${off}`), /executed/);
+  assert.match(await run(T, 1, "council"), /No security council/);
+
+  assert.match(await run(T, 1, `execute ${sw}`), /executed/);
+  d = await v.readDao(net, dao);
+  assert.ok(d.record.pendingSwitch?.program.equals(net.programs.quadratic), "the switch waits out its 2-day delay");
+  // Set up for the next epoch on the DAO's token: stake never moves.
+  const qv = v.addresses(net, dao, net.programs.quadratic, d.record.epoch + 1);
+  const qg = await v.readGovernance(net, "quadratic", qv.governance);
+  assert.ok(qg.mint.equals(d.mint) && qg.epoch === d.record.epoch + 1, "quadratic is set up for the next epoch, on the current token");
+  assert.match(await run(T, 1, "dao"), /Switching to quadratic/i);
 });

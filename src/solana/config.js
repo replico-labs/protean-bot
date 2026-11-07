@@ -31,6 +31,9 @@ export const IDLS = {
   sortition: require("./idl/vortex_sortition.json"),
   sowellian: require("./idl/vortex_sowellian.json"),
   decisionMarkets: require("./idl/vortex_decision_markets.json"),
+  stake: require("./idl/vortex_stake.json"),
+  distribution: require("./idl/vortex_distribution.json"),
+  vault: require("./idl/vortex_vault.json"),
 };
 /** vortex-core's GovError, by code: { "6000": { name, msg } }. */
 export const GOV_ERRORS = require("./idl/gov_errors.json");
@@ -116,6 +119,12 @@ export function getSolanaNetwork(id) {
       sortition: pid("SORTITION", IDLS.sortition.address),
       sowellian: pid("SOWELLIAN", IDLS.sowellian.address),
       decisionMarkets: pid("DECISION_MARKETS", IDLS.decisionMarkets.address),
+      // vortex-stake: the DAO's stake pools, read by every token model.
+      stake: pid("STAKE", IDLS.stake.address),
+      // vortex-distribution: Distributors and raises; vortex-vault: prop-firm vaults.
+      // Not on devnet yet: commands check they're deployed before using them.
+      distribution: pid("DISTRIBUTION", IDLS.distribution.address),
+      vault: pid("VAULT", IDLS.vault.address),
     },
     /**
      * Vortexes' fill program, for swaps (src/solana/fill.js), or null:

@@ -23,6 +23,7 @@ import { proposalImage } from "../../charts.js";
 import { getUserAddress } from "../../walletResolver.js";
 import { parsePerps, perpsUsage, perpsView, perpsProposalWords, PerpsError } from "../../perps.js";
 import { deskUsage, deskStatus, deskMine, applyForDesk, deskProposalWords, resignFromDesk, linkDesk, trade, setDeskPaused, DeskError } from "../../desk.js";
+import { deskVault } from "../../funds.js";
 import { link, addressLine } from "../../links.js";
 import { buttonHint as sowellianButtonHint } from "../../governance/sowellian.js";
 
@@ -381,13 +382,13 @@ export const CORE_COMMANDS = {
           case "apply": {
             const { account } = await userClient(ctx);
             const plan = await applyForDesk(chat, account, args);
-            return await proposeIntegration({ ...ctx, named: undefined }, address, plan.actionId, plan.words, { onProposed: plan.record, note: plan.note });
+            return await proposeIntegration({ ...ctx, named: undefined }, address, plan.actionId, plan.words, { onProposed: plan.record, note: plan.note, vault: (await deskVault(ctx.chatId, ctx.platform))?.vault });
           }
           case "fund":
           case "withdraw":
           case "remove": {
             const { actionId, words, record } = await deskProposalWords(chat, sub.toLowerCase(), args);
-            return await proposeIntegration({ ...ctx, named: undefined }, address, actionId, words, record ? { onProposed: record } : undefined);
+            return await proposeIntegration({ ...ctx, named: undefined }, address, actionId, words, { ...(record ? { onProposed: record } : {}), vault: (await deskVault(ctx.chatId, ctx.platform))?.vault });
           }
           case "resign": {
             const { client } = await userClient(ctx);
@@ -544,7 +545,7 @@ export const CORE_COMMANDS = {
 /** /desk status and mine answer with text and, when there's anything to draw, a PnL card. */
 const deskReply = (r) => (typeof r === "string" ? reply(r) : reply(r.text, r.image ? { image: r.image } : {}));
 
-async function proposeIntegration(ctx, address, actionId, rest, { onProposed, note } = {}) {
+async function proposeIntegration(ctx, address, actionId, rest, { onProposed, note, vault = null } = {}) {
   const model = getChatModel(ctx.chatId, ctx.platform);
   // Discord passes args and description as separate fields; join them so
   // name=value options and the description parse the same way as Slack.
@@ -562,6 +563,7 @@ async function proposeIntegration(ctx, address, actionId, rest, { onProposed, no
       guardWrapperAddress: getChatGuardWrapper(ctx.chatId, ctx.platform),
       nftWrapperAddress: getChatNftWrapper(ctx.chatId, ctx.platform),
       lookupTicker: (ticker) => getRegisteredToken(ctx.chatId, ticker, ctx.platform),
+      vault,
     });
   } catch (err) {
     if (err instanceof IntegrationError) throw new UserError(err.message);

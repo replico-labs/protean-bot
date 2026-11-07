@@ -1,8 +1,9 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { getAddress } from "viem";
-import { publicClient, writeWithGasBuffer, deployWithGasLimit } from "./config.js";
+import { getAddress, keccak256, toHex } from "viem";
+import { publicClient, writeWithGasBuffer } from "./config.js";
+import { requireWrapperFactory } from "./governanceChanges.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -25,18 +26,18 @@ function wrapperContract(address) {
  * the resulting wrapper.
  */
 export async function deployGuardWrapper(client, governanceAddress, initialSigners, requiredApprovals, tenureLengthSeconds) {
-  const hash = await deployWithGasLimit(client, {
-    abi: guardWrapperArtifact.abi,
-    bytecode: guardWrapperArtifact.bytecode,
-    args: [
-      getAddress(governanceAddress),
-      initialSigners.map((s) => getAddress(s.toLowerCase())),
-      BigInt(requiredApprovals),
-      BigInt(tenureLengthSeconds),
-    ],
+  // A clone made by the network's WrapperFactory (the implementation itself can't be initialized).
+  // `/council on` does the same inside one proposal, handover included.
+  const wf = requireWrapperFactory();
+  const salt = keccak256(toHex(`guard:${getAddress(governanceAddress)}:${Date.now()}`));
+  const wrapperAddress = getAddress(await publicClient.readContract({ ...wf, functionName: "predictGuardWrapper", args: [client.account.address, salt] }));
+  const hash = await writeWithGasBuffer(client, {
+    ...wf,
+    functionName: "createGuardWrapper",
+    args: [getAddress(governanceAddress), initialSigners.map((s) => getAddress(s.toLowerCase())), BigInt(requiredApprovals), BigInt(tenureLengthSeconds), salt],
   });
-  const receipt = await publicClient.waitForTransactionReceipt({ hash });
-  return { hash, wrapperAddress: receipt.contractAddress };
+  await publicClient.waitForTransactionReceipt({ hash });
+  return { hash, wrapperAddress };
 }
 
 /**

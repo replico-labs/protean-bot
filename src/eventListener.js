@@ -533,7 +533,7 @@ export function startEventListener(target, pollIntervalMs = 20_000) {
           });
         } catch (err) {
           // One unreachable network must not stop notifications for the others.
-          console.error(`Event listener: ${network} pass failed:`, err.message);
+          console.error(`Event listener: ${network} pass failed:`, err.shortMessage ?? err.message);
         }
       }
 

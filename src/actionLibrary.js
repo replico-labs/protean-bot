@@ -181,6 +181,15 @@ export const ACTION_LIBRARY = [
     params: [{ name: "newConfig", type: "tuple", fields: ["councilSize", "termLength", "candidacyThreshold", "candidacyPeriod", "electionVotingPeriod", "councilQuorum", "councilApprovalThresholdBps", "votingDelay", "votingPeriod", "timelockDelay", "executionPeriod", "recallQuorumBps", "recallApprovalThresholdBps", "recallVotingPeriod"] }],
   },
   {
+    id: "delegate-set-seat-label",
+    label: "Name a council seat (seat 0 is the first; the label is one word, e.g. Treasurer)",
+    appliesTo: ["delegate"],
+    targetKind: "governance",
+    functionName: "setSeatLabel",
+    abi: [{ type: "function", name: "setSeatLabel", stateMutability: "nonpayable", inputs: [{ name: "seat", type: "uint16" }, { name: "label", type: "string" }], outputs: [] }],
+    params: [{ name: "seat", type: "uint16" }, { name: "label", type: "string" }],
+  },
+  {
     id: "update-config-sortition",
     label: "Update governance config (Sortition)",
     appliesTo: ["sortition"],

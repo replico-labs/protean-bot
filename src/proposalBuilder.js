@@ -181,6 +181,20 @@ async function treasuryRoute({ model, governanceAddress, guardWrapperAddress }) 
   };
 }
 
+/**
+ * Calls a prop firm's vault makes for its desk: vault.execute, which only
+ * whoever its Treasury answers to may call - the governance, or the
+ * security council's wrapper (then a proposeInstruction it confirms).
+ * `treasury` is the vault: it's the account the actions act for.
+ */
+async function vaultRoute({ model, governanceAddress, guardWrapperAddress, vault }) {
+  const v = getAddress(vault);
+  const t = await treasuryRoute({ model, governanceAddress, guardWrapperAddress });
+  if (!t.guarded) return { treasury: v, guarded: false, wrap: (data) => ({ target: v, data }) };
+  const wrapper = getAddress(guardWrapperAddress);
+  return { treasury: v, guarded: true, wrap: (data) => ({ target: wrapper, data: encodeFunctionData({ abi: PROPOSE_INSTRUCTION_ABI, functionName: "proposeInstruction", args: [v, 0n, data] }) }) };
+}
+
 const EXECUTE_ABI = [
   {
     type: "function",
@@ -207,7 +221,7 @@ const EXECUTE_ABI = [
  * then name=value options, then the description.
  * Returns { actions, summary, description, guarded }.
  */
-export async function buildIntegrationProposal({ model, governanceAddress, actionId, words, guardWrapperAddress, nftWrapperAddress, lookupTicker }) {
+export async function buildIntegrationProposal({ model, governanceAddress, actionId, words, guardWrapperAddress, nftWrapperAddress, lookupTicker, vault = null }) {
   const action = getIntegrationAction(actionId);
   if (!action) throw new Error(`Unknown action "${actionId}"`);
   const network = currentNetwork();
@@ -220,7 +234,8 @@ export async function buildIntegrationProposal({ model, governanceAddress, actio
     throw new IntegrationError(`Usage: ${actionId} ${integrationUsage(action)} <description>`);
   }
 
-  const route = await treasuryRoute({ model, governanceAddress, guardWrapperAddress });
+  // A prop firm's desk: the vault is the account, and it makes the calls (vault.execute).
+  const route = vault ? await vaultRoute({ model, governanceAddress, guardWrapperAddress, vault }) : await treasuryRoute({ model, governanceAddress, guardWrapperAddress });
   const ctx = {
     network,
     publicClient,
@@ -245,7 +260,9 @@ export async function buildIntegrationProposal({ model, governanceAddress, actio
     return { ...route.wrap(executeData), value: 0n };
   });
 
-  return { actions, summary, description, guarded: route.guarded };
+  // Actions describe "the Treasury"; for a prop firm's desk the vault is the account.
+  const said = vault ? summary.replace(/\bthe Treasury('s)?\b/g, "the vault$1").replace(/\bThe Treasury('s)?\b/g, "The vault$1") : summary;
+  return { actions, summary: said, description, guarded: route.guarded };
 }
 
 const HANDOVER_ABI = [

@@ -63,6 +63,9 @@ export function mandateText(m, symbol = "") {
  * limit price), `othersNotional` every other open position's value that
  * `total` counts.
  */
+/** A desk whose prop-firm vault is paused (a drawdown, or a proposal) opens nothing, whatever the desk's own pause says. */
+export const withVaultPause = (desk, ctx) => (desk.paused || !ctx.vaultPaused ? desk : { ...desk, paused: { by: "the vault (a drawdown, or a proposal; a proposal resumes it)" } });
+
 export function checkOpen(desk, trader, { market, leverage, notional, othersNotional = 0, symbol = "", dayPnl = 0 }) {
   if (desk.paused) throw new DeskError(`The desk is paused${desk.paused.by ? ` (by ${desk.paused.by})` : ""}: no new positions until it's resumed. You can still close positions.`);
   if (Date.now() > trader.expiresAt) throw new DeskError("Your mandate has ended - the DAO needs to appoint you again to open positions. You can still close them.");

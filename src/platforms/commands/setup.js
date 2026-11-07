@@ -8,19 +8,13 @@ import {
   getChatModel,
   getChatNftWrapper,
   getChatGuardWrapper,
-  getChatDistributor,
-  registerDistributor,
   registerNftWrapper,
   registerGuardWrapper,
 } from "../../db.js";
 import {
   createDaoOnChain,
   getUnderlyingTokenAddress,
-  deployWelcomeDistributor,
   deployNftWrapper,
-  getDistributorInfo,
-  hasAlreadyClaimed,
-  distributeWelcomeGrant,
 } from "../../contracts.js";
 import { hasToken, getDaoInfo } from "../../governance/common.js";
 import { createDAO as createQuadraticDAO } from "../../governance/quadratic.js";
@@ -89,27 +83,6 @@ function linkNewDao(ctx, governance, model, network = currentNetwork().id) {
 function assertMayRelink(ctx) {
   if (!mayManageLink(ctx)) throw new UserError("This channel is already linked to a DAO. Only whoever linked it, its creator, or an admin can replace that link.");
 }
-
-/** Same outcomes as index.js's attemptClaim, keyed by platform. */
-async function attemptClaim(ctx) {
-  const distributorAddress = getChatDistributor(ctx.chatId, ctx.platform);
-  if (!distributorAddress) return { status: "no-distributor" };
-  let account;
-  try {
-    account = await getOrCreateUserAccount(ctx.userId, ctx.platform);
-  } catch (err) {
-    return { status: "no-wallet", error: err.message };
-  }
-  if (await hasAlreadyClaimed(distributorAddress, account.address).catch(() => false)) return { status: "already-claimed" };
-  try {
-    const hash = await distributeWelcomeGrant(distributorAddress, account.address);
-    return { status: "sent", hash, walletAddress: account.address };
-  } catch (err) {
-    console.error("distributeWelcomeGrant failed:", err);
-    return { status: "error", error: err.message };
-  }
-}
-export { attemptClaim };
 
 export const SETUP_COMMANDS = {
   createdao: {
@@ -216,75 +189,6 @@ export const SETUP_COMMANDS = {
       }
       linkNewDao(ctx, result.governance, "board", network);
       return reply(`✅ *${name}* (board) created on ${getNetwork(network).chain.name} and linked to this channel.\n\nGovernance: \`${short(result.governance)}\`\nTreasury: \`${short(result.treasury)}\`\nSigners: ${signers.length}`);
-    },
-  },
-
-  deploywelcomedistributor: {
-    section: "Setup",
-    usage: "<amountPerClaim> <distributionCap>",
-    description: "Deploy a welcome-token distributor (creator only)",
-    options: [
-      { name: "amount_per_claim", description: "Tokens each member can claim", required: true },
-      { name: "distribution_cap", description: "Total tokens the distributor may hand out", required: true },
-    ],
-    async run(ctx) {
-      const address = requireDao(ctx);
-      const model = getChatModel(ctx.chatId, ctx.platform);
-      if (!hasToken(model)) throw new UserError(`This DAO uses ${model} governance, which has no token - there's nothing to distribute.`);
-      if (!isWalletStoreConfigured()) throw new UserError(NO_WALLETS);
-      requireCreator(ctx, "Only this DAO's creator can deploy a welcome distributor.");
-      const amountPerClaim = Number(ctx.args[0]);
-      const distributionCap = Number(ctx.args[1]);
-      if (!(amountPerClaim > 0) || !(distributionCap > 0)) throw new UserError(`Usage: \`${ctx.cmd("deploywelcomedistributor")} <amountPerClaim> <distributionCap>\``);
-      if (distributionCap < amountPerClaim) throw new UserError("The distribution cap has to be at least as large as the amount per claim.");
-      const tokenAddress = await getUnderlyingTokenAddress(address);
-      const { distributorAddress } = await deployWelcomeDistributor(walletClient, tokenAddress, address, amountPerClaim, distributionCap);
-      return reply(`✅ Deployed at \`${short(distributorAddress)}\`.\n\nTwo steps left:\n1. Send it enough of this DAO's token to cover claims (up to ${distributionCap})\n2. Run \`${ctx.cmd("setdistributor")} ${distributorAddress}\` to link it here`);
-    },
-  },
-
-  setdistributor: {
-    section: "Setup",
-    usage: "<distributorAddress>",
-    description: "Link a deployed welcome distributor (creator/linker/admin)",
-    options: [{ name: "address", description: "WelcomeDistributor address", required: true }],
-    async run(ctx) {
-      requireDao(ctx);
-      // Telegram doesn't gate this; here it follows the channel-link rule,
-      // since whoever sets the distributor decides where claims come from.
-      if (!mayManageLink(ctx)) throw new UserError("Only whoever linked this channel, its creator, or an admin can set its distributor.");
-      const address = ctx.args[0];
-      if (!address || !isAddress(address)) throw new UserError(`Usage: \`${ctx.cmd("setdistributor")} 0xYourWelcomeDistributorAddress\``);
-      let info;
-      try {
-        info = await getDistributorInfo(address);
-      } catch {
-        throw new UserError("Couldn't read a WelcomeDistributor at that address. Double-check it's deployed correctly.");
-      }
-      registerDistributor(ctx.chatId, getAddress(address), ctx.platform);
-      return reply(`✅ Welcome distributor linked. Members can run \`${ctx.cmd("claim")}\` to receive ${info.amountPerClaim} tokens.`);
-    },
-  },
-
-  claim: {
-    section: "Your wallet",
-    usage: "",
-    description: "Claim your welcome tokens",
-    options: [],
-    async run(ctx) {
-      const result = await attemptClaim(ctx);
-      switch (result.status) {
-        case "no-distributor":
-          throw new UserError("No welcome distribution is set up for this channel.");
-        case "no-wallet":
-          throw new UserError(result.error || NO_WALLETS);
-        case "already-claimed":
-          throw new UserError("You've already claimed your welcome tokens.");
-        case "sent":
-          return reply(`✅ Sent your welcome tokens to \`${short(result.walletAddress)}\`.`);
-        default:
-          throw new UserError("Something went wrong sending your tokens — try again in a moment.");
-      }
     },
   },
 

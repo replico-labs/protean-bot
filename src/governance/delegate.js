@@ -253,8 +253,12 @@ export async function startElection(client, governanceAddress) {
   return { hash, electionId: electionCount, election };
 }
 
-/** Declares the caller's candidacy in an open election's candidacy window. */
-export async function declareCandidacy(client, governanceAddress, electionId) {
+/**
+ * Declares the caller's candidacy for council seat `seat` (0-based) in an
+ * open election's candidacy window. Each seat goes to its own most-voted
+ * candidate; a seat nobody runs for keeps its holder.
+ */
+export async function declareCandidacy(client, governanceAddress, electionId, seat = 0) {
   const gov = contractFor(governanceAddress);
   const election = await loadElection(gov, electionId);
   const block = await publicClient.getBlockNumber({ cacheTime: 0 });
@@ -263,8 +267,12 @@ export async function declareCandidacy(client, governanceAddress, electionId) {
   }
   const me = getAddress(client.account.address);
   if (election.candidates.some((c) => getAddress(c) === me)) throw new ElectionError(`You're already a candidate in election #${election.id}.`);
+  const { councilSize } = await publicClient.readContract({ ...gov, functionName: "config" });
+  if (!Number.isInteger(Number(seat)) || Number(seat) < 0 || Number(seat) >= Number(councilSize)) {
+    throw new ElectionError(`Seats are numbered 1 to ${councilSize}; /seats lists them.`);
+  }
 
-  const hash = await writeWithGasBuffer(client, { ...gov, functionName: "declareCandidacy", args: [BigInt(electionId)] });
+  const hash = await writeWithGasBuffer(client, { ...gov, functionName: "declareCandidacy", args: [BigInt(electionId), Number(seat)] });
   await publicClient.waitForTransactionReceipt({ hash });
   return { hash };
 }
@@ -315,6 +323,14 @@ export async function voteInElection(client, governanceAddress, electionId, cand
   if (candidates.length > Number(councilSize)) {
     throw new ElectionError(`You can vote for at most ${councilSize} candidate(s) (the council size); you named ${candidates.length}.`);
   }
+  // One candidate per seat: each seat is its own race.
+  const seats = await Promise.all(candidates.map((c) => publicClient.readContract({ ...gov, functionName: "seatOf", args: [BigInt(electionId), c] })));
+  const bySeat = new Map();
+  candidates.forEach((c, i) => {
+    const seat = Number(seats[i][0]);
+    if (bySeat.has(seat)) throw new ElectionError(`${bySeat.get(seat)} and ${c} both run for seat ${seat + 1}: vote for one candidate per seat.`);
+    bySeat.set(seat, c);
+  });
 
   const governanceTokenAddress = await publicClient.readContract({ ...gov, functionName: "governanceToken" });
   const weight = await publicClient.readContract({
@@ -333,7 +349,21 @@ export async function voteInElection(client, governanceAddress, electionId, cand
   return { hash, weight, candidates };
 }
 
-/** Finalizes a closed election - top vote-getters become the new council. */
+const RANDOMNESS_ABI = [
+  { type: "function", name: "requestFee", inputs: [], outputs: [{ type: "uint256" }], stateMutability: "view" },
+  { type: "function", name: "credit", inputs: [{ type: "address" }], outputs: [{ type: "uint256" }], stateMutability: "view" },
+  { type: "function", name: "fund", inputs: [{ type: "address" }], outputs: [], stateMutability: "payable" },
+  { type: "function", name: "isFulfilled", inputs: [{ type: "bytes32" }], outputs: [{ type: "bool" }], stateMutability: "view" },
+];
+const ZERO = "0x0000000000000000000000000000000000000000";
+
+/**
+ * Finalizes a closed election: each seat goes to its most-voted candidate.
+ * A tie (with a randomness source set) is drawn: the first call requests
+ * the draw - topping up the DAO's credit at the Pyth Entropy adapter if
+ * it's short - and a second call, once the draw is in, seats the council.
+ * Returns { hash, drawRequested, seated }.
+ */
 export async function finalizeElection(client, governanceAddress, electionId) {
   const gov = contractFor(governanceAddress);
   const election = await loadElection(gov, electionId);
@@ -342,9 +372,54 @@ export async function finalizeElection(client, governanceAddress, electionId) {
   if (phase === "finalized") throw new ElectionError(`Election #${election.id} is already finalized.`);
   if (phase !== "ended") throw new ElectionError(`Election #${election.id} can't be finalized until voting closes.\n${describeElectionPhase(election, block)}`);
 
-  const hash = await writeWithGasBuffer(client, { ...gov, functionName: "finalizeElection", args: [BigInt(electionId)] });
+  const id = BigInt(electionId);
+  if (await publicClient.readContract({ ...gov, functionName: "awaitingDraw", args: [id] })) {
+    const source = await publicClient.readContract({ ...gov, functionName: "randomnessSource" });
+    const requestId = await publicClient.readContract({ ...gov, functionName: "tieRequestId", args: [id] });
+    const ready = await publicClient.readContract({ address: getAddress(source), abi: RANDOMNESS_ABI, functionName: "isFulfilled", args: [requestId] });
+    if (!ready) throw new ElectionError(`The draw for election #${election.id}'s tied seats isn't in yet - try again in a minute.`);
+    const hash = await writeWithGasBuffer(client, { ...gov, functionName: "resolveTies", args: [id] });
+    await publicClient.waitForTransactionReceipt({ hash });
+    return { hash, drawRequested: false, seated: true };
+  }
+
+  // A tie needs a draw, which Pyth Entropy charges for: make sure the DAO's credit covers it.
+  const source = await publicClient.readContract({ ...gov, functionName: "randomnessSource" }).catch(() => ZERO);
+  if (getAddress(source) !== ZERO) {
+    const adapter = { address: getAddress(source), abi: RANDOMNESS_ABI };
+    const fee = await publicClient.readContract({ ...adapter, functionName: "requestFee" }).catch(() => null);
+    if (fee !== null) {
+      const credit = await publicClient.readContract({ ...adapter, functionName: "credit", args: [gov.address] });
+      if (fee > credit) {
+        const fundHash = await writeWithGasBuffer(client, { ...adapter, functionName: "fund", args: [gov.address], value: fee - credit });
+        await publicClient.waitForTransactionReceipt({ hash: fundHash });
+      }
+    }
+  }
+  const hash = await writeWithGasBuffer(client, { ...gov, functionName: "finalizeElection", args: [id] });
   await publicClient.waitForTransactionReceipt({ hash });
-  return { hash };
+  const drawRequested = await publicClient.readContract({ ...gov, functionName: "awaitingDraw", args: [id] });
+  return { hash, drawRequested, seated: !drawRequested };
+}
+
+/**
+ * The council by seat: [{ seat (1-based), label, holder }], and for an
+ * election, each seat's candidates with their votes.
+ */
+export async function getSeats(governanceAddress, electionId = null) {
+  const gov = contractFor(governanceAddress);
+  const council = await publicClient.readContract({ ...gov, functionName: "getCouncil" });
+  return Promise.all(
+    council.map(async (holder, i) => {
+      const label = await publicClient.readContract({ ...gov, functionName: "seatLabel", args: [i] }).catch(() => "");
+      let candidates = [];
+      if (electionId !== null) {
+        const list = await publicClient.readContract({ ...gov, functionName: "seatCandidates", args: [BigInt(electionId), i] });
+        candidates = await Promise.all(list.map(async (c) => ({ address: c, votes: await publicClient.readContract({ ...gov, functionName: "electionVotes", args: [BigInt(electionId), c] }) })));
+      }
+      return { seat: i + 1, label, holder: getAddress(holder) === ZERO ? null : holder, candidates };
+    })
+  );
 }
 
 /** Read-only: full details of one election. */

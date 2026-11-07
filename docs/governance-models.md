@@ -42,19 +42,33 @@ Someone who votes directly before being resolved keeps their own vote.
 - **After it executes,** the event listener sees the Treasury's new governance (`predecessorOf` on the factory that deployed it), moves the chat's link to it and posts a notice.
 - **The old governance stays on record.** Stake still backing a proposal on an old Conviction governance stays locked until its owner runs `/withdrawsupport`, which still reaches the old governance after the switch.
 
+- **Any direction,** Board included, and the running model too (a fresh setup with new rules or signers).
+- **Under a security council** the deploy and one wrapper batch (`setGovernance` plus the staking contract's locker) go in the proposal; the council confirms the batch and the wrapper points at the new governance in one step. The Treasury, token and staking contract never move.
+- **The NFT wrapper** follows: the switch includes its `setGovernance`.
+- **A Board DAO keeps the DAO's token** (`governanceToken()`), so a switch back to a token model finds it there. One with no token adds `token=new:<name>:<symbol>:<supply>` (a new token, its supply to the Treasury) or `token=<ERC20>`.
+
 Limits:
-- **The network's factories must be the current ones** (Spaces with `createForSwitch`). Until they are, `/switchmodel` says so.
+- **The network's factories must be the current ones** (Spaces with `createForSwitch`, `createStaking` and `createTokenForSwitch`). Until they are, `/switchmodel` says so.
 - **DAOs from older factories** have their staking contract owned by that factory, so it isn't handed over (voting works the same), and they can't switch into Conviction.
-- **A DAO whose Treasury sits behind a GuardWrapper** can't switch through the bot yet.
-- **A Board DAO that never had a token** can't switch to a token model. One that came from a token model finds its token again through the governance it replaced.
 
 **Solana:** the `switch…` actions in `/proposeaction` (see [Solana](solana.md)).
 
-## Guard wrapper
+## Changing the token
 
-A security council in front of the Treasury.
-- `/guardwrapper`: its signers, threshold and tenure
-- `/instruction <id>` · `/confirminstruction <id>` · `/rejectinstruction <id>` · `/revokeconfirmation <id>`
+**`/settoken <token|new:name:symbol:supply> [rate=N:D fund=<amount>]`** proposes moving the DAO to another token without changing its governance, on any model, Board included.
+- The proposal makes a staking contract for the token (and the token itself for `new:`), points the governance at it, and, with a council, hands both to the council.
+- **Open proposals keep the token they were made with.** New ones use the new token's stake.
+- `rate=` and `fund=` open a converter (a clone from the network's `WrapperFactory`) funded from the Treasury. `/convert <amount>` then swaps a member's old stake for new stake in one call; the old tokens go to the Treasury.
+- Without a converter, members unstake the old token and stake the new one.
+- Conviction asks the member once to approve the governance as a locker before their first `/support`: locks need the member's consent.
+
+## Security council (Guard wrapper)
+
+A council of signers in front of the Treasury, token and staking contract. Wrappers are cheap clones from the network's `WrapperFactory` (`WRAPPER_FACTORY_ADDRESS`).
+- **`/council on <required> <tenure-days> <signer…>`**: one proposal creates the wrapper and hands it the Treasury, token and staking contract.
+- **After that** Treasury and token actions go through the wrapper: `/proposeaction` routes them, and signers confirm.
+- **`/council off`**: one proposal sends the wrapper a batch handing everything back, which the council confirms. If it refuses, **`/council replace <required> <signer…>`** after their tenure (no confirmation needed), then off.
+- `/council`: the council (and Delegate/Sortition's own) · `/guardwrapper` · `/instruction <id>` · `/confirminstruction <id>` · `/rejectinstruction <id>` · `/revokeconfirmation <id>`
 
 ## NFTs
 

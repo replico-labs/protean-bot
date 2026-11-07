@@ -409,9 +409,9 @@ async function delegateFlow(run) {
 
   await waitForTermEnd(run, dao);
   const { electionId } = await run.step("C starts an election", () => adapter.startElection(C.client, dao.governance));
-  await run.step("A and C stand", async () => {
-    await adapter.declareCandidacy(A.client, dao.governance, electionId);
-    await adapter.declareCandidacy(C.client, dao.governance, electionId);
+  await run.step("A stands for seat 1, C for seat 2", async () => {
+    await adapter.declareCandidacy(A.client, dao.governance, electionId, 0);
+    await adapter.declareCandidacy(C.client, dao.governance, electionId, 1);
   });
   const election = await adapter.getElection(dao.governance, electionId);
   await run.step("candidacy closes", () => waitForBlock(run, "candidacy to close", election.candidacyDeadline, Number(election.candidacyDeadline - election.snapshotBlock) + 10));

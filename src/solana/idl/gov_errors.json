@@ -438,5 +438,153 @@
  "6109": {
   "name": "WrongMint",
   "msg": "That isn't the DAO's token: change it with the hub's set_dao_token first"
+ },
+ "6110": {
+  "name": "PoolNotCurrent",
+  "msg": "That pool isn't the DAO's current one: it only takes withdrawals"
+ },
+ "6111": {
+  "name": "WrongPool",
+  "msg": "That stake is in another pool"
+ },
+ "6112": {
+  "name": "ConverterClosed",
+  "msg": "This converter is closed"
+ },
+ "6113": {
+  "name": "ConverterUnderfunded",
+  "msg": "The converter doesn't hold enough of the new token for that"
+ },
+ "6114": {
+  "name": "NoCouncil",
+  "msg": "The DAO has no security council"
+ },
+ "6115": {
+  "name": "NotCouncilSigner",
+  "msg": "Only the security council can do this"
+ },
+ "6116": {
+  "name": "AwaitingCouncil",
+  "msg": "This proposal is waiting for the security council"
+ },
+ "6117": {
+  "name": "CouncilRejected",
+  "msg": "The security council rejected this proposal"
+ },
+ "6118": {
+  "name": "TenureNotOver",
+  "msg": "The council's tenure hasn't ended"
+ },
+ "6119": {
+  "name": "InvalidAllowance",
+  "msg": "An allowance needs an amount and an end within a year"
+ },
+ "6120": {
+  "name": "AllowanceEnded",
+  "msg": "This allowance has ended or been revoked"
+ },
+ "6121": {
+  "name": "AllowanceAlreadyClaimed",
+  "msg": "This period's allowance has already been paid; the next opens 30 days after it"
+ },
+ "6122": {
+  "name": "InvalidSeat",
+  "msg": "There's no such seat on the council"
+ },
+ "6123": {
+  "name": "OneCandidatePerSeat",
+  "msg": "Pick at most one candidate per seat"
+ },
+ "6124": {
+  "name": "NotFunded",
+  "msg": "The Distributor doesn't hold enough unpromised tokens for that"
+ },
+ "6125": {
+  "name": "WelcomeUnavailable",
+  "msg": "Welcome grants are off, used up, or already given to this member"
+ },
+ "6126": {
+  "name": "DistributorClosed",
+  "msg": "The Distributor is closed"
+ },
+ "6127": {
+  "name": "TooEarly",
+  "msg": "Not yet: the claim deadline hasn't passed"
+ },
+ "6128": {
+  "name": "RaiseNotOpen",
+  "msg": "The raise isn't taking contributions now"
+ },
+ "6129": {
+  "name": "ContributionLimit",
+  "msg": "That's outside this raise's contribution limits"
+ },
+ "6130": {
+  "name": "RaiseNotEnded",
+  "msg": "The raise hasn't ended"
+ },
+ "6131": {
+  "name": "DecisionClosed",
+  "msg": "The time to accept an amount has passed: everyone is refunded"
+ },
+ "6132": {
+  "name": "AlreadyAccepted",
+  "msg": "The raise was already accepted"
+ },
+ "6133": {
+  "name": "AmountOutOfRange",
+  "msg": "Accept at least the soft cap and at most what was contributed"
+ },
+ "6134": {
+  "name": "NotAccepted",
+  "msg": "The raise hasn't been accepted"
+ },
+ "6135": {
+  "name": "MovesFrozen",
+  "msg": "Moves are frozen ahead of the vault's next window"
+ },
+ "6136": {
+  "name": "WindowNotDue",
+  "msg": "The vault's window isn't due yet"
+ },
+ "6137": {
+  "name": "Settling",
+  "msg": "Money is still settling: the window waits after the last move"
+ },
+ "6138": {
+  "name": "StalePrice",
+  "msg": "A venue's price is stale: the window waits"
+ },
+ "6139": {
+  "name": "NotProcessed",
+  "msg": "That epoch hasn't been processed yet"
+ },
+ "6140": {
+  "name": "NotLiquid",
+  "msg": "The vault doesn't hold enough idle money yet"
+ },
+ "6141": {
+  "name": "AlreadySeeded",
+  "msg": "The vault was already seeded"
+ },
+ "6142": {
+  "name": "VaultEmpty",
+  "msg": "The vault is worth nothing: deposits can't be priced"
+ },
+ "6143": {
+  "name": "UnsupportedCollateral",
+  "msg": "A venue account holds collateral the vault can't value"
+ },
+ "6144": {
+  "name": "VenueMismatch",
+  "msg": "The venue accounts given aren't the vault's, in its order"
+ },
+ "6145": {
+  "name": "NotAllowed",
+  "msg": "Only addresses the DAO allowed may deposit"
+ },
+ "6146": {
+  "name": "FeesOwed",
+  "msg": "Fees are still owed to a recipient being changed"
  }
 }

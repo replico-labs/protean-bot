@@ -1,11 +1,12 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { createWalletClient, formatEther, parseEther, formatUnits, parseUnits, getAddress, isAddress } from "viem";
+import { createWalletClient, formatEther, parseEther, formatUnits, parseUnits, getAddress, isAddress, keccak256, toHex } from "viem";
 import { publicClient, walletClient, operatorAccount, FACTORY_ADDRESSES, writeWithGasBuffer, deployWithGasLimit } from "./config.js";
 import { currentNetwork, creationConfig } from "./networks.js";
 import { createdDaoId } from "./receipts.js";
 import { ensureCanAfford } from "./gasSponsor.js";
+import { requireWrapperFactory } from "./governanceChanges.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -19,11 +20,9 @@ const abis = {
   Treasury: loadAbi("Treasury"),
   StakedGovernanceToken: loadAbi("StakedGovernanceToken"),
   GovernanceToken: loadAbi("GovernanceToken"),
-  WelcomeDistributor: loadAbi("WelcomeDistributor"),
   DAOFactory: loadAbi("DAOFactory"),
 };
 
-const welcomeDistributorArtifact = loadAbi("WelcomeDistributorArtifact");
 const nftMarketplaceWrapperArtifact = loadAbi("NFTMarketplaceWrapperArtifact");
 
 // Mirrors Types.sol's ProposalState enum exactly - order and count matter.
@@ -105,53 +104,6 @@ export async function getVotingPower(tokenAddress, account) {
     activeVotes: formatEther(votes),
     delegatedTo,
   };
-}
-
-export async function getDistributorInfo(distributorAddress) {
-  const dist = { address: getAddress(distributorAddress), abi: abis.WelcomeDistributor };
-
-  const [amountPerClaim, remainingCapacity, balance] = await Promise.all([
-    publicClient.readContract({ ...dist, functionName: "amountPerClaim" }),
-    publicClient.readContract({ ...dist, functionName: "remainingCapacity" }),
-    publicClient.readContract({ ...dist, functionName: "balance" }),
-  ]);
-
-  return {
-    amountPerClaim: formatEther(amountPerClaim),
-    remainingCapacity: formatEther(remainingCapacity),
-    balance: formatEther(balance),
-  };
-}
-
-export async function hasAlreadyClaimed(distributorAddress, memberAddress) {
-  return publicClient.readContract({
-    address: getAddress(distributorAddress),
-    abi: abis.WelcomeDistributor,
-    functionName: "hasClaimed",
-    args: [getAddress(memberAddress)],
-  });
-}
-
-/**
- * Distributes the welcome grant to `memberAddress` via the operator wallet.
- * Throws if OPERATOR_PRIVATE_KEY isn't configured - callers should check
- * `operatorAccount` is non-null before calling, or catch and surface a
- * clear message.
- */
-export async function distributeWelcomeGrant(distributorAddress, memberAddress) {
-  if (!walletClient || !operatorAccount) {
-    throw new Error("OPERATOR_PRIVATE_KEY is not configured on this bot instance");
-  }
-
-  const hash = await writeWithGasBuffer(walletClient, {
-    address: getAddress(distributorAddress),
-    abi: abis.WelcomeDistributor,
-    functionName: "distribute",
-    args: [getAddress(memberAddress)],
-  });
-
-  await publicClient.waitForTransactionReceipt({ hash });
-  return hash;
 }
 
 // Same defaults as script/CreateDAO.s.sol, kept in sync deliberately - see
@@ -429,41 +381,6 @@ export async function getTokenSymbol(tokenAddress) {
 }
 
 /**
- * Deploys a fresh WelcomeDistributor for a DAO, closing the gap where
- * the only way to get one live was a manual `forge script` run outside
- * the bot entirely. `operator_` (the address WelcomeDistributor itself
- * authorizes to call its distribute function - confirmed directly from
- * the contract's own onlyOperator check, not assumed) is always this
- * bot's own operator wallet, since that's who actually calls
- * distributeWelcomeGrant elsewhere in this file - a distributor
- * deployed with any other operator address would be permanently
- * uncallable by this bot.
- *
- * Real, verified bytecode - extracted directly from compiling
- * WelcomeDistributor.sol against the actual OpenZeppelin v5.6.1
- * IERC20/SafeERC20 it imports, not assumed or hand-written.
- *
- * Deliberately does NOT fund the new distributor or call /setdistributor
- * for the caller - those are separate, visible steps (transfer tokens to
- * it, then /setdistributor its address) rather than silently bundled in.
- */
-export async function deployWelcomeDistributor(client, tokenAddress, governanceAddress, amountPerClaimWhole, distributionCapWhole) {
-  const hash = await deployWithGasLimit(client, {
-    abi: welcomeDistributorArtifact.abi,
-    bytecode: welcomeDistributorArtifact.bytecode,
-    args: [
-      getAddress(tokenAddress),
-      getAddress(governanceAddress),
-      operatorAccount.address,
-      parseEther(String(amountPerClaimWhole)),
-      parseEther(String(distributionCapWhole)),
-    ],
-  });
-  const receipt = await publicClient.waitForTransactionReceipt({ hash });
-  return { hash, distributorAddress: receipt.contractAddress };
-}
-
-/**
  * Deploys a fresh NFTMarketplaceWrapper for a DAO - one per DAO, not
  * shared, since this one holds the DAO's NFTs. Real,
  * verified bytecode - extracted directly from compiling
@@ -471,13 +388,13 @@ export async function deployWelcomeDistributor(client, tokenAddress, governanceA
  * package, not assumed or hand-written.
  */
 export async function deployNftWrapper(client, governanceAddress, treasuryAddress) {
-  const hash = await deployWithGasLimit(client, {
-    abi: nftMarketplaceWrapperArtifact.abi,
-    bytecode: nftMarketplaceWrapperArtifact.bytecode,
-    args: [getAddress(governanceAddress), getAddress(treasuryAddress)],
-  });
-  const receipt = await publicClient.waitForTransactionReceipt({ hash });
-  return { hash, wrapperAddress: receipt.contractAddress };
+  // A clone made by the network's WrapperFactory (the implementation itself can't be initialized).
+  const wf = requireWrapperFactory();
+  const salt = keccak256(toHex(`nft:${getAddress(governanceAddress)}:${Date.now()}`));
+  const wrapperAddress = getAddress(await publicClient.readContract({ ...wf, functionName: "predictNFTWrapper", args: [client.account.address, salt] }));
+  const hash = await writeWithGasBuffer(client, { ...wf, functionName: "createNFTWrapper", args: [getAddress(governanceAddress), getAddress(treasuryAddress), salt] });
+  await publicClient.waitForTransactionReceipt({ hash });
+  return { hash, wrapperAddress };
 }
 
 export { formatEther };

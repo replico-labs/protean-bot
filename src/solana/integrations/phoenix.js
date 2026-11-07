@@ -2,6 +2,7 @@ import { PublicKey } from "@solana/web3.js";
 import * as rise from "@ellipsis-labs/rise";
 import * as v from "../vortex.js";
 import * as phx from "../phoenix.js";
+import * as sf from "../funds.js";
 import { fail, key } from "./common.js";
 
 /**
@@ -23,6 +24,11 @@ import { fail, key } from "./common.js";
  *
  * The Treasury must be registered on Phoenix first (the desk does it,
  * through Phoenix's API, paid by the operator). Mainnet only.
+ *
+ * A prop firm's desk trades its vault's money: the vault's PDA is the
+ * Phoenix authority, each instruction it signs runs as vault.execute, the
+ * USDC comes from and returns to the vault's assets account, and the
+ * Treasury only pays rent.
  */
 
 export const protocol = {
@@ -41,17 +47,49 @@ function subOf(word) {
 
 const usd = (raw) => `${v.formatUnits(raw, phx.QUOTE_DECIMALS)} USDC`;
 
-/** What the instructions need about the Treasury's Phoenix account. */
+/** What the instructions need about the desk's Phoenix account (the Treasury's, or a prop firm's vault's). */
 async function account(c, sub) {
-  const treasury = c.d.treasury;
+  const owner = await sf.deskOwner(c.network, c.d);
+  const authority = owner.authority;
   const exchange = await phx.exchangeAccounts(c.network);
-  const cross = await phx.traderAccount(treasury, phx.CROSS);
-  if (!(await phx.readTrader(c.network, treasury, phx.CROSS))) fail("The Treasury isn't registered on Phoenix yet: run `desk register` first.");
-  const child = sub === undefined ? null : await phx.traderAccount(treasury, sub);
-  return { treasury: treasury.toBase58(), exchange, cross, child };
+  const cross = await phx.traderAccount(authority, phx.CROSS);
+  if (!(await phx.readTrader(c.network, authority, phx.CROSS))) fail(`${owner.Name} isn't registered on Phoenix yet: run \`desk register\` first.`);
+  const child = sub === undefined ? null : await phx.traderAccount(authority, sub);
+  const tokens = await phx.tokenAccounts(c.network, authority);
+  if (owner.vault) {
+    if (!owner.vault.assetMint.equals(new PublicKey(exchange.usdcMint))) fail("The vault's money isn't USDC, so it can't go to Phoenix.");
+    tokens.usdc = owner.vault.assets.toBase58();
+  }
+  // A vault holds no SOL: the Treasury pays rent for it.
+  return { owner, authority: authority.toBase58(), payer: (owner.vault ? c.d.treasury : authority).toBase58(), exchange, cross, child, tokens };
 }
 
-const stored = (ixs) => phx.listOf(ixs).map((ix) => v.stored(phx.web3Instruction(ix)));
+/**
+ * A vault is valued at each window from the Phoenix accounts it names
+ * (set_venues): money on an account it doesn't name would go uncounted,
+ * mispricing every deposit and redemption. So appointing a trader names
+ * the cross account and the trader's subaccount too (8 at most).
+ */
+async function venuesFor(c, a) {
+  if (!a.owner.vault) return [];
+  const x = a.owner.vault;
+  const have = x.phoenixTraders.map((k) => k.toBase58());
+  const want = [...new Set([...have, a.cross, a.child])];
+  if (want.length === have.length && x.perpAssetMap.toBase58() === a.exchange.perpAssetMap) return [];
+  if (want.length > 8) fail("The vault is valued from at most 8 Phoenix accounts (its cross account and 7 traders' subaccounts): remove a trader's subaccount from its venues first.");
+  return [await sf.vaultVenuesIx(c.network, c.d, x.address, new PublicKey(a.exchange.perpAssetMap), want.map((k) => new PublicKey(k)), x.extraTokens)];
+}
+
+/** Refuses moving a vault's money onto a Phoenix account its windows don't count. */
+function requireVenues(a) {
+  if (!a.owner.vault) return;
+  const named = a.owner.vault.phoenixTraders.map((k) => k.toBase58());
+  if (!named.includes(a.cross) || !named.includes(a.child)) fail("The vault doesn't count this subaccount (or its cross account) in its value yet: its trader's appointment proposal names it, so that has to run first.");
+}
+
+/** Phoenix instructions as stored proposal instructions; a vault's go through vault.execute. */
+const stored = async (c, a, ixs) =>
+  Promise.all(phx.listOf(ixs).map(async (ix) => v.stored(a.owner.vault ? await sf.asVault(c.network, c.d, a.owner.authority, phx.web3Instruction(ix)) : phx.web3Instruction(ix))));
 
 export const actions = {
   "phoenix-appoint": {
@@ -67,19 +105,19 @@ export const actions = {
       const a = await account(c, sub);
       const ixs = [];
       let rent = 0n;
-      if (!(await phx.readTrader(c.network, c.d.treasury, sub))) {
+      if (!(await phx.readTrader(c.network, a.owner.authority, sub))) {
         ixs.push(
-          rise.buildRegisterTraderIxResolved({ exchange: a.exchange, trader: { payer: a.treasury, authority: a.treasury, traderAccount: a.child }, maxPositions: 1n, traderPdaIndex: 0, traderSubaccountIndex: sub }),
-          rise.buildSyncParentToChildIxResolved({ exchange: a.exchange, trader: { authority: a.treasury, parentTraderAccount: a.cross, childTraderAccount: a.child } })
+          rise.buildRegisterTraderIxResolved({ exchange: a.exchange, trader: { payer: a.payer, authority: a.authority, traderAccount: a.child }, maxPositions: 1n, traderPdaIndex: 0, traderSubaccountIndex: sub }),
+          rise.buildSyncParentToChildIxResolved({ exchange: a.exchange, trader: { authority: a.authority, parentTraderAccount: a.cross, childTraderAccount: a.child } })
         );
         const crossInfo = await c.network.connection.getAccountInfo(new PublicKey(a.cross));
         rent = BigInt(await c.network.connection.getMinimumBalanceForRentExemption(crossInfo.data.length));
       }
-      ixs.push(rise.buildDelegateTraderIxResolved({ exchange: a.exchange, trader: { authority: a.treasury, traderAccount: a.child }, newPositionAuthority: agent.toBase58() }));
+      ixs.push(rise.buildDelegateTraderIxResolved({ exchange: a.exchange, trader: { authority: a.authority, traderAccount: a.child }, newPositionAuthority: agent.toBase58() }));
       return {
-        instructions: stored(ixs),
+        instructions: [...(await venuesFor(c, a)), ...(await stored(c, a, ixs))],
         budget: rent ? [{ mint: v.SOL_ASSET, amount: rent }] : [],
-        summary: `${rent ? "open" : "use"} the Treasury's Phoenix subaccount ${sub} and let key \`${agent.toBase58()}\` trade it`,
+        summary: `${rent ? "open" : "use"} ${a.owner.name}'s Phoenix subaccount ${sub} and let key \`${agent.toBase58()}\` trade it`,
       };
     },
   },
@@ -96,14 +134,15 @@ export const actions = {
       const amount = v.parseUnits(c.args[1], phx.QUOTE_DECIMALS);
       if (amount <= 0n) fail("Fund with more than 0.");
       const a = await account(c, sub);
-      if (!(await phx.readTrader(c.network, c.d.treasury, sub))) fail(`Subaccount ${sub} doesn't exist yet: its appointment proposal has to run first.`);
-      const tokens = await phx.tokenAccounts(c.network, c.d.treasury);
-      const deposit = rise.buildDepositIxsResolved({ exchange: a.exchange, trader: { authority: a.treasury, traderAccount: a.cross, usdcTokenAccount: tokens.usdc, phoenixTokenAccount: tokens.collateral }, amount });
-      const move = rise.buildTransferCollateralIxResolved({ exchange: a.exchange, trader: { authority: a.treasury, srcTraderAccount: a.cross, dstTraderAccount: a.child }, amount });
+      if (!(await phx.readTrader(c.network, a.owner.authority, sub))) fail(`Subaccount ${sub} doesn't exist yet: its appointment proposal has to run first.`);
+      requireVenues(a);
+      const deposit = rise.buildDepositIxsResolved({ exchange: a.exchange, feePayer: a.payer, trader: { authority: a.authority, traderAccount: a.cross, usdcTokenAccount: a.tokens.usdc, phoenixTokenAccount: a.tokens.collateral }, amount });
+      const move = rise.buildTransferCollateralIxResolved({ exchange: a.exchange, trader: { authority: a.authority, srcTraderAccount: a.cross, dstTraderAccount: a.child }, amount });
       return {
-        instructions: [...stored(deposit), ...stored(move)],
-        budget: [{ mint: new PublicKey(phx.PINNED.usdc), amount }],
-        summary: `deposit ${usd(amount)} into Phoenix for subaccount ${sub}`,
+        instructions: [...(await stored(c, a, deposit)), ...(await stored(c, a, move))],
+        // The vault's money isn't the Treasury's: no Treasury budget for it.
+        budget: a.owner.vault ? [] : [{ mint: new PublicKey(phx.PINNED.usdc), amount }],
+        summary: `deposit ${usd(amount)} of ${a.owner.name}'s into Phoenix for subaccount ${sub}`,
       };
     },
   },
@@ -118,18 +157,19 @@ export const actions = {
     async build(c) {
       const sub = subOf(c.args[0]);
       const a = await account(c, sub);
-      const states = await phx.subaccounts(c.network, c.d.treasury);
+      const states = await phx.subaccounts(c.network, a.owner.authority);
       const held = BigInt(Math.floor((states[sub]?.collateral ?? 0) * 10 ** phx.QUOTE_DECIMALS)) + BigInt(Math.floor((states[phx.CROSS]?.collateral ?? 0) * 10 ** phx.QUOTE_DECIMALS));
       const all = String(c.args[1]).toLowerCase() === "all";
       const amount = all ? held : v.parseUnits(c.args[1], phx.QUOTE_DECIMALS);
       if (amount <= 0n) fail(all ? "There's nothing in that subaccount or the cross account to withdraw." : "Withdraw more than 0.");
-      const tokens = await phx.tokenAccounts(c.network, c.d.treasury);
-      const back = rise.buildTransferCollateralChildToParentIxResolved({ exchange: a.exchange, trader: { authority: a.treasury, childTraderAccount: a.child, parentTraderAccount: a.cross } });
-      const out = rise.buildWithdrawIxsResolved({ exchange: a.exchange, trader: { authority: a.treasury, traderAccount: a.cross, usdcTokenAccount: tokens.usdc, phoenixTokenAccount: tokens.collateral }, amount });
+      const back = rise.buildTransferCollateralChildToParentIxResolved({ exchange: a.exchange, trader: { authority: a.authority, childTraderAccount: a.child, parentTraderAccount: a.cross } });
+      const out = rise.buildWithdrawIxsResolved({ exchange: a.exchange, feePayer: a.payer, trader: { authority: a.authority, traderAccount: a.cross, usdcTokenAccount: a.tokens.usdc, phoenixTokenAccount: a.tokens.collateral }, amount });
+      // The vault's USDC account is its assets account, not an associated one: nothing to create.
+      const outIxs = a.owner.vault ? phx.listOf(out).filter((ix) => ix !== out.named.createUsdcAta) : out;
       return {
-        instructions: [...stored(back), ...stored(out)],
+        instructions: [...(await stored(c, a, back)), ...(await stored(c, a, outIxs))],
         budget: [],
-        summary: `withdraw ${usd(amount)} from Phoenix (subaccount ${sub}, through the cross account) back to the Treasury`,
+        summary: `withdraw ${usd(amount)} from Phoenix (subaccount ${sub}, through the cross account) back to ${a.owner.name}`,
       };
     },
   },
@@ -142,7 +182,7 @@ export const actions = {
       const sub = subOf(c.args[0]);
       const a = await account(c, sub);
       return {
-        instructions: stored(rise.buildDelegateTraderIxResolved({ exchange: a.exchange, trader: { authority: a.treasury, traderAccount: a.child }, newPositionAuthority: a.treasury })),
+        instructions: await stored(c, a, rise.buildDelegateTraderIxResolved({ exchange: a.exchange, trader: { authority: a.authority, traderAccount: a.child }, newPositionAuthority: a.authority })),
         budget: [],
         summary: `take back Phoenix subaccount ${sub} from its trader`,
       };

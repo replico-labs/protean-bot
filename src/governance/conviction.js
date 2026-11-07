@@ -331,19 +331,34 @@ const ERC20_BALANCE_ABI = [
  */
 export async function support(client, governanceAddress, proposalId) {
   const gov = contractFor(governanceAddress);
+  const me = client.account.address;
 
-  const governanceTokenAddress = await publicClient.readContract({ ...gov, functionName: "governanceToken" });
-  const weight = await publicClient.readContract({
-    address: governanceTokenAddress,
-    abi: ERC20_BALANCE_ABI,
-    functionName: "balanceOf",
-    args: [client.account.address],
-  });
+  // Support is measured and locked in the token the proposal was made with
+  // (governances from before token changes have no proposalToken: their one token).
+  const tokenAddress = await publicClient
+    .readContract({ ...gov, functionName: "proposalToken", args: [BigInt(proposalId)] })
+    .catch(() => publicClient.readContract({ ...gov, functionName: "governanceToken" }));
+  const token = { address: getAddress(tokenAddress), abi: LOCKER_ABI };
+
+  // A lock needs the member's consent: approve this governance as a locker once.
+  const approved = await publicClient.readContract({ ...token, functionName: "lockerApproved", args: [me, getAddress(governanceAddress)] }).catch(() => null);
+  if (approved === false) {
+    const ok = await writeWithGasBuffer(client, { ...token, functionName: "approveLocker", args: [getAddress(governanceAddress), true] });
+    await publicClient.waitForTransactionReceipt({ hash: ok });
+  }
 
   const hash = await writeWithGasBuffer(client, { ...gov, functionName: "support", args: [BigInt(proposalId)] });
   await publicClient.waitForTransactionReceipt({ hash });
+  const weight = await publicClient.readContract({ ...gov, functionName: "supporterWeight", args: [BigInt(proposalId), me] }).catch(async () =>
+    publicClient.readContract({ address: token.address, abi: ERC20_BALANCE_ABI, functionName: "balanceOf", args: [me] })
+  );
   return { hash, weight };
 }
+
+const LOCKER_ABI = [
+  { type: "function", name: "lockerApproved", inputs: [{ name: "account", type: "address" }, { name: "locker", type: "address" }], outputs: [{ type: "bool" }], stateMutability: "view" },
+  { type: "function", name: "approveLocker", inputs: [{ name: "locker", type: "address" }, { name: "approved", type: "bool" }], outputs: [], stateMutability: "nonpayable" },
+];
 
 /**
  * Withdraws the caller's support from whatever they're currently

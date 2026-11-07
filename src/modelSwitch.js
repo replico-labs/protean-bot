@@ -7,6 +7,7 @@ import { currentNetwork, networkEnvName } from "./networks.js";
 import { hasToken, getGovernanceTokenAddress } from "./governance/common.js";
 import { getAdapter, SUPPORTED_MODELS } from "./governance/index.js";
 import { newTokenWeightedConfig } from "./contracts.js";
+import { newTokenActions, GUARD_ABI } from "./governanceChanges.js";
 
 /**
  * Switching an EVM DAO to another governance model (/switchmodel).
@@ -28,6 +29,13 @@ import { newTokenWeightedConfig } from "./contracts.js";
  * Members keep their stake and voting power: nothing is re-staked. Once
  * the proposal executes, the event listener sees the Treasury's new
  * governance and moves the chat's link (followSwitch below).
+ *
+ * Any model in either direction, as often as the DAO likes, including a
+ * fresh copy of the model it runs now. A DAO without a token (Board-born)
+ * switching to a token model gets one in the same proposal (`token=`).
+ * Under a security council (a GuardWrapper holding the Treasury, token and
+ * staking contract), steps 2-5 become one batch the council confirms:
+ * wrapper.setGovernance(new) and the staking contract's new locker.
  */
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -49,6 +57,11 @@ const TREASURY_ABI = abi("Treasury");
 const STAKING_ABI = abi("StakedGovernanceToken");
 const TOKEN_ABI = abi("GovernanceToken");
 const TREASURY_READ_ABI = [{ type: "function", name: "treasury", inputs: [], outputs: [{ type: "address" }], stateMutability: "view" }];
+const BOARD_TOKEN_ABI = [{ type: "function", name: "governanceToken", inputs: [], outputs: [{ type: "address" }], stateMutability: "view" }];
+const NFT_WRAPPER_ABI = [
+  { type: "function", name: "governance", inputs: [], outputs: [{ type: "address" }], stateMutability: "view" },
+  { type: "function", name: "setGovernance", inputs: [{ name: "newGovernance", type: "address" }], outputs: [], stateMutability: "nonpayable" },
+];
 const NAME_ABI = [{ type: "function", name: "daoName", inputs: [], outputs: [{ type: "string" }], stateMutability: "view" }];
 
 // Models whose new governance needs a list of people to start with.
@@ -102,6 +115,12 @@ async function daoTokens(model, governance) {
       const token = getAddress(await publicClient.readContract({ address: staking, abi: STAKING_ABI, functionName: "underlying" }));
       return { staking, token };
     }
+    // Boards keep the DAO's token now (and change it with setGovernanceToken).
+    const kept = await publicClient.readContract({ address: current, abi: BOARD_TOKEN_ABI, functionName: "governanceToken" }).catch(() => null);
+    if (kept && getAddress(kept) !== zeroAddress) {
+      const token = getAddress(await publicClient.readContract({ address: getAddress(kept), abi: STAKING_ABI, functionName: "underlying" }));
+      return { staking: getAddress(kept), token };
+    }
     const boardFactory = FACTORY_ADDRESSES.board;
     const previous = boardFactory
       ? await publicClient.readContract({ address: getAddress(boardFactory), abi: FACTORY_ABI_BY_MODEL.board, functionName: "predecessorOf", args: [current] }).catch(() => zeroAddress)
@@ -143,9 +162,8 @@ function deployCall(toModel, { name, treasury, token, staking, members, expected
  * sends nothing. Returns { actions, newGovernance, treasury, token,
  * staking, movesStaking, notes }.
  */
-export async function buildSwitch({ fromModel, governance, toModel, members = [], guardWrapperAddress = null, nftWrapperAddress = null }) {
+export async function buildSwitch({ fromModel, governance, toModel, members = [], guardWrapperAddress = null, nftWrapperAddress = null, tokenSpec = null }) {
   if (!SUPPORTED_MODELS.includes(toModel)) throw new SwitchError(`Unknown model "${toModel}". Models: ${SUPPORTED_MODELS.join(", ")}.`);
-  if (toModel === fromModel) throw new SwitchError(`This DAO already uses ${toModel} governance.`);
   const previous = getAddress(governance);
 
   if (MEMBER_MODELS[toModel]) {
@@ -156,62 +174,90 @@ export async function buildSwitch({ fromModel, governance, toModel, members = []
 
   const treasury = getAddress(await publicClient.readContract({ address: previous, abi: TREASURY_READ_ABI, functionName: "treasury" }));
   const controller = getAddress(await publicClient.readContract({ address: treasury, abi: TREASURY_ABI, functionName: "governance" }));
+  // Under a security council the wrapper holds the Treasury and answers to this governance.
+  let council = null;
   if (controller !== previous) {
-    if (guardWrapperAddress && controller === getAddress(guardWrapperAddress)) {
-      throw new SwitchError("This DAO's Treasury is held by its security council wrapper. Switching through the wrapper isn't supported yet.");
-    }
-    throw new SwitchError(`This DAO's governance no longer controls its Treasury (it answers to \`${controller}\`), so it can't switch models.`);
+    const answersTo = await publicClient.readContract({ address: controller, abi: GUARD_ABI, functionName: "governance" }).catch(() => null);
+    if (!answersTo || getAddress(answersTo) !== previous) throw new SwitchError(`This DAO's governance no longer controls its Treasury (it answers to \`${controller}\`), so it can't switch models.`);
+    council = controller;
   }
+  const holder = council ?? previous;
 
-  const { token, staking } = await daoTokens(fromModel, previous);
+  let { token, staking } = await daoTokens(fromModel, previous);
+  const pre = [];
   if (hasToken(toModel) && staking === zeroAddress) {
-    throw new SwitchError(`This DAO has no token, and ${toModel} governance needs one. Only DAOs that started with a token can switch to a token model.`);
+    // A DAO with no token (Board-born) gets one first, in the same proposal.
+    if (!tokenSpec) throw new SwitchError(`This DAO has no token, and ${toModel} governance needs one. Add \`token=new:<name>:<symbol>:<supply>\` for a new token (its supply goes to the Treasury), or \`token=<ERC20 address>\` to adopt an existing one.`);
+    if (council) throw new SwitchError("Give this DAO a token first (/settoken), then switch: under a security council the new token has to be handed to the council.");
+    const made = await newTokenActions(previous, treasury, tokenSpec);
+    pre.push(...made.actions);
+    ({ token, staking } = made);
   }
 
-  // Steps 4-5 need the current governance to own the staking contract.
-  const stakingOwner = staking === zeroAddress ? zeroAddress : getAddress(await publicClient.readContract({ address: staking, abi: STAKING_ABI, functionName: "owner" }));
-  const movesStaking = stakingOwner === previous;
+  // Steps 4-5 need the governance (or its council) to own the staking contract.
+  const stakingOwner = pre.length ? previous : staking === zeroAddress ? zeroAddress : getAddress(await publicClient.readContract({ address: staking, abi: STAKING_ABI, functionName: "owner" }));
+  const movesStaking = stakingOwner === holder;
   if (toModel === "conviction" && !movesStaking) {
     throw new SwitchError("Conviction locks members' stake, so it needs the DAO to own its staking contract - this DAO's is owned by the factory that created it (DAOs created before switching existed). It can switch to any other model.");
   }
-  const tokenOwner = token === zeroAddress ? zeroAddress : getAddress(await publicClient.readContract({ address: token, abi: TOKEN_ABI, functionName: "owner" }));
+  const tokenOwner = pre.length ? previous : token === zeroAddress ? zeroAddress : getAddress(await publicClient.readContract({ address: token, abi: TOKEN_ABI, functionName: "owner" }));
 
   const factory = switchFactory(toModel);
   const newGovernance = getAddress(await predictGovernance(factory, toModel, previous));
   const name = await publicClient.readContract({ address: previous, abi: NAME_ABI, functionName: "daoName" }).catch(() => "DAO");
 
-  const actions = [
-    {
-      target: factory.address,
-      value: 0n,
-      data: encodeFunctionData({ abi: factory.abi, functionName: "createForSwitch", args: deployCall(toModel, { name, treasury, token, staking, members: people, expected: newGovernance }) }),
-    },
-    { target: treasury, value: 0n, data: encodeFunctionData({ abi: TREASURY_ABI, functionName: "transferGovernance", args: [newGovernance] }) },
-  ];
-  if (tokenOwner === previous) {
-    actions.push({ target: token, value: 0n, data: encodeFunctionData({ abi: TOKEN_ABI, functionName: "transferOwnership", args: [newGovernance] }) });
+  const deploy = {
+    target: factory.address,
+    value: 0n,
+    data: encodeFunctionData({ abi: factory.abi, functionName: "createForSwitch", args: deployCall(toModel, { name, treasury, token, staking, members: people, expected: newGovernance }) }),
+  };
+  const locker = toModel === "conviction" ? newGovernance : zeroAddress;
+  const actions = [...pre, deploy];
+  if (council) {
+    // One batch, one confirmation: the wrapper answers to the new governance; the Treasury, token and staking never move.
+    const batch = [{ target: council, value: 0n, data: encodeFunctionData({ abi: GUARD_ABI, functionName: "setGovernance", args: [newGovernance] }) }];
+    if (movesStaking) batch.push({ target: staking, value: 0n, data: encodeFunctionData({ abi: STAKING_ABI, functionName: "setAuthorizedLocker", args: [locker] }) });
+    actions.push({ target: council, value: 0n, data: encodeFunctionData({ abi: GUARD_ABI, functionName: "proposeBatch", args: [batch] }) });
+  } else {
+    actions.push({ target: treasury, value: 0n, data: encodeFunctionData({ abi: TREASURY_ABI, functionName: "transferGovernance", args: [newGovernance] }) });
+    if (tokenOwner === previous) {
+      actions.push({ target: token, value: 0n, data: encodeFunctionData({ abi: TOKEN_ABI, functionName: "transferOwnership", args: [newGovernance] }) });
+    }
+    if (movesStaking) {
+      actions.push({ target: staking, value: 0n, data: encodeFunctionData({ abi: STAKING_ABI, functionName: "setAuthorizedLocker", args: [locker] }) });
+      actions.push({ target: staking, value: 0n, data: encodeFunctionData({ abi: STAKING_ABI, functionName: "transferOwnership", args: [newGovernance] }) });
+    }
   }
-  if (movesStaking) {
-    const locker = toModel === "conviction" ? newGovernance : zeroAddress;
-    actions.push({ target: staking, value: 0n, data: encodeFunctionData({ abi: STAKING_ABI, functionName: "setAuthorizedLocker", args: [locker] }) });
-    actions.push({ target: staking, value: 0n, data: encodeFunctionData({ abi: STAKING_ABI, functionName: "transferOwnership", args: [newGovernance] }) });
+  // The NFT wrapper follows the DAO when it answers to this governance.
+  let movesNfts = false;
+  if (nftWrapperAddress) {
+    const nftGov = await publicClient.readContract({ address: getAddress(nftWrapperAddress), abi: NFT_WRAPPER_ABI, functionName: "governance" }).catch(() => null);
+    if (nftGov && getAddress(nftGov) === previous) {
+      actions.push({ target: getAddress(nftWrapperAddress), value: 0n, data: encodeFunctionData({ abi: NFT_WRAPPER_ABI, functionName: "setGovernance", args: [newGovernance] }) });
+      movesNfts = true;
+    }
   }
 
-  // Each action as the current governance, in order, before anyone votes:
-  // the deploy (step 1) is the one that can refuse, so a bad switch fails
-  // here rather than after the vote.
-  try {
-    await publicClient.call({ account: previous, to: actions[0].target, data: actions[0].data });
-  } catch (err) {
-    throw new SwitchError(`The ${toModel} factory refused this switch: ${err.shortMessage || err.message}`);
+  // The deploy as the current governance, before anyone votes: it's the
+  // step that can refuse, so a bad switch fails here rather than after the
+  // vote. (After a new token's creation, it can only be checked when it runs.)
+  if (!pre.length) {
+    try {
+      await publicClient.call({ account: previous, to: deploy.target, data: deploy.data });
+    } catch (err) {
+      throw new SwitchError(`The ${toModel} factory refused this switch: ${err.shortMessage || err.message}`);
+    }
   }
 
   const notes = [];
+  if (toModel === fromModel) notes.push(`A fresh ${toModel} setup: new rules${MEMBER_MODELS[toModel] ? ` and ${MEMBER_MODELS[toModel]}` : ""}, same Treasury, token and stake. Open proposals on the current one end with it.`);
+  if (council) notes.push("Under the security council: after this passes, the council confirms one batch that points it at the new governance. If it rejects, the new governance controls nothing.");
+  if (pre.length) notes.push(`It also gives the DAO its token first (\`${token}\`, staking \`${staking}\`).`);
   if (fromModel === "conviction") notes.push("Stake backing a Conviction proposal stays locked after the switch until its owner runs withdrawsupport, which keeps working on the old governance.");
   if (!movesStaking && staking !== zeroAddress) notes.push("The staking contract stays with the factory that created this DAO (older DAOs), so it isn't handed over; voting works the same.");
   if (tokenOwner !== previous && token !== zeroAddress) notes.push(`The token is owned by \`${tokenOwner}\`, not this governance, so minting rights don't move.`);
-  if (nftWrapperAddress) notes.push("The NFT wrapper stays governed by the old governance - move any NFTs out before this executes.");
-  return { actions, newGovernance, treasury, token, staking, movesStaking, notes };
+  if (nftWrapperAddress && !movesNfts) notes.push("The NFT wrapper doesn't answer to this governance (or predates handing it over), so it stays put - move any NFTs out before this executes.");
+  return { actions, newGovernance, treasury, token, staking, movesStaking, council, notes };
 }
 
 /**
@@ -226,8 +272,14 @@ export async function detectSwitch(dao) {
     .readContract({ address: previous, abi: TREASURY_READ_ABI, functionName: "treasury" })
     .catch(() => null);
   if (!treasury) return null;
-  const controller = getAddress(await publicClient.readContract({ address: getAddress(treasury), abi: TREASURY_ABI, functionName: "governance" }));
+  let controller = getAddress(await publicClient.readContract({ address: getAddress(treasury), abi: TREASURY_ABI, functionName: "governance" }));
   if (controller === previous) return null;
+  // Under a security council the Treasury stays with the wrapper; a switch points the wrapper at the new governance.
+  const behindCouncil = await publicClient.readContract({ address: controller, abi: GUARD_ABI, functionName: "governance" }).catch(() => null);
+  if (behindCouncil) {
+    if (getAddress(behindCouncil) === previous) return null;
+    controller = getAddress(behindCouncil);
+  }
   for (const model of SUPPORTED_MODELS) {
     const configured = FACTORY_ADDRESSES[model];
     if (!configured) continue;

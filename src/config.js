@@ -36,10 +36,9 @@ export const publicClient = followsNetwork((n) => n.publicClient);
 /** The current network's viem chain (id, name, nativeCurrency, blockExplorers). */
 export const activeChain = followsNetwork((n) => n.chain);
 
-// Operator wallet - only needed for write actions (currently: distributing
-// welcome tokens via WelcomeDistributor). Optional: the bot still works
-// fully in read-only mode without this set, /claim and auto-distribution
-// on join just won't be available.
+// Operator wallet - pays for DAO creation and claims Distributor tokens for
+// chat accounts (src/funds.js). Optional: without it the bot still works,
+// but /createdao and claims for chat accounts don't.
 const OPERATOR_PRIVATE_KEY = process.env.OPERATOR_PRIVATE_KEY;
 
 let operatorAccount = null;
@@ -65,7 +64,7 @@ export const walletClient = operatorAccount ? followsNetwork((n) => operatorClie
 
 if (!operatorAccount) {
   console.warn(
-    "OPERATOR_PRIVATE_KEY not set - /claim and auto-distribution on join will not work until it is."
+    "OPERATOR_PRIVATE_KEY not set - /createdao and claims for chat accounts (/claim) will not work until it is."
   );
 }
 
@@ -106,6 +105,32 @@ export const FACTORY_ADDRESSES = new Proxy(
     },
   }
 );
+
+/**
+ * The network's WrapperFactory (Spaces, src/wrapper): clones a DAO's
+ * GuardWrapper (security council), NFT wrapper and stake converter at
+ * predictable addresses, so one proposal can create one and use it.
+ * WRAPPER_FACTORY_ADDRESS, BASE_WRAPPER_FACTORY_ADDRESS, ...
+ */
+export function wrapperFactoryAddress() {
+  return networkEnv(currentNetwork().id, "WRAPPER_FACTORY_ADDRESS");
+}
+
+/**
+ * The network's DistributionFactory, VaultFactory and Launcher (Spaces,
+ * src/distribution and src/vault): a DAO's Distributor and raises, a
+ * prop firm's vault, and launches. DISTRIBUTION_FACTORY_ADDRESS,
+ * VAULT_FACTORY_ADDRESS, LAUNCHER_ADDRESS (BASE_..., ...).
+ */
+export function distributionFactoryAddress() {
+  return networkEnv(currentNetwork().id, "DISTRIBUTION_FACTORY_ADDRESS");
+}
+export function vaultFactoryAddress() {
+  return networkEnv(currentNetwork().id, "VAULT_FACTORY_ADDRESS");
+}
+export function launcherAddress() {
+  return networkEnv(currentNetwork().id, "LAUNCHER_ADDRESS");
+}
 
 /**
  * The randomness source every new Sortition DAO gets wired to at

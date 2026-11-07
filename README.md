@@ -99,10 +99,12 @@ With "Add to Slack", proposal pages or WhatsApp's QR link page, give that servic
 ```bash
 node scripts/test-evm-models.mjs --network monad-testnet   # every EVM model's lifecycle on a live testnet
 node --env-file=local.env scripts/test-evm-switch.mjs       # model switching, on anvil
+node --env-file=local.env scripts/test-evm-changes.mjs      # token changes, the converter and the security council, on anvil
 node --experimental-test-module-mocks --env-file=local.env scripts/test-evm-buttons.mjs   # Sowellian and Decision Markets buttons, on anvil
 node --experimental-test-module-mocks --env-file=.env.local-hyperevm scripts/test-hypercore-desk.mjs   # the HyperCore trading desk, on anvil as HyperEVM
 node --experimental-test-module-mocks --env-file=.env.local-evm scripts/test-perpl-desk.mjs           # the Perpl trading desk, on anvil as Monad with stand-in Perpl contracts
 node --experimental-test-module-mocks --test scripts/test-solana-local.mjs   # Solana, on a local validator
+node --experimental-test-module-mocks --test scripts/test-solana-switch.mjs  # Solana token change, converter, council and a switch
 node --experimental-test-module-mocks --test scripts/test-slack.mjs        # Slack replies, buttons, charts and links; no chain needed
 ```
 
@@ -114,7 +116,7 @@ Each script's header has its setup. [Testing and keepers](docs/testing-and-keepe
 |---|---|
 | [Architecture](docs/architecture.md) | source map, wallets and KMS, networks and gas, sponsorship, RPC fallbacks, chat links, security |
 | [Commands](docs/commands.md) | every command, buttons under proposals, the `/help` menu |
-| [Governance models](docs/governance-models.md) | the ten models, `/switchmodel`, Guard wrapper, NFTs, Sowellian and Decision Markets, conviction budgets |
+| [Governance models](docs/governance-models.md) | the ten models, `/switchmodel`, `/settoken`, the security council, NFTs, Sowellian and Decision Markets, conviction budgets |
 | [Proposals and notifications](docs/proposals-and-notifications.md) | proposal pages, explorer links, chat notifications, vote charts |
 | [Solana](docs/solana.md) | Vortexes DAOs: commands, actions, switching, pages and charts |
 | [Opportunity Markets](docs/opportunity-markets.md) | confidential prediction markets on Sepolia |

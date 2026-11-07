@@ -23,8 +23,6 @@ import {
   getRegisteredToken,
   getRegisteredTokens,
   unregisterChat,
-  registerDistributor,
-  getChatDistributor,
   registerNftWrapper,
   getChatNftWrapper,
   registerGuardWrapper,
@@ -37,9 +35,6 @@ import {
   getProposalCount,
   getTreasuryBalance,
   getVotingPower,
-  getDistributorInfo,
-  hasAlreadyClaimed,
-  distributeWelcomeGrant,
   createDaoOnChain,
   ensureGasFunded,
   formatEther,
@@ -49,7 +44,6 @@ import {
   getTokenBalance,
   getTokenSymbol,
   getUnderlyingTokenAddress,
-  deployWelcomeDistributor,
   deployNftWrapper,
 } from "./contracts.js";
 import { getAdapter, SUPPORTED_MODELS } from "./governance/index.js";
@@ -94,6 +88,7 @@ import { buttonMenu } from "./buttonMenus.js";
 import { whatsappLinkConfigured, whatsappLinkRoutes } from "./platforms/whatsappLink.js";
 import { proposalImage } from "./charts.js";
 import { runCommand } from "./platforms/commands.js";
+import { welcomeOnJoin } from "./platforms/commands/funds.js";
 import { proposalPagesConfigured, startProposalApi, proposalPageUrl, proposalCreated, pendingSubmitLink, proposalStartPayload, parseProposalStartPayload, knownDaoModel, isSolanaNetwork } from "./proposalPages.js";
 import { getSolanaAddress } from "./solana/wallets.js";
 import { back as opportunityBack } from "./opportunityMarket/encryptedBet.js";
@@ -592,9 +587,8 @@ function telegramHelpSections(chatId) {
     "/network — which chain this chat's DAO is on, and which networks this bot supports",
     "/register `<governance_address> [model] [network]` — already have a DAO deployed elsewhere? Link it to this chat instead of creating a new one (group owner/admins)",
     "/unregister — unlink whatever DAO is connected here (group owner/admins) — doesn't touch the DAO itself, just this chat's connection to it",
-    "/deploywelcomedistributor `<amountPerClaim> <distributionCap>` — solves \"everyone's tokens are stuck in the operator wallet\": deploys a contract new members can claim from (creator only)",
+    "/launch `<model> <name> <symbol> <supply> <forSale> <softCap> <hardCap> <days>` — start a new DAO from a raise: when it ends you accept an amount and one transaction makes the DAO and puts the money in its Treasury (`propfirm` for a prop firm with a vault)",
     "/deploynftwrapper — one per DAO: deploys the contract that holds this DAO's NFTs and lists them on marketplaces like OpenSea — NFTs go here, never to the treasury (creator only)",
-    "/setdistributor `<address>` — link an already-deployed welcome distributor so /claim actually works (admin)",
   ]);
   section("wallet", "Your wallet", [
     "/wallet — show your wallet address (created automatically the first time you need one — no setup required)",
@@ -620,7 +614,8 @@ function telegramHelpSections(chatId) {
     if (hasToken(model)) {
       lines.push(
         "/stake `<amount>` — convert raw tokens into voting power",
-        "/unstake `<amount>` — convert voting power back into raw, transferable tokens"
+        "/unstake `<amount>` — convert voting power back into raw, transferable tokens",
+        "/convert `<amount>` — after a token change: swap your old stake for stake in the new token, through the DAO's converter"
       );
     }
     section("dao", "The DAO", lines);
@@ -629,7 +624,9 @@ function telegramHelpSections(chatId) {
       "/listactions — ready-made actions this DAO can propose, including swaps, lending, staking and more on this network's protocols",
       "/proposeaction `<actionId> <args...> <description>` — propose one of them; the bot encodes every step",
       "/actioninfo `<actionId>` — what any action does, its arguments and their units (and, for protocol actions, where addresses were checked)",
-      "/switchmodel `<model> [council or signers…] [description]` — propose moving this DAO to another governance model; the Treasury, token and everyone's stake stay put"
+      "/switchmodel `<model> [council or signers…] [description]` — propose moving this DAO to another governance model (any direction, the running one too); the Treasury, token and everyone's stake stay put",
+      "/settoken `<token|new:name:symbol:supply> [rate=N:D fund=<amount>]` — propose changing the DAO's token without changing its governance, with an optional converter for old stake",
+      "/council `on <required> <tenure-days> <signer…>` | `off` | `replace <required> <signer…>` — a security council in front of the Treasury, in one proposal"
     );
     if (model === "sowellian") proposing.push("/feeds `<search>` — find a Pyth price feed for an oracle proposal's `feed=`, e.g. /feeds eth");
     section("proposals", `Proposals (${model})`, proposing);
@@ -668,15 +665,23 @@ function telegramHelpSections(chatId) {
       "/confirminstruction `<id>` — signers only: confirm a pending instruction, executes automatically once enough do",
       "/rejectinstruction `<id>` — signers only: permanently cancel an instruction once enough signers agree",
       "/revokeconfirmation `<id>` — withdraw your own earlier confirmation before execution",
-      "/handovertowrapper `<wrapperAddress>` — creator only: computes the proposals that hand Treasury and token-minting control to a wrapper, sent to you privately",
+      "/council — the security council; `/council off` proposes turning it off (the council confirms)",
     ]);
   } else if (daoAddress) {
     section("guard", "Guard wrapper", [
-      "_No guard wrapper linked - /deployguardwrapper `<requiredApprovals> <tenureLengthSeconds> <signer...>` to deploy one, or /registerguardwrapper `<address>` to link an existing one (creator only)._",
+      "_No security council - /council `on <required> <tenure-days> <signer…>` proposes one, created and handed the Treasury, token and staking contract in the same proposal. /registerguardwrapper `<address>` links an existing one._",
     ]);
   }
 
-  section("welcome", "Welcome tokens", ["/claim — claim your welcome tokens"]);
+  section("welcome", "Money: allowances, raises, the Distributor, the vault", [
+    "/allowance — monthly allowances the Treasury pays; `grant <address> <amount> <token|native> <months>` proposes one, `claim <id>` takes this month's",
+    "/distributor — tokens the DAO has promised people: `open`, then `fund`, `grant` and `welcome` by proposal",
+    "/claim — take the tokens the Distributor holds for you (grants, a raise you joined, a welcome grant)",
+    "/welcome — a council member approves a new member's welcome grant (reply to their message)",
+    "/raise — this DAO's raise; `open ...` proposes one, `accept <amount>` by proposal, `settle` when it's accepted",
+    "/contribute `<amount>` · /refund — join a raise; take back what wasn't accepted",
+    "/vault — a prop firm's vault: `deposit`, `redeem`, `cancel`, `claim`, `window`",
+  ]);
 
   const intro = daoAddress
     ? `*Protean DAO* — this group's DAO uses *${model}* governance`
@@ -967,63 +972,8 @@ bot.command("unregister", async (ctx) => {
   await ctx.reply("Unlinked. Run /register to link a DAO again.");
 });
 
-/*//////////////////////////////////////////////////////////////
-                    /deploywelcomedistributor
-//////////////////////////////////////////////////////////////*/
-
-bot.command("deploywelcomedistributor", async (ctx) => {
-  const address = await requireDAO(ctx);
-  if (!address) return;
-
-  const model = getChatModel(ctx.chat.id);
-  if (!hasToken(model)) {
-    await ctx.reply(`This DAO uses ${model} governance, which has no token - there's nothing to distribute.`);
-    return;
-  }
-  if (!isWalletStoreConfigured()) {
-    await ctx.reply("Wallets aren't set up on this bot yet - ask an admin.");
-    return;
-  }
-
-  const chatCreator = getChatCreator(ctx.chat.id);
-  if (!chatCreator || String(ctx.from.id) !== chatCreator) {
-    await ctx.reply("Only this DAO's creator can deploy a welcome distributor.");
-    return;
-  }
-
-  const parts = (ctx.match?.trim() ?? "").split(/\s+/).filter(Boolean);
-  const [amountPerClaimRaw, distributionCapRaw] = parts;
-  const amountPerClaim = Number(amountPerClaimRaw);
-  const distributionCap = Number(distributionCapRaw);
-
-  if (!amountPerClaimRaw || Number.isNaN(amountPerClaim) || amountPerClaim <= 0 || !distributionCapRaw || Number.isNaN(distributionCap) || distributionCap <= 0) {
-    await ctx.reply(
-      "Usage: `/deploywelcomedistributor <amountPerClaim> <distributionCap>`\n\nDeploys a fresh distributor for this DAO's own token - one claim per address, up to the cap. Only the DAO's creator can run this.",
-      { parse_mode: "Markdown" }
-    );
-    return;
-  }
-  if (distributionCap < amountPerClaim) {
-    await ctx.reply("The distribution cap has to be at least as large as the amount per claim, or nobody could ever claim anything.");
-    return;
-  }
-
-  const statusMsg = await ctx.reply("⏳ Deploying a new welcome distributor…");
-
-  try {
-    const tokenAddress = await getUnderlyingTokenAddress(address);
-    const { distributorAddress } = await deployWelcomeDistributor(walletClient, tokenAddress, address, amountPerClaim, distributionCap);
-    await ctx.api.editMessageText(
-      ctx.chat.id,
-      statusMsg.message_id,
-      `✅ Deployed at \`${short(distributorAddress)}\`.\n\nTwo steps left before it's live:\n1. Send it enough of this DAO's token to cover claims (up to ${distributionCap} total)\n2. Run \`/setdistributor ${distributorAddress}\` to link it here`,
-      { parse_mode: "Markdown" }
-    );
-  } catch (err) {
-    console.error(err);
-    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `Couldn't deploy the distributor: ${err.shortMessage || err.message}`);
-  }
-});
+// The WelcomeDistributor's commands, before the Distributor replaced it.
+bot.command(["deploywelcomedistributor", "setdistributor"], (ctx) => ctx.reply("Welcome tokens now come from the DAO's Distributor: /distributor open, then /distributor welcome <amount> <cap> (a proposal). A council member approves each grant with /welcome."));
 
 /*//////////////////////////////////////////////////////////////
                         /deploynftwrapper
@@ -1385,29 +1335,6 @@ bot.command("revokeconfirmation", async (ctx) => {
   }
 });
 
-bot.command("setdistributor", async (ctx) => {
-  const address = ctx.match?.trim();
-
-  if (!address || !isAddress(address)) {
-    await ctx.reply("Usage: `/setdistributor 0xYourWelcomeDistributorAddress`", {
-      parse_mode: "Markdown",
-    });
-    return;
-  }
-
-  let info;
-  try {
-    info = await getDistributorInfo(address);
-  } catch (err) {
-    await ctx.reply("Couldn't read a WelcomeDistributor at that address. Double-check it's deployed correctly.");
-    return;
-  }
-
-  registerDistributor(ctx.chat.id, address);
-  await ctx.reply(
-    `✅ Welcome distributor linked. New members will be offered ${info.amountPerClaim} tokens once they've connected a wallet.`
-  );
-});
 
 /*//////////////////////////////////////////////////////////////
                               /wallet
@@ -1515,6 +1442,8 @@ bot.command("migratewallet", async (ctx) => {
 //////////////////////////////////////////////////////////////*/
 
 bot.command("contribute", async (ctx) => {
+  // With an amount: put money into the chat's raise (src/platforms/commands/funds.js).
+  if (String(ctx.match ?? "").trim()) return runSharedCommand(ctx, "contribute");
   const address = await requireDAO(ctx);
   if (!address) return;
 
@@ -2311,6 +2240,8 @@ bot.command("desk", async (ctx) => {
   return runSharedCommand(ctx, "desk", { isAdmin });
 });
 bot.command("switchmodel", (ctx) => runSharedCommand(ctx, "switchmodel"));
+bot.command("settoken", (ctx) => runSharedCommand(ctx, "settoken"));
+bot.command("convert", (ctx) => runSharedCommand(ctx, "convert"));
 bot.command("migrate", (ctx) => runSharedCommand(ctx, "migrate"));
 
 /*//////////////////////////////////////////////////////////////
@@ -3359,28 +3290,8 @@ bot.command("finalizesortition", async (ctx) => {
                               /council
 //////////////////////////////////////////////////////////////*/
 
-bot.command("council", async (ctx) => {
-  const address = await requireDAO(ctx);
-  if (!address) return;
-
-  const model = getChatModel(ctx.chat.id);
-  const adapter = getAdapter(model);
-  if (typeof adapter.getCouncil !== "function") {
-    await ctx.reply(`This DAO uses ${model} governance, which has no council.`);
-    return;
-  }
-
-  try {
-    const council = await adapter.getCouncil(address);
-    const lines = council.map((addr, i) => `${i + 1}. \`${short(addr)}\``);
-    // Delegate also says where the election cycle stands (sortition has no elections).
-    const status = typeof adapter.electionStatusText === "function" ? `\n\n${await adapter.electionStatusText(address)}` : "";
-    await ctx.reply(`*Current council* (${council.length}):\n${lines.join("\n")}${status}`, { parse_mode: "Markdown" });
-  } catch (err) {
-    console.error(err);
-    await ctx.reply("Couldn't read the council.");
-  }
-});
+// The elected or drawn council and the security council (src/platforms/commands/changes.js).
+bot.command("council", (ctx) => runSharedCommand(ctx, "council"));
 
 /*//////////////////////////////////////////////////////////////
     /startelection, /declarecandidacy, /voteinelection,
@@ -3423,40 +3334,8 @@ bot.command("startelection", async (ctx) => {
   }
 });
 
-bot.command("declarecandidacy", async (ctx) => {
-  const address = await requireDAO(ctx);
-  if (!address) return;
-  if (!isWalletStoreConfigured()) {
-    await ctx.reply("Wallets aren't set up on this bot yet - ask an admin to configure the KMS/Supabase wallet system.");
-    return;
-  }
-
-  const model = getChatModel(ctx.chat.id);
-  const adapter = getAdapter(model);
-  if (typeof adapter.declareCandidacy !== "function") {
-    await ctx.reply(`This DAO uses ${model} governance, which has no elections.`);
-    return;
-  }
-
-  const electionId = ctx.match?.trim();
-  if (!electionId || !/^\d+$/.test(electionId)) {
-    await ctx.reply("Usage: `/declarecandidacy <electionId>` — declares your candidacy in an open election.", { parse_mode: "Markdown" });
-    return;
-  }
-
-  const account = await getOrCreateUserAccount(ctx.from.id);
-  const client = walletClientFor(account);
-  const statusMsg = await ctx.reply("⏳ Declaring candidacy…");
-
-  try {
-    await ensureGasFunded(account);
-    await adapter.declareCandidacy(client, address, electionId);
-    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `✅ You're a candidate in election #${electionId}.`);
-  } catch (err) {
-    console.error(err);
-    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `Couldn't declare candidacy: ${err.shortMessage || err.message}`);
-  }
-});
+bot.command("declarecandidacy", (ctx) => runSharedCommand(ctx, "declarecandidacy"));
+bot.command("seats", (ctx) => runSharedCommand(ctx, "seats"));
 
 bot.command("voteinelection", async (ctx) => {
   const address = await requireDAO(ctx);
@@ -3510,40 +3389,7 @@ bot.command("voteinelection", async (ctx) => {
   }
 });
 
-bot.command("finalizeelection", async (ctx) => {
-  const address = await requireDAO(ctx);
-  if (!address) return;
-  if (!isWalletStoreConfigured()) {
-    await ctx.reply("Wallets aren't set up on this bot yet - ask an admin to configure the KMS/Supabase wallet system.");
-    return;
-  }
-
-  const model = getChatModel(ctx.chat.id);
-  const adapter = getAdapter(model);
-  if (typeof adapter.finalizeElection !== "function") {
-    await ctx.reply(`This DAO uses ${model} governance, which has no elections.`);
-    return;
-  }
-
-  const electionId = ctx.match?.trim();
-  if (!electionId || !/^\d+$/.test(electionId)) {
-    await ctx.reply("Usage: `/finalizeelection <electionId>` — closes voting and seats the top vote-getters as the new council.", { parse_mode: "Markdown" });
-    return;
-  }
-
-  const account = await getOrCreateUserAccount(ctx.from.id);
-  const client = walletClientFor(account);
-  const statusMsg = await ctx.reply("⏳ Finalizing the election…");
-
-  try {
-    await ensureGasFunded(account);
-    await adapter.finalizeElection(client, address, electionId);
-    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, "✅ Election finalized. Use /council to see the new roster.");
-  } catch (err) {
-    console.error(err);
-    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `Couldn't finalize the election: ${err.shortMessage || err.message}`);
-  }
-});
+bot.command("finalizeelection", (ctx) => runSharedCommand(ctx, "finalizeelection"));
 
 /*//////////////////////////////////////////////////////////////
     /initiaterecall, /voterecall, /finalizerecall
@@ -4482,80 +4328,26 @@ if ((proposalPagesConfigured() || whatsappLinkConfigured()) && !process.env.SLAC
 //////////////////////////////////////////////////////////////*/
 
 /**
- * Attempts to distribute the welcome grant to a Telegram user in a given
- * chat. Returns a short status string describing what happened (used by
- * both the automatic join handler and the manual /claim fallback).
- *
- * NOTE ON TRUST: this only checks "has this address already claimed" and
- * "is a wallet linked" - it does not independently verify Telegram
- * membership beyond what grammY's own event told us. See
- * WelcomeDistributor.sol's natspec for the full trust-model note.
+ * Someone joined a group whose Distributor gives welcome grants: ask a
+ * council member to approve theirs (src/platforms/commands/funds.js).
  */
-async function attemptClaim(chatId, telegramUserId) {
-  const distributorAddress = getChatDistributor(chatId);
-  if (!distributorAddress) return { status: "no-distributor" };
-
-  let account;
-  try {
-    account = await getOrCreateUserAccount(telegramUserId);
-  } catch (err) {
-    return { status: "no-wallet", error: err.message };
-  }
-
-  const alreadyClaimed = await hasAlreadyClaimed(distributorAddress, account.address).catch(() => false);
-  if (alreadyClaimed) return { status: "already-claimed" };
-
-  try {
-    const hash = await distributeWelcomeGrant(distributorAddress, account.address);
-    return { status: "sent", hash, walletAddress: account.address };
-  } catch (err) {
-    console.error("distributeWelcomeGrant failed:", err);
-    return { status: "error", error: err.message };
-  }
-}
-
 bot.on("message:new_chat_members", async (ctx) => {
-  const distributorAddress = getChatDistributor(ctx.chat.id);
-  if (!distributorAddress) return; // no distributor configured, nothing to do
-
   for (const member of ctx.message.new_chat_members) {
     if (member.is_bot) continue;
-
-    const result = await attemptClaim(ctx.chat.id, member.id);
-
-    if (result.status === "sent") {
-      await ctx.reply(`🎉 Welcome, ${member.first_name}! Sent your welcome tokens.`);
-    }
-    // "no-wallet" (MASTER_WALLET_SEED not configured), "already-claimed",
-    // and "error" cases are silent here - a join event isn't the place to
-    // surface a bot-wide misconfiguration to the whole group; /claim gives
-    // the user a way to see what actually happened.
+    const c = { platform: "telegram", chatId: ctx.chat.id, userId: member.id, cmd: TG_CMD };
+    const text = await runOnNetwork(getChatNetwork(ctx.chat.id), () => welcomeOnJoin(c, String(member.id), member.first_name)).catch(() => null);
+    if (text) await ctx.reply(text, { parse_mode: "Markdown" }).catch(() => ctx.reply(text));
   }
 });
 
-bot.command("claim", async (ctx) => {
-  const result = await attemptClaim(ctx.chat.id, ctx.from.id);
-
-  switch (result.status) {
-    case "no-distributor":
-      await ctx.reply("No welcome distribution is set up for this group.");
-      break;
-    case "no-wallet":
-      await ctx.reply(result.error || "Wallets aren't set up on this bot yet - ask an admin.");
-      break;
-    case "already-claimed":
-      await ctx.reply("You've already claimed your welcome tokens.");
-      break;
-    case "sent":
-      await ctx.reply(`✅ Sent your welcome tokens to \`${short(result.walletAddress)}\`.`, {
-        parse_mode: "Markdown",
-      });
-      break;
-    case "error":
-      await ctx.reply("Something went wrong sending your tokens — try again in a moment.");
-      break;
-  }
-});
+bot.command("claim", (ctx) => runSharedCommand(ctx, "claim"));
+bot.command("welcome", (ctx) => runSharedCommand(ctx, "welcome", { replyToUserId: ctx.message?.reply_to_message?.from?.is_bot ? undefined : ctx.message?.reply_to_message?.from?.id }));
+bot.command("allowance", (ctx) => runSharedCommand(ctx, "allowance"));
+bot.command("distributor", (ctx) => runSharedCommand(ctx, "distributor", { replyToUserId: ctx.message?.reply_to_message?.from?.is_bot ? undefined : ctx.message?.reply_to_message?.from?.id }));
+bot.command("raise", (ctx) => runSharedCommand(ctx, "raise"));
+bot.command("refund", (ctx) => runSharedCommand(ctx, "refund"));
+bot.command("launch", (ctx) => runSharedCommand(ctx, "launch"));
+bot.command("vault", (ctx) => runSharedCommand(ctx, "vault"));
 
 /*//////////////////////////////////////////////////////////////
                     OPPORTUNITY MARKETS

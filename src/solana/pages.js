@@ -51,7 +51,7 @@ export async function solanaLiveProposal(networkId, governanceText, proposalId) 
   const found = await findSolanaGovernance(networkId, governanceText);
   if (!found) return null;
   const { network, model, governance, g, hubDao } = found;
-  const a = v.addresses(network, hubDao, network.programs[model]);
+  const a = v.addresses(network, hubDao, network.programs[model], g.epoch);
   if (!a.governance.equals(governance)) return null;
   const p = await v.readProposal(network, model, a.proposal(proposalId));
   if (!p) return null;

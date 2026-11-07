@@ -7,12 +7,13 @@ import { daoTreasury } from "./proposalBuilder.js";
 import { IntegrationError } from "./integrations/common.js";
 import { deskVenue } from "./integrations/hypercore.js";
 import { getChatDesk, updateChatDesk, getChatDAO, getChatModel } from "./db.js";
+import { deskVault } from "./funds.js";
 import { getAdapter } from "./governance/index.js";
 import { PROPOSAL_STATE_LABELS } from "./governance/common.js";
 import { parsePerps, PerpsError } from "./perps.js";
 import { createAgentKey, getAgentAccount, deleteAgentKey } from "./walletStore.js";
 import { deskCardImage } from "./charts.js";
-import { DeskError, parseMandate, mandateText, checkOpen, covers, isTrader, pickTrader, takeFor, mineLines, dayOf, addRealized, fmt } from "./deskMandate.js";
+import { DeskError, parseMandate, mandateText, checkOpen, withVaultPause, covers, isTrader, pickTrader, takeFor, mineLines, dayOf, addRealized, fmt } from "./deskMandate.js";
 
 /**
  * Trading desk on HyperCore (HyperEVM): the same /desk as on Perpl
@@ -72,8 +73,12 @@ async function venueCtx(chat) {
   if (!VENUE_NETWORKS.has(network.id)) throw new DeskError(`HyperCore desks run on HyperEVM, not ${network.chain.name}.`);
   const governance = getChatDAO(chat.chatId, chat.platform);
   const model = getChatModel(chat.chatId, chat.platform);
-  return { network, publicClient, treasury: await daoTreasury(model, governance), governance, model };
+  // A prop firm's desk trades its vault's money: the vault is the account (src/funds.js deskVault).
+  const dv = await deskVault(chat.chatId, chat.platform);
+  return { network, publicClient, treasury: dv?.vault ?? (await daoTreasury(model, governance)), governance, model, vault: dv?.vault ?? null, vaultPaused: Boolean(dv?.paused) };
 }
+
+/** A paused vault (a drawdown, or a proposal) stops new positions as the desk's own pause does. */
 
 const wrap = async (fn) => {
   try {
@@ -359,7 +364,8 @@ export async function deskStatus(chat, cmd) {
     const ctx = await venueCtx(chat);
     const news = await refreshDesk(chat);
     const desk = deskOf(chat);
-    const lines = [...news, ...(news.length ? [""] : []), "*Trading desk* (HyperCore)", `Account: the Treasury's HyperCore account \`${ctx.treasury}\``];
+    const lines = [...news, ...(news.length ? [""] : []), "*Trading desk* (HyperCore)", ctx.vault ? `Account: the prop firm's vault \`${ctx.vault}\` - traders trade depositors' money; a drawdown pauses them` : `Account: the Treasury's HyperCore account \`${ctx.treasury}\``];
+    if (ctx.vaultPaused) lines.push("⏸️ The vault has paused trading (a drawdown, or a proposal): no new positions until a proposal resumes it (`vault resume`).");
     if (desk.paused) lines.push(`⏸️ Paused${desk.paused.by ? ` by ${desk.paused.by}` : ""}: no new positions until \`${cmd("desk")} resume\`.`);
     const agents = await agentsOf(ctx).catch(() => null);
     if (agents) noteAgentExpiry(chat, desk, agents);
@@ -449,7 +455,7 @@ export async function trade(chat, client, words) {
     noteAgentExpiry(chat, desk, agents);
     // An expired agent may drop off HyperCore's list, so say it expired rather than that it was removed.
     if (agentEndsFirst(t) && Date.now() > t.agentUntil) throw new DeskError(`Your HyperCore agent expired on ${dateOf(t.agentUntil)}, so your mandate has ended - the DAO needs to appoint you again (a new agent) for you to trade. Closing needs the agent too, so until then the DAO can close positions by proposal (\`perps close\`).`);
-    if (!listed(agents, t.agent, t.agentName)) throw new DeskError("The Treasury's HyperCore account no longer approves your agent - you've been removed or replaced.");
+    if (!listed(agents, t.agent, t.agentName)) throw new DeskError(`The ${ctx.vault ? "vault's" : "Treasury's"} HyperCore account no longer approves your agent - you've been removed or replaced.`);
     const request = parsePerps(words);
     if (request.kind !== "open" && request.kind !== "close") throw new DeskError("Use `desk long|short <market> <size> at <price> [3x]` or `desk close <market> <size|all> at <price>`.");
 
@@ -479,7 +485,7 @@ export async function trade(chat, client, words) {
       // This market's position after the order at the limit price; other markets (every trader's: one cross margin) at their current value.
       const notional = (Math.abs(held) + Number(size)) * Number(price);
       const others = open.filter((p) => p.coin !== m.coin).reduce((sum, p) => sum + Math.abs(Number(p.positionValue)), 0);
-      checkOpen(desk, asChecked(t), { market: m.coin.toUpperCase(), leverage: lev, notional, othersNotional: others, symbol: COLLATERAL, dayPnl: today.pnl });
+      checkOpen(withVaultPause(desk, ctx), asChecked(t), { market: m.coin.toUpperCase(), leverage: lev, notional, othersNotional: others, symbol: COLLATERAL, dayPnl: today.pnl });
       leverage = Number(lev);
       order = { a: m.index, b: isBuy, p: price, s: size, r: false, t: { limit: { tif: "Ioc" } } };
       what = `${request.side} ${size} ${m.coin} at ${price} or better, ${lev}x`;

@@ -250,10 +250,9 @@ async function settleSwitch(network, d, notify, chat) {
   await v.applySwitch(network, d);
   const model = v.modelOf(network, pending.program);
   if (model) updateChatSolana(chat.chatId, { model }, chat.platform);
-  const stakes = v.STAKE_MODELS.includes(d.model);
   const lines = [`🔀 *${plain(d.record.name)}* now runs on ${LABEL[model] ?? "a new"} governance, with the same treasury.`];
-  // Each model keeps its own vault: stake doesn't follow by itself.
-  if (stakes) lines.push(`Your stake is still in the ${LABEL[d.model] ?? "old"} vault. Run /migrate to move it${v.STAKE_MODELS.includes(model) ? " here" : " back to your wallet"}.`);
+  // Stake lives in the DAO's stake pool, which every model reads: nothing to move.
+  if (d.stakePool && v.STAKE_MODELS.includes(model)) lines.push("Everyone's stake carries over as it is.");
   await notify(chat.chatId, lines.join("\n"));
 }
 

@@ -126,6 +126,13 @@ export function makeAaveModule({ id, name, prefix, deployments, resolve }) {
         const { asset, native } = reserveFor(ctx, d, ctx.args[0]);
         const amount = await parseAmount(ctx, native ? NATIVE : asset, ctx.args[1]);
         await requireCode(ctx, { Pool: d.pool });
+        // A borrow with nothing to borrow against only fails at execution,
+        // after the vote: refuse it now. Supplied tokens a market doesn't
+        // accept as collateral (loan-to-value 0) count for nothing here.
+        const [, , available] = await ctx.publicClient.readContract({ address: d.pool, abi: ABIS.pool, functionName: "getUserAccountData", args: [ctx.treasury] });
+        if (available === 0n) {
+          throw new IntegrationError(`The Treasury has nothing on ${name} to borrow against: supply a token this market accepts as collateral first (some reserves, e.g. stablecoins on newer markets, earn interest but back no loans).`);
+        }
         return {
           calls: [
             call(d.pool, encodeFunctionData({ abi: ABIS.pool, functionName: "borrow", args: [asset, amount, VARIABLE_RATE, 0, ctx.treasury] }), { note: "borrow" }),

@@ -193,7 +193,11 @@ export function getNetwork(id) {
   // over (rpcFallback.js): a provider that hangs or has run out of credits
   // stops nothing.
   const single = rpcUrls.length === 1;
-  const one = (url) => http(url, { fetchFn: pacedFetch(url, maxRps), retryCount: single ? 4 : 1, retryDelay: 400 });
+  // RPC_TIMEOUT_MS: how long one request may take (viem's default, 10s). A
+  // mainnet fork can need longer: anvil fetches each contract's state from
+  // the forked chain the first time a call touches it.
+  const timeout = Number(process.env.RPC_TIMEOUT_MS) || 10_000;
+  const one = (url) => http(url, { fetchFn: pacedFetch(url, maxRps), retryCount: single ? 4 : 1, retryDelay: 400, timeout });
   const shared = single ? null : stickyFallback(rpcUrls.map(one));
   const transport = () => shared ?? one(rpcUrl);
 

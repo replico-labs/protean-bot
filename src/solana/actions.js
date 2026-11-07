@@ -1,6 +1,8 @@
-import { PublicKey } from "@solana/web3.js";
+import { Keypair, PublicKey } from "@solana/web3.js";
+import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import * as v from "./vortex.js";
 import { INTEGRATION_ACTIONS } from "./integrations/index.js";
+import { FUNDS_ACTIONS } from "./fundsActions.js";
 
 /**
  * Verified actions a Solana DAO can propose with /proposeaction - the
@@ -67,9 +69,7 @@ function keyList(text, what) {
 async function daoMint(c) {
   const recorded = await v.readDaoToken(c.network, c.d.dao);
   if (recorded) return { mint: recorded, recorded: true };
-  if (c.governance.mint) return { mint: c.governance.mint, recorded: false };
-  if (c.link.mint) return { mint: new PublicKey(c.link.mint), recorded: false };
-  return fail("This DAO has no token, so it can't switch to a token model from the bot yet. Switch to board or create a new DAO.");
+  return fail("This DAO has no token on record, so a token model has nothing to vote with. Give it one first: the `settoken` action (an existing token's mint, or `new <supply>` for a new one).");
 }
 
 /**
@@ -79,25 +79,28 @@ async function daoMint(c) {
  */
 function switchTo(model, extra) {
   return async (c) => {
-    if (c.model === model) fail(`This DAO already runs on ${LABEL[model]}.`);
     if (c.d.record.pendingSwitch) fail("A switch is already pending. Cancel it first with the `cancelswitch` action.");
-    const opts = { ...extra?.(c) };
-    // Token models only set up with the hub's token on record; an older DAO
-    // without one gets it recorded first, in the same proposal.
-    const record = [];
-    if (model !== "board") {
-      const { mint, recorded } = await daoMint(c);
-      opts.mint = mint;
-      if (!recorded) record.push(v.stored(await v.setDaoTokenIx(c.network, c.d.dao, c.d.gp, c.d.treasury, c.d.treasury, mint)));
-    }
+    // Every switch sets up a fresh governance for the next epoch: another
+    // model, or a fresh copy of this one (new rules, signers or council).
+    const opts = { ...extra?.(c), epoch: c.d.record.epoch + 1 };
+    if (model !== "board") opts.mint = (await daoMint(c)).mint;
     const init = await v.initGovernanceIx(c.network, model, c.d.dao, c.d.treasury, c.d.treasury, opts);
+    const same = c.model === model;
     return {
-      instructions: [...record, await v.proposeSwitchIx(c.network, c.d, model), v.stored(init)],
+      instructions: [await v.proposeSwitchIx(c.network, c.d, model), v.stored(init)],
       // The new model's accounts are paid from the treasury's SOL.
       budget: [{ mint: v.SOL_ASSET, amount: 100_000_000n }],
-      summary: `switch this DAO to ${LABEL[model]} governance (same treasury${opts.mint ? ` and token \`${opts.mint.toBase58()}\`` : ""}), 2 days after it runs${record.length ? "; also records that token at the hub" : ""}`,
+      summary: `${same ? `start a fresh ${LABEL[model]} setup for this DAO` : `switch this DAO to ${LABEL[model]} governance`} (same treasury${opts.mint ? `, token \`${opts.mint.toBase58()}\` and everyone's stake` : ""}), 2 days after it runs${c.d.record.council ? "; the security council confirms it first" : ""}`,
     };
   };
+}
+
+/** `rate=N:D` (N new tokens per D old; `rate=N` means N:1), or null. */
+function parseRate(text) {
+  if (!text) return null;
+  const m = String(text).match(/^(\d+)(?::(\d+))?$/);
+  if (!m || BigInt(m[1]) === 0n || (m[2] && BigInt(m[2]) === 0n)) fail("rate= is new tokens per old, as whole numbers: rate=1 (one for one), rate=2:1 or rate=1:10.");
+  return { num: BigInt(m[1]), den: BigInt(m[2] ?? "1") };
 }
 
 export const ACTIONS = {
@@ -235,18 +238,153 @@ export const ACTIONS = {
   switchdecisionmarkets: { models: "all", args: [], about: "Switch to decision markets (pass/fail markets against SOL decide), keeping the treasury and token.", build: switchTo("decisionMarkets") },
   settoken: {
     models: "all",
-    args: [{ name: "<mint>", about: "the token's mint address" }],
-    about: "Change the DAO's token on record at the hub. Every model is set up with the recorded token, so this is the only way a later switch can move the DAO to another token; it doesn't move any deposits.",
+    args: [{ name: "<mint|new:supply>", about: "the token's mint address, or `new:<supply>` for a new token (its whole supply minted to the treasury, which alone can mint more)" }],
+    options: ["rate", "fund"],
+    about: "Change the DAO's token without changing its governance: new proposals vote with the new token's stake, open ones keep the old. Works on any model, board included. Add `rate=N:D` (N new per D old) and `fund=<amount>` anywhere to open a converter members swap their old stake through.",
     async build(c) {
-      const mint = key(c.args[0], "the token's mint");
-      await v.mintInfo(c.network, mint);
+      const first = String(c.args[0]);
+      const options = c.options ?? {};
+      let mint;
+      let known = null;
+      let prepare;
+      if (first.toLowerCase().startsWith("new:")) {
+        // A new mint, created (by the operator, its supply to the treasury) only once the proposer may propose.
+        const supply = first.slice(4);
+        if (!/^\d+$/.test(supply) || BigInt(supply) === 0n) fail("`new:<supply>`: the new token's supply in whole tokens, e.g. `new:1000000`.");
+        const mintKeypair = Keypair.generate();
+        mint = mintKeypair.publicKey;
+        known = { decimals: v.TOKEN_DECIMALS, programId: TOKEN_PROGRAM_ID };
+        prepare = async () => {
+          await v.createTokenForTreasury(c.network, c.d, supply, mintKeypair);
+        };
+      } else {
+        mint = key(first, "the token's mint");
+        await v.mintInfo(c.network, mint);
+      }
+      const created = Boolean(known);
       const current = await v.readDaoToken(c.network, c.d.dao);
       if (current?.equals(mint)) fail("That's already the DAO's token.");
-      return {
-        instructions: [v.stored(await v.setDaoTokenIx(c.network, c.d.dao, c.d.gp, c.d.treasury, c.d.treasury, mint))],
-        budget: [{ mint: v.SOL_ASSET, amount: 2_000_000n }],
-        summary: current ? `change the DAO's token from \`${current.toBase58()}\` to \`${mint.toBase58()}\`` : `record \`${mint.toBase58()}\` as the DAO's token`,
+      const instructions = [];
+      // Its stake pool: anyone may open one (it does nothing until the DAO points at it), so the operator opens it
+      // when the proposal is made rather than inside it, which keeps the proposal within one transaction.
+      const makeMint = prepare;
+      prepare = async ({ operator, send }) => {
+        if (makeMint) await makeMint();
+        if (!(await c.network.connection.getAccountInfo(c.d.poolOf(mint)))) await send([await v.createPoolIx(c.network, c.d.dao, operator, mint, known?.programId)]);
       };
+      instructions.push(v.stored(await v.setDaoTokenIx(c.network, c.d.dao, c.d.gp, c.d.treasury, c.d.treasury, mint, c.d.record.epoch)));
+      const rate = parseRate(options.rate);
+      let converterLine = "";
+      if (rate) {
+        if (!current) fail("There's no old token to convert from.");
+        const raw = options.fund ? v.parseUnits(options.fund, (known ?? (await v.mintInfo(c.network, mint))).decimals) : 0n;
+        instructions.push(await v.openConverterIx(c.network, c.d, current, mint, rate.num, rate.den, raw, known?.programId));
+        converterLine = raw > 0n ? `; opens a converter (${rate.num}:${rate.den}) funded with ${v.formatUnits(raw, (known ?? (await v.mintInfo(c.network, mint))).decimals)} new tokens` : `; opens a converter (${rate.num}:${rate.den}) to fund later`;
+      } else if (options.fund) fail("fund= goes with rate=.");
+      return {
+        instructions,
+        prepare,
+        budget: [{ mint: v.SOL_ASSET, amount: 10_000_000n }],
+        // A legacy transaction holds the token change and its converter with a short description only.
+        oversize: rate
+          ? (room) =>
+              `The token change and its converter don't fit in one Solana transaction with that description${room > 0 ? `: keep it under ${room} characters` : ""}. Or leave \`rate=\` out and, once the change has executed, propose the converter on its own: \`/proposeaction openconverter ${current.toBase58()} rate=${options.rate}${options.fund ? ` fund=${options.fund}` : ""} <description>\`.`
+          : null,
+        summary:
+          (current ? `change the DAO's token from \`${current.toBase58()}\` to \`${mint.toBase58()}\`` : `give the DAO the token \`${mint.toBase58()}\``) +
+          (created ? " (a new token; its supply is already in the treasury)" : "") +
+          converterLine,
+      };
+    },
+  },
+  openconverter: {
+    models: "all",
+    args: [{ name: "<old mint>", about: "the old token the converter takes" }],
+    options: ["rate", "fund"],
+    about: "Open a converter from an old token into the current one, at `rate=N:D` (N new per D old), funded with `fund=<amount>` new tokens from the treasury. Members then swap their old stake with /convert.",
+    async build(c) {
+      const from = key(c.args[0], "the old token's mint");
+      const options = c.options ?? {};
+      const rate = parseRate(options.rate);
+      if (!rate) fail("Give the rate: `rate=N:D`, N new tokens per D old, e.g. `rate=1:1`.");
+      const current = await v.readDaoToken(c.network, c.d.dao);
+      if (!current) fail("This DAO has no token yet.");
+      if (current.equals(from)) fail("That's the DAO's current token: a converter takes an old one.");
+      if (!(await c.network.connection.getAccountInfo(c.d.poolOf(from)))) fail("That token was never this DAO's: it has no stake pool here.");
+      const existing = await v.readConverter(c.network, c.d, from, current);
+      if (existing?.open) fail("There's already a converter from that token: top it up with `fundconverter`.");
+      if (existing) fail("The converter from that token was closed, and a closed one can't be reopened.");
+      const { decimals, programId } = await v.mintInfo(c.network, current);
+      const raw = options.fund ? v.parseUnits(options.fund, decimals) : 0n;
+      return {
+        instructions: [await v.openConverterIx(c.network, c.d, from, current, rate.num, rate.den, raw, programId)],
+        budget: [{ mint: v.SOL_ASSET, amount: 5_000_000n }],
+        summary: `open a converter from \`${from.toBase58()}\` into the current token (${rate.num}:${rate.den})${raw > 0n ? `, funded with ${v.formatUnits(raw, decimals)} from the treasury` : ", to fund later"}`,
+      };
+    },
+  },
+  fundconverter: {
+    models: "all",
+    args: [
+      { name: "<old mint>", about: "the old token the converter takes" },
+      { name: "<amount>", about: "how many current tokens to add from the treasury" },
+    ],
+    about: "Top up the converter from an old token with current tokens from the treasury.",
+    async build(c) {
+      const from = key(c.args[0], "the old token's mint");
+      const current = await v.readDaoToken(c.network, c.d.dao);
+      const conv = current && (await v.readConverter(c.network, c.d, from, current));
+      if (!conv?.open) fail("There's no open converter from that token into the current one.");
+      const info = await v.mintInfo(c.network, current);
+      const raw = v.parseUnits(String(c.args[1]), info.decimals);
+      if (raw <= 0n) fail("Give an amount above 0.");
+      return {
+        instructions: [await v.fundConverterIx(c.network, c.d, from, current, raw, info)],
+        summary: `add ${v.formatUnits(raw, info.decimals)} to the converter from \`${from.toBase58()}\``,
+      };
+    },
+  },
+  closeconverter: {
+    models: "all",
+    args: [{ name: "<old mint>", about: "the old token the converter takes" }],
+    about: "Close the converter from an old token into the current one; what's left in it goes back to the treasury.",
+    async build(c) {
+      const from = key(c.args[0], "the old token's mint");
+      const current = await v.readDaoToken(c.network, c.d.dao);
+      const conv = current && (await v.readConverter(c.network, c.d, from, current));
+      if (!conv?.open) fail("There's no open converter from that token into the current one.");
+      return { instructions: [await v.closeConverterIx(c.network, c.d, from, current)], summary: `close the converter from \`${from.toBase58()}\` (what's left returns to the treasury)` };
+    },
+  },
+  councilon: {
+    models: "all",
+    args: [
+      { name: "<signer,signer,...>", about: "the council's Solana addresses, comma-separated (up to 10)" },
+      { name: "<required>", about: "how many must confirm each passed proposal" },
+      { name: "<tenure-days>", about: "days before the DAO can replace them without their confirmation" },
+    ],
+    about: "Put a security council in front of the treasury: every passed proposal then waits for it. It belongs to the DAO, so it stays through model switches. With a council already on, this replaces it (the council confirms, or after its tenure anyone can run it).",
+    async build(c) {
+      const signers = keyList(c.args[0], "council signer");
+      if (signers.length > 10) fail("A council has at most 10 signers.");
+      const required = Number(c.args[1]);
+      if (!Number.isInteger(required) || required < 1 || required > signers.length) fail(`<required> must be a whole number from 1 to ${signers.length}.`);
+      const days = Number(c.args[2]);
+      if (!Number.isFinite(days) || days < 0) fail("<tenure-days> must be a number of days, e.g. 90.");
+      const replacing = Boolean(c.d.record.council);
+      return {
+        instructions: [await v.setCouncilIx(c.network, c.d, signers, required, Math.round(days * 86_400))],
+        summary: `${replacing ? "replace the security council with" : "turn on a security council of"} ${signers.length} (${required} must confirm each passed proposal; replaceable without them after ${days} days)`,
+      };
+    },
+  },
+  counciloff: {
+    models: "all",
+    args: [],
+    about: "Turn the security council off. The council itself must confirm this proposal; if it won't, replace its signers once their tenure ends (`councilon`) first.",
+    async build(c) {
+      if (!c.d.record.council) fail("This DAO has no security council.");
+      return { instructions: [await v.clearCouncilIx(c.network, c.d)], summary: "turn the security council off" };
     },
   },
   cancelswitch: {
@@ -258,6 +396,9 @@ export const ACTIONS = {
       return { instructions: [await v.cancelSwitchIx(c.network, c.d)], summary: "call off the pending model switch" };
     },
   },
+
+  // Allowances, the Distributor, raises, the prop-firm vault, seat labels (src/solana/fundsActions.js).
+  ...FUNDS_ACTIONS,
 
   // Protocol integrations (src/solana/integrations): staking, lending, trading.
   ...INTEGRATION_ACTIONS,

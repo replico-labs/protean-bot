@@ -5,10 +5,11 @@ import { daoTreasury } from "./proposalBuilder.js";
 import { IntegrationError } from "./integrations/common.js";
 import { deskVenue, verifyDesk, deskConsentRequest, DESK_ABI } from "./integrations/perpl.js";
 import { getChatDesk, updateChatDesk, getChatDAO, getChatModel } from "./db.js";
+import { deskVault } from "./funds.js";
 import { getAdapter } from "./governance/index.js";
 import { PROPOSAL_STATE_LABELS } from "./governance/common.js";
 import { parsePerps, PerpsError } from "./perps.js";
-import { DeskError, parseMandate, mandateText, checkOpen, isTrader, pickTrader, takeFor, mineLines, dayOf, addRealized, fmt } from "./deskMandate.js";
+import { DeskError, parseMandate, mandateText, checkOpen, withVaultPause, isTrader, pickTrader, takeFor, mineLines, dayOf, addRealized, fmt } from "./deskMandate.js";
 import * as hypercoreDesk from "./deskHypercore.js";
 import { deskCardImage } from "./charts.js";
 
@@ -72,7 +73,9 @@ async function venueCtx(chat) {
   const network = requireVenue();
   const governance = getChatDAO(chat.chatId, chat.platform);
   const model = getChatModel(chat.chatId, chat.platform);
-  return { network, publicClient, treasury: await daoTreasury(model, governance), governance, model };
+  // A prop firm's desk trades its vault's money: the vault is the account (src/funds.js deskVault).
+  const dv = await deskVault(chat.chatId, chat.platform);
+  return { network, publicClient, treasury: dv?.vault ?? (await daoTreasury(model, governance)), governance, model, vault: dv?.vault ?? null, vaultPaused: Boolean(dv?.paused) };
 }
 
 const wrap = async (fn) => {
@@ -328,6 +331,8 @@ export async function deskStatus(chat, cmd) {
     const news = await refreshDesk(chat);
     const rec = recordOf(chat);
     const lines = [...news, ...(news.length ? [""] : []), "*Trading desk* (Perpl)"];
+    if (ctx.vault) lines.push(`Desks owned by the prop firm's vault \`${ctx.vault}\`: traders trade depositors' money, and a desk's money goes back to the vault. Count each desk in the vault's value: \`${cmd("vault")} valuer perpl <desk> <marketIds>\`.`);
+    if (ctx.vaultPaused) lines.push("⏸️ The vault has paused trading (a drawdown, or a proposal): no new positions until a proposal resumes it (`vault resume`).");
     if (rec.paused) lines.push(`⏸️ Paused${rec.paused.by ? ` by ${rec.paused.by}` : ""}: no new positions until \`${cmd("desk")} resume\`.`);
     const d = deskVenue.deployment(ctx);
     const desks = desksOf(rec);
@@ -437,7 +442,7 @@ export async function trade(chat, client, words) {
       // Position size in collateral at the limit price, including what's already held; the desk's other markets at their mark.
       const notional = Number(formatUnits(held + lotLNS, m.lotDecimals)) * Number(request.price);
       const others = openNow.filter((p) => BigInt(p.id) !== m.perpId).reduce((sum, p) => sum + p.size * p.mark, 0);
-      checkOpen(rec, t, { market: request.market, leverage: lev, notional, othersNotional: others, symbol: state.symbol, dayPnl: today.pnl });
+      checkOpen(withVaultPause(rec, ctx), t, { market: request.market, leverage: lev, notional, othersNotional: others, symbol: state.symbol, dayPnl: today.pnl });
       desc = deskVenue.orderDesc({ perpId: m.perpId, orderType: request.side === "long" ? deskVenue.ORDER.OpenLong : deskVenue.ORDER.OpenShort, pricePNS, lotLNS, leverageHdths });
       what = `${request.side} ${request.size} ${m.symbol} at ${request.price} or better, ${lev}x`;
     } else {

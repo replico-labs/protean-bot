@@ -6,6 +6,25 @@
   },
   {
     "type": "function",
+    "name": "awaitingDraw",
+    "inputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "cancelCouncilProposal",
     "inputs": [
       {
@@ -186,6 +205,11 @@
         "name": "electionId",
         "type": "uint256",
         "internalType": "uint256"
+      },
+      {
+        "name": "seat",
+        "type": "uint16",
+        "internalType": "uint16"
       }
     ],
     "outputs": [],
@@ -195,6 +219,49 @@
     "type": "function",
     "name": "electionCount",
     "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "electionToken",
+    "inputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "electionVotes",
+    "inputs": [
+      {
+        "name": "electionId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "candidate",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
     "outputs": [
       {
         "name": "",
@@ -247,7 +314,7 @@
       }
     ],
     "outputs": [],
-    "stateMutability": "nonpayable"
+    "stateMutability": "payable"
   },
   {
     "type": "function",
@@ -649,6 +716,11 @@
         "name": "initialCouncil_",
         "type": "address[]",
         "internalType": "address[]"
+      },
+      {
+        "name": "randomnessSource_",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "outputs": [],
@@ -761,6 +833,19 @@
   },
   {
     "type": "function",
+    "name": "randomnessSource",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "contract IRandomnessSource"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "recallCount",
     "inputs": [],
     "outputs": [
@@ -774,12 +859,147 @@
   },
   {
     "type": "function",
+    "name": "recallToken",
+    "inputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "resolveTies",
+    "inputs": [
+      {
+        "name": "electionId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "seatCandidates",
+    "inputs": [
+      {
+        "name": "electionId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "seat",
+        "type": "uint16",
+        "internalType": "uint16"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address[]",
+        "internalType": "address[]"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "seatLabel",
+    "inputs": [
+      {
+        "name": "",
+        "type": "uint16",
+        "internalType": "uint16"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "seatOf",
+    "inputs": [
+      {
+        "name": "electionId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "candidate",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "seat",
+        "type": "uint16",
+        "internalType": "uint16"
+      },
+      {
+        "name": "running",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "setGovernanceToken",
     "inputs": [
       {
         "name": "newToken",
         "type": "address",
         "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setRandomnessSource",
+    "inputs": [
+      {
+        "name": "source",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setSeatLabel",
+    "inputs": [
+      {
+        "name": "seat",
+        "type": "uint16",
+        "internalType": "uint16"
+      },
+      {
+        "name": "label",
+        "type": "string",
+        "internalType": "string"
       }
     ],
     "outputs": [],
@@ -826,6 +1046,25 @@
         "name": "",
         "type": "uint8",
         "internalType": "enum DelegateGovernance.ProposalState"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "tieRequestId",
+    "inputs": [
+      {
+        "name": "electionId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
       }
     ],
     "stateMutability": "view"
@@ -1280,6 +1519,69 @@
   },
   {
     "type": "event",
+    "name": "SeatCandidacyDeclared",
+    "inputs": [
+      {
+        "name": "electionId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "seat",
+        "type": "uint16",
+        "indexed": true,
+        "internalType": "uint16"
+      },
+      {
+        "name": "candidate",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "SeatLabelSet",
+    "inputs": [
+      {
+        "name": "seat",
+        "type": "uint16",
+        "indexed": true,
+        "internalType": "uint16"
+      },
+      {
+        "name": "label",
+        "type": "string",
+        "indexed": false,
+        "internalType": "string"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "TieDrawRequested",
+    "inputs": [
+      {
+        "name": "electionId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "requestId",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "TreasuryUpdated",
     "inputs": [
       {
@@ -1330,6 +1632,11 @@
   {
     "type": "error",
     "name": "CouncilQuorumNotReached",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "DrawPending",
     "inputs": []
   },
   {
@@ -1394,6 +1701,11 @@
   },
   {
     "type": "error",
+    "name": "InvalidSeat",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "InvalidValue",
     "inputs": []
   },
@@ -1405,6 +1717,11 @@
   {
     "type": "error",
     "name": "NoActiveRecall",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NoDrawPending",
     "inputs": []
   },
   {
@@ -1485,6 +1802,11 @@
   {
     "type": "error",
     "name": "TooManyCandidatesSelected",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "TwoCandidatesForOneSeat",
     "inputs": []
   },
   {

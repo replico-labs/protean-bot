@@ -18,6 +18,10 @@
  *   for p in EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih:phoenix_eternal EMBERpYNE6ehWmXymZZS2skiFmCa9V5dp14e1iduM5qy:phoenix_ember_program RiSeVw3ZjNfsaXPRb4mgaqYaEEt41pNNJoDvVh7pgQj:phoenix_hawkeye; do
  *     node scripts/dump-solana-program.mjs ${p%%:*} $PHOENIX_SO_DIR/${p##*:}.so; done
  *   PHOENIX_SO_DIR=... node scripts/test-phoenix-flow.mjs
+ *
+ * With VORTEX_SO_DIR (vortex_vault.so and Vortexes' scripts/hub-stub as
+ * hub_stub.so), it also runs a prop firm's desk: the vault's PDA as the
+ * Phoenix authority, each move a vault.execute signed through the treasury.
  */
 import { createRequire } from "module";
 import { createHash } from "node:crypto";
@@ -230,6 +234,194 @@ err = await send(withdraw.instructions ?? withdraw.ixs ?? withdraw, { feePayer: 
 const usdcAfter = BigInt(Buffer.from(vm.getAccount(usdcAta).data).readBigUInt64LE(64));
 check(!err && usdcAfter - usdcBefore === 400_000_000n, `the Treasury withdraws 400 USDC (Phoenix withdraw, then Ember unwrap): ${usdcBefore} -> ${usdcAfter}`, err);
 
+// A prop firm: the same flow with its vault's PDA as the Phoenix authority. Each step is what a desk
+// proposal stores (src/solana/integrations/phoenix.js): vault.execute around every instruction the
+// vault signs (sf.asVault), the treasury paying rent, the USDC from and back to the vault's assets
+// account. A stand-in for the hub (Vortexes' scripts/hub-stub) signs as the treasury PDA, as an
+// executed proposal does; the vault is Vortexes' real program.
+const VSO = process.env.VORTEX_SO_DIR;
+let vaultSteps = null;
+if (!VSO) console.log("\n(VORTEX_SO_DIR unset: skipping the prop firm's vault desk; it needs vortex_vault.so and hub_stub.so)");
+else {
+  console.log("\nA prop firm's desk: the vault's PDA trades, every move through vault.execute…");
+  const { PublicKey } = await import("@solana/web3.js");
+  const { AccountLayout, MintLayout } = await import("@solana/spl-token");
+  const { getSolanaNetwork } = await import("../src/solana/config.js");
+  const sf = await import("../src/solana/funds.js");
+  const v = await import("../src/solana/vortex.js");
+  const { web3Instruction } = await import("../src/solana/phoenix.js");
+  const { default: BN } = await import("bn.js");
+  const net = getSolanaNetwork("solana-devnet"); // only for its program ids: nothing here touches devnet
+  const HUB = net.programs.hub, VAULT = net.programs.vault;
+  vm.addProgramFromFile(address(VAULT.toBase58()), `${VSO}/vortex_vault.so`);
+  vm.addProgramFromFile(address(HUB.toBase58()), `${VSO}/hub_stub.so`);
+
+  const dao = PublicKey.unique();
+  const tPda = PublicKey.findProgramAddressSync([Buffer.from("treasury"), dao.toBuffer()], HUB)[0];
+  const [vPda, vBump] = PublicKey.findProgramAddressSync([Buffer.from("vault"), dao.toBuffer()], VAULT);
+  const assets = PublicKey.findProgramAddressSync([Buffer.from("vault_assets"), vPda.toBuffer()], VAULT)[0];
+  const usdcProgram = new PublicKey(vm.getAccount(address(fakeUsdc)).programAddress);
+  vm.airdrop(address(tPda.toBase58()), lamports(5_000_000_000n));
+  const now = Number(vm.getClock().unixTimestamp);
+  const vaultProgram = v.programFor(net, "vault");
+  const state = {
+    dao, treasury: tPda, assetMint: new PublicKey(fakeUsdc), assetTokenProgram: usdcProgram, assetDecimals: 6,
+    shareMint: PublicKey.unique(), shareTokenProgram: usdcProgram, assets, escrow: PublicKey.unique(), seeder: PublicKey.default,
+    config: sf.vaultConfig(), feeSplits: [], perpAssetMap: PublicKey.default, phoenixTraders: [], extraTokens: [],
+    epoch: new BN(0), nextWindowAt: new BN(now + 10 * 86_400),
+    lastMoveAt: new BN(0), lastFeeAt: new BN(now), highWater: new BN(0),
+    paused: false, seeded: true, pendingDepositAssets: new BN(0), owedAssets: new BN(0),
+    initialRate: new BN(1), bump: vBump,
+  };
+  // The shares: a mint the vault controls, 3,000 issued (one per dollar).
+  const mintData = Buffer.alloc(MintLayout.span);
+  MintLayout.encode({ mintAuthorityOption: 1, mintAuthority: vPda, supply: 3_000_000_000n, decimals: 6, isInitialized: true, freezeAuthorityOption: 0, freezeAuthority: PublicKey.default }, mintData);
+  vm.setAccount({ address: address(state.shareMint.toBase58()), lamports: 10_000_000n, data: new Uint8Array(mintData), programAddress: address(usdcProgram.toBase58()), executable: false, space: BigInt(mintData.length) });
+  // Room for the longest venue and fee lists, as create_vault allocates (Vault::INIT_SPACE).
+  const VAULT_SPACE = 1_500;
+  const vaultBytes = async (x) => {
+    const d = Buffer.alloc(VAULT_SPACE);
+    (await vaultProgram.coder.accounts.encode("vault", x)).copy(d);
+    return new Uint8Array(d);
+  };
+  vm.setAccount({ address: address(vPda.toBase58()), lamports: 20_000_000n, data: await vaultBytes(state), programAddress: address(VAULT.toBase58()), executable: false, space: BigInt(VAULT_SPACE) });
+  const tok = Buffer.alloc(AccountLayout.span);
+  AccountLayout.encode({ mint: new PublicKey(fakeUsdc), owner: vPda, amount: 3_000_000_000n, delegateOption: 0, delegate: PublicKey.default, state: 1, isNativeOption: 0, isNative: 0n, delegatedAmount: 0n, closeAuthorityOption: 0, closeAuthority: PublicKey.default }, tok);
+  vm.setAccount({ address: address(assets.toBase58()), lamports: 10_000_000n, data: new Uint8Array(tok), programAddress: address(usdcProgram.toBase58()), executable: false, space: BigInt(tok.length) });
+  const assetsBalance = () => Buffer.from(vm.getAccount(address(assets.toBase58())).data).readBigUInt64LE(64);
+  check(assetsBalance() === 3_000_000_000n, "the vault holds 3,000 USDC in its assets account");
+
+  // A stored proposal instruction as the hub runs it: relay(dao, data) with the program and its accounts.
+  const RELAY = createHash("sha256").update("global:relay").digest().subarray(0, 8);
+  const COMPUTE = { programAddress: address("ComputeBudget111111111111111111111111111111"), accounts: [], data: Uint8Array.from([2, ...new Uint8Array(new Uint32Array([1_400_000]).buffer)]) };
+  const relayed = (ix) => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32LE(ix.data.length);
+    return {
+      programAddress: address(HUB.toBase58()),
+      accounts: [{ address: address(ix.programId.toBase58()), role: AccountRole.READONLY }, ...ix.keys.map((k) => ({ address: address(k.pubkey.toBase58()), role: roleOf({ isSigner: k.isSigner && !k.pubkey.equals(tPda), isWritable: k.isWritable }) }))],
+      data: new Uint8Array(Buffer.concat([RELAY, dao.toBuffer(), len, Buffer.from(ix.data)])),
+    };
+  };
+  const byProposal = async (built, { skip = [] } = {}) => {
+    const ixs = (built.instructions ?? built.ixs ?? (Array.isArray(built) ? built : [built])).filter((ix) => !skip.includes(ix));
+    for (const ix of ixs) {
+      const w = await sf.asVault(net, { treasury: tPda }, vPda, web3Instruction(ix));
+      const e = await send([COMPUTE, relayed(w)]);
+      if (e) return e;
+    }
+    return null;
+  };
+  const vAuth = vPda.toBase58(), tAuth = tPda.toBase58();
+  const vCross = await rise.deriveTraderAddresses(vAuth, 0, 0).traderAccount();
+  const vChild = await rise.deriveTraderAddresses(vAuth, 0, 1).traderAccount();
+  const vCollateralAta = await rise.getPhoenixTraderTokenAccountAddress(vAuth, collateral);
+
+  err = await send([rise.buildRegisterTraderIxResolved({ exchange, trader: { payer: payer.address, authority: vAuth, traderAccount: vCross }, maxPositions: 128n, traderPdaIndex: 0, traderSubaccountIndex: 0 })]);
+  if (!err) err = await send([kitIx(fixtureIx("seedTaker0Collateral", "enableTaker0TraderCapabilities"), { [fixture.actors.find((a) => a.name === "taker0").traderAccount]: vCross })]);
+  check(!err, "the vault's cross account registers and is activated", err);
+
+  const vDeposit = rise.buildDepositIxsResolved({ exchange, feePayer: tAuth, trader: { authority: vAuth, traderAccount: vCross, usdcTokenAccount: assets.toBase58(), phoenixTokenAccount: vCollateralAta }, amount: 1_000_000_000n });
+  const wrapped = await sf.asVault(net, { treasury: tPda }, vPda, web3Instruction(vDeposit.named.emberDeposit));
+  check(wrapped.programId.equals(VAULT) && !wrapped.keys.some((k) => k.isSigner && k.pubkey.equals(vPda)), "the Ember wrap is a vault.execute, and the vault isn't asked to sign the proposal");
+  const plain = await sf.asVault(net, { treasury: tPda }, vPda, web3Instruction(vDeposit.named.createPhoenixAta));
+  check(!plain.programId.equals(VAULT), "creating the vault's collateral account isn't (the treasury pays; the vault signs nothing)");
+  err = await byProposal(vDeposit);
+  check(!err && collateralOf(vCross) === 1_000_000_000n && assetsBalance() === 2_000_000_000n, `the vault deposits 1,000 from its assets account (${collateralOf(vCross)} on Phoenix, ${assetsBalance()} left)`, err);
+
+  err = await byProposal([
+    rise.buildRegisterTraderIxResolved({ exchange, trader: { payer: tAuth, authority: vAuth, traderAccount: vChild }, maxPositions: 1n, traderPdaIndex: 0, traderSubaccountIndex: 1 }),
+    rise.buildSyncParentToChildIxResolved({ exchange, trader: { authority: vAuth, parentTraderAccount: vCross, childTraderAccount: vChild } }),
+    rise.buildTransferCollateralIxResolved({ exchange, trader: { authority: vAuth, srcTraderAccount: vCross, dstTraderAccount: vChild }, amount: 500_000_000n }),
+    rise.buildDelegateTraderIxResolved({ exchange, trader: { authority: vAuth, traderAccount: vChild }, newPositionAuthority: traderKey.address }),
+  ]);
+  check(!err && collateralOf(vChild) === 500_000_000n, "the vault opens subaccount 1 (the treasury paying its rent), funds it with 500 and delegates it to the trader's key", err);
+
+  // The vault's value, as its windows and drawdown checks read it, from Phoenix's real accounts.
+  const setVenues = await sf.vaultVenuesIx(net, { treasury: tPda }, vPda, new PublicKey(exchange.perpAssetMap), [new PublicKey(vCross), new PublicKey(vChild)], []);
+  err = await send([relayed({ programId: setVenues.programId, keys: setVenues.accounts, data: setVenues.data })]);
+  check(!err, "the vault names its cross account and the trader's subaccount as venues (set_venues, by proposal)", err);
+  const readVault = async () => vaultProgram.coder.accounts.decode("vault", Buffer.from(vm.getAccount(address(vPda.toBase58())).data));
+  const writeVault = async (x) => vm.setAccount({ address: address(vPda.toBase58()), lamports: 20_000_000n, data: await vaultBytes(x), programAddress: address(VAULT.toBase58()), executable: false, space: BigInt(VAULT_SPACE) });
+  const ONE = 10n ** 18n;
+  const supply = 3_000_000_000n;
+  /** Runs check_drawdown at high-water mark `hw`: whether it paused. */
+  const drawdown = async (hw) => {
+    await writeVault({ ...(await readVault()), paused: false, highWater: new BN(hw.toString()) });
+    const ix = await vaultProgram.methods.checkDrawdown().accountsStrict({ vault: vPda, assets, shareMint: state.shareMint }).remainingAccounts([new PublicKey(exchange.perpAssetMap), new PublicKey(vCross), new PublicKey(vChild)].map((pubkey) => ({ pubkey, isSigner: false, isWritable: false }))).instruction();
+    const e = await send([{ programAddress: address(VAULT.toBase58()), accounts: ix.keys.map((k) => ({ address: address(k.pubkey.toBase58()), role: roleOf(k) })), data: new Uint8Array(ix.data) }]);
+    if (e) throw new Error(`check_drawdown failed: ${e}`);
+    return (await readVault()).paused;
+  };
+
+  const vOrder = (key, side, price, size) =>
+    rise.buildPlaceMarketOrderIxResolved({
+      exchange,
+      market: { marketAddress: btc.orderbook, splineCollection: btc.spline },
+      trader: { authority: vAuth, positionAuthority: key.address, traderAccount: vChild },
+      orderPacket: rise.buildMarketOrderPacketFromMarketParams({ side, priceLimitUsd: price, baseUnits: size, minBaseUnitsToFill: size }, marketParams),
+    });
+  err = await send([vOrder(traderKey, rise.Side.Bid, "101000", "0.001")], { feePayer: traderKey });
+  check(!err, "the trader's key buys 0.001 BTC on the vault's subaccount", err);
+  {
+    // Marked to market as Phoenix's SDK decodes its own accounts: collateral + base x mark x tick + virtual quote - funding owed.
+    const t = traderOf(vChild);
+    const map = rise.decodePerpAssetMap(new Uint8Array(vm.getAccount(address(exchange.perpAssetMap)).data));
+    const pos = t.positions.entries[0].value;
+    const m = map.metadata.entries.find((e) => e.key === "BTC").value;
+    const base = BigInt(pos.baseLotPosition), mark = BigInt(m.oraclePrice.markPrice.price.ticks), tick = BigInt(m.staticMarketParams.tickSize);
+    // The fixture's funding is zero, so the funding term isn't exercised here (it needs a mainnet account).
+    const funding = -(BigInt(m.fundingAccumulator.cumulativeFundingRate) - BigInt(pos.cumulativeFundingSnapshot)) * base;
+    const upnl = base * mark * tick + BigInt(pos.virtualQuoteLotPosition) + funding;
+    const value = assetsBalance() + collateralOf(vCross) + collateralOf(vChild) + upnl;
+    const hw = ((value * ONE) / supply) * 10_000n / 8_000n;
+    const stale = await drawdown(hw).then(() => null, (e) => e.message);
+    check(/code: 6138 /.test(stale ?? "") /* GovError::StalePrice */, `an open position marked at a price older than max_price_age_slots (the fixture's is from its setup, ${vm.getClock().slot - BigInt(m.oraclePrice.markPrice.price.slot)} slots back) stops the valuation`, stale ?? "it valued");
+    const x = await readVault();
+    await writeVault({ ...x, config: { ...x.config, maxPriceAgeSlots: new BN(1_000) } });
+    check(base !== 0n && !(await drawdown(hw - hw / 1_000_000n)) && (await drawdown(hw + hw / 1_000_000n)), `with 0.001 BTC open the vault is valued at ${value} (collateral, plus ${upnl} marked at ${mark} ticks): the drawdown check agrees to a millionth`);
+    const y = await readVault();
+    await writeVault({ ...y, paused: false, config: { ...y.config, maxPriceAgeSlots: new BN(150) } });
+  }
+  err = await send([vOrder(traderKey, rise.Side.Ask, "99000", "0.001")], { feePayer: traderKey });
+  check(!err, "and closes it", err);
+  const vThief = await rise.getPhoenixTraderTokenAccountAddress(traderKey.address, collateral);
+  err = await send([rise.buildWithdrawFundsIxResolved({ exchange, trader: { authority: traderKey.address, traderAccount: vChild, destinationTokenAccount: vThief }, amount: 100_000_000n })], { feePayer: traderKey });
+  check(Boolean(err), "the trader's key can't withdraw the vault's money", "it succeeded");
+
+  err = await byProposal(rise.buildDelegateTraderIxResolved({ exchange, trader: { authority: vAuth, traderAccount: vChild }, newPositionAuthority: vAuth }));
+  check(!err && traderOf(vChild).positionAuthority === vAuth, "desk remove: the subaccount is delegated back to the vault", err);
+
+  vm.warpToSlot(vm.getClock().slot + 151n);
+  const beforeAssets = assetsBalance();
+  const vWithdraw = rise.buildWithdrawIxsResolved({ exchange, feePayer: tAuth, trader: { authority: vAuth, traderAccount: vCross, usdcTokenAccount: assets.toBase58(), phoenixTokenAccount: vCollateralAta }, amount: 400_000_000n });
+  err = await byProposal([rise.buildTransferCollateralChildToParentIxResolved({ exchange, trader: { authority: vAuth, childTraderAccount: vChild, parentTraderAccount: vCross } }), ...vWithdraw.instructions], { skip: [vWithdraw.named.createUsdcAta] });
+  check(!err && assetsBalance() - beforeAssets === 400_000_000n, `the vault withdraws 400 back into its assets account (${beforeAssets} -> ${assetsBalance()})`, err);
+  const after = await vaultProgram.coder.accounts.decode("vault", Buffer.from(vm.getAccount(address(vPda.toBase58())).data));
+  check(BigInt(after.lastMoveAt.toString()) === BigInt(vm.getClock().unixTimestamp), "the vault recorded the moves (last_move_at)");
+  const expected = assetsBalance() + collateralOf(vCross) + collateralOf(vChild); // flat: collateral is the whole value
+    const price = (expected * ONE) / supply;
+  // Paused when price < high_water x 80%: a high-water mark a millionth either side of price / 80% pins the valuation.
+  let limitHw = (price * 10_000n) / 8_000n;
+  check(!(await drawdown(limitHw - limitHw / 1_000_000n)), `valued at ${expected} (USDC idle + Phoenix collateral): not paused just inside the 20% drawdown`);
+  check(await drawdown(limitHw + limitHw / 1_000_000n), "and paused just past it");
+  await writeVault({ ...(await readVault()), paused: false });
+
+  // A window due within freeze_before: the vault refuses to move money until it's processed.
+  await writeVault({ ...(await readVault()), nextWindowAt: new BN(Number(vm.getClock().unixTimestamp) + 3600) });
+  err = await byProposal(rise.buildDelegateTraderIxResolved({ exchange, trader: { authority: vAuth, traderAccount: vChild }, newPositionAuthority: traderKey.address }));
+  check(/code: 6135 /.test(err ?? "") /* GovError::MovesFrozen */, "in the run-up to a window the vault refuses to move (MovesFrozen)", err ?? "it moved");
+  // The same proposals for a vault: each instruction the vault signs grows by vault.execute's wrapping.
+  const asStored = async (ixs) => Promise.all(ixs.map(async (ix) => { const w = await sf.asVault(net, { treasury: tPda }, vPda, web3Instruction(ix)); return { accounts: w.keys, data: w.data }; }));
+  vaultSteps = {
+    "fund": vDeposit.instructions,
+    "open a subaccount": [rise.buildRegisterTraderIxResolved({ exchange, trader: { payer: tAuth, authority: vAuth, traderAccount: vChild }, maxPositions: 1n, traderPdaIndex: 0, traderSubaccountIndex: 1 }), rise.buildSyncParentToChildIxResolved({ exchange, trader: { authority: vAuth, parentTraderAccount: vCross, childTraderAccount: vChild } }), rise.buildDelegateTraderIxResolved({ exchange, trader: { authority: vAuth, traderAccount: vChild }, newPositionAuthority: traderKey.address })],
+    "appoint / remove": [rise.buildDelegateTraderIxResolved({ exchange, trader: { authority: vAuth, traderAccount: vChild }, newPositionAuthority: traderKey.address })],
+    "withdraw": [rise.buildTransferCollateralChildToParentIxResolved({ exchange, trader: { authority: vAuth, childTraderAccount: vChild, parentTraderAccount: vCross } }), ...vWithdraw.instructions.filter((ix) => ix !== vWithdraw.named.createUsdcAta)],
+  };
+  for (const [k, ixs] of Object.entries(vaultSteps)) vaultSteps[k] = await asStored(ixs);
+}
+
 // Each Treasury step becomes a proposal, whose stored instructions must fit a legacy propose transaction
 // (876 bytes with a 1-character description; scripts/simulate-solana-action.mjs).
 const storedBytes = (ixs) => 4 + ixs.reduce((n, ix) => n + 36 + 34 * ix.accounts.length + 4 + ix.data.length, 0);
@@ -244,6 +436,7 @@ const steps = {
   "withdraw (subaccount back + Phoenix withdraw + Ember unwrap)": [rise.buildTransferCollateralChildToParentIxResolved({ exchange, trader: { authority: treasury.address, childTraderAccount: child, parentTraderAccount: cross } }), ...(withdraw.instructions ?? withdraw.ixs ?? withdraw)],
 };
 for (const [step, ixs] of Object.entries(steps)) console.log(`    proposal "${step}": ${ixs.length} instruction(s), ${storedBytes(ixs)} bytes stored${storedBytes(ixs) <= 876 ? "" : " - too big for a legacy propose"}`);
+for (const [step, ixs] of Object.entries(vaultSteps ?? {})) console.log(`    a vault's proposal "${step}": ${ixs.length} instruction(s), ${storedBytes(ixs)} bytes stored${storedBytes(ixs) <= 876 ? "" : " - needs v1 transactions"}`);
 
 console.log(failures ? `\n${failures} check(s) failed.` : "\nAll Phoenix flow checks passed.");
 process.exit(failures ? 1 : 0);

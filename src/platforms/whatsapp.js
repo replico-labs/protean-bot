@@ -18,7 +18,7 @@ import makeWASocket, {
   useMultiFileAuthState,
 } from "baileys";
 import { COMMANDS, runCommand, ADMIN_COMMANDS } from "./commands.js";
-import { attemptClaim } from "./commands/setup.js";
+import { welcomeOnJoin } from "./commands/funds.js";
 import { getChatNetwork } from "../db.js";
 import { runOnNetwork } from "../networks.js";
 import { startEventListener } from "../eventListener.js";
@@ -319,11 +319,9 @@ export function createWhatsAppBot({
       }
       if (!lid) continue;
       lid = jidNormalizedUser(lid);
-      const ctx = { platform: "whatsapp", chatId: event.id, userId: jidDecode(lid).user };
-      const result = await runOnNetwork(getChatNetwork(ctx.chatId, ctx.platform), () => attemptClaim(ctx)).catch((err) => ({ status: "error", error: err.message }));
-      if (result.status === "sent") {
-        await send(event.id, { text: `🎉 Welcome, @${jidDecode(lid).user}! Sent your welcome tokens.`, mentions: [lid] }).catch(() => {});
-      }
+      const ctx = { platform: "whatsapp", chatId: event.id, userId: jidDecode(lid).user, cmd: (sub) => `${PREFIX}${sub}` };
+      const text = await runOnNetwork(getChatNetwork(ctx.chatId, ctx.platform), () => welcomeOnJoin(ctx, `@${jidDecode(lid).user}`)).catch(() => null);
+      if (text) await send(event.id, { text, mentions: [lid] }).catch(() => {});
     }
   }
 
