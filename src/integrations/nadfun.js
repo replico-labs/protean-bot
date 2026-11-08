@@ -54,12 +54,32 @@ function deployment(ctx) {
   return checksummed(d);
 }
 
+/**
+ * Lens.getAmountOut reverts (ERR_BONDING_CURVE_LIBRARY_INVALID_INPUTS) both for a token Nad.fun's
+ * curve has never seen and for a buy bigger than what's left before the token graduates. Read the
+ * curve to say which.
+ */
+async function whyNoQuote(ctx, d, token, amountIn, isBuy, err) {
+  const generic = `Nad.fun has no market for ${token} (${err.shortMessage || err.message}).`;
+  try {
+    const c = await ctx.publicClient.readContract({ address: d.curve, abi: ABIS.curve, functionName: "curves", args: [token] });
+    if (c[2] === 0n && c[3] === 0n) return `${token} isn't a Nad.fun token: Nad.fun's bonding curve has no record of it. Use the address from the token's page on nad.fun.`;
+    if (isBuy) {
+      const [, required] = await ctx.publicClient.readContract({ address: d.lens, abi: ABIS.lens, functionName: "availableBuyTokens", args: [token] });
+      if (amountIn > required) return `Only ${formatEther(required)} MON can still be spent on ${token}'s Nad.fun curve before it graduates to the DEX: buy with at most that much, or wait until it has graduated.`;
+    }
+  } catch {
+    // fall through to the plain message
+  }
+  return generic;
+}
+
 async function quote(ctx, d, token, amountIn, isBuy) {
   let router, amount;
   try {
     [router, amount] = await ctx.publicClient.readContract({ address: d.lens, abi: ABIS.lens, functionName: "getAmountOut", args: [token, amountIn, isBuy] });
   } catch (err) {
-    throw new IntegrationError(`Nad.fun has no market for ${token} (${err.shortMessage || err.message}).`);
+    throw new IntegrationError(await whyNoQuote(ctx, d, token, amountIn, isBuy, err));
   }
   router = getAddress(router);
   if (router !== d.bondingCurveRouter && router !== d.dexRouter) {

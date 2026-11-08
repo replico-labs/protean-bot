@@ -187,6 +187,17 @@ function whitelistNote(state) {
   return state.whitelisted ? "" : " ⚠️ Perpl currently only accepts whitelisted accounts and the Treasury isn't one - this will revert unless it's whitelisted first.";
 }
 
+/**
+ * Perpl only lets whitelisted addresses hold an account while whitelisting is on, and it doesn't
+ * whitelist contracts: a Treasury or desk that isn't listed would pass the vote and then revert.
+ * Refuse before the proposal instead.
+ */
+function requireWhitelisted(state, who) {
+  if (!state.whitelisted) {
+    throw new IntegrationError(`${who} isn't on Perpl's whitelist, and Perpl only accepts whitelisted accounts right now (it doesn't list contracts such as a DAO's Treasury), so this would pass the vote and then fail. Ask Perpl to whitelist it first.`);
+  }
+}
+
 export const actions = [
   {
     id: "perpl-deposit",
@@ -198,6 +209,7 @@ export const actions = [
       const state = await exchangeState(ctx, d);
       const amount = scaled(ctx.args[0], state.decimals, "Amount");
       const opening = state.accountId === 0n;
+      requireWhitelisted(state, `The Treasury (${ctx.treasury})`);
       if (opening) {
         const min = await read(ctx, d, "getMinAccountOpenCNS");
         if (amount < min) throw new IntegrationError(`Opening a Perpl account needs at least ${formatUnits(min, state.decimals)} ${state.symbol}.`);
@@ -208,8 +220,7 @@ export const actions = [
           call(d.exchange, encodeFunctionData({ abi: ABI, functionName: opening ? "createAccount" : "depositCollateral", args: [amount] }), { note: opening ? "open account" : "deposit" }),
         ],
         summary:
-          `${opening ? "Open a Perpl account for the Treasury with" : "Deposit"} ${formatUnits(amount, state.decimals)} ${state.symbol} ${opening ? "" : "into the Treasury's Perpl account "}as trading collateral.`.replace(/  +/g, " ") +
-          whitelistNote(state),
+          `${opening ? "Open a Perpl account for the Treasury with" : "Deposit"} ${formatUnits(amount, state.decimals)} ${state.symbol} ${opening ? "" : "into the Treasury's Perpl account "}as trading collateral.`.replace(/  +/g, " "),
       };
     },
   },
@@ -394,18 +405,18 @@ function deskActions() {
         const state = await exchangeState(ctx, d, desk);
         const amount = scaled(ctx.args[1], state.decimals, "Amount");
         const opening = accountId === 0n;
+        requireWhitelisted(state, `The desk ${desk}`);
         if (opening) {
           const min = await read(ctx, d, "getMinAccountOpenCNS");
           if (amount < min) throw new IntegrationError(`Opening the desk's Perpl account needs at least ${formatUnits(min, state.decimals)} ${state.symbol}.`);
         }
-        const note = state.whitelisted ? "" : " ⚠️ Perpl currently only accepts whitelisted accounts and the desk isn't one - this will revert unless it's whitelisted first.";
         return {
           calls: [
             call(d.collateral, encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [desk, amount] }), { note: "send to desk" }),
             // The desk approved the exchange when it was created; depositCollateral goes through its fallback.
             call(desk, opening ? encodeFunctionData({ abi: DESK_ABI, functionName: "createAccount", args: [amount] }) : encodeFunctionData({ abi: ABI, functionName: "depositCollateral", args: [amount] }), { note: opening ? "open account" : "deposit" }),
           ],
-          summary: `Move ${formatUnits(amount, state.decimals)} ${state.symbol} from the Treasury into its Perpl desk ${desk} as trading collateral${opening ? " (opening its exchange account)" : ""}. This is the most the trader can lose.${note}`,
+          summary: `Move ${formatUnits(amount, state.decimals)} ${state.symbol} from the Treasury into its Perpl desk ${desk} as trading collateral${opening ? " (opening its exchange account)" : ""}. This is the most the trader can lose.`,
         };
       },
     },

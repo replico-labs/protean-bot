@@ -49,6 +49,8 @@ const accounts = new Map();
 const agentKeys = new Map();
 mock.module(new URL("../src/walletStore.js", import.meta.url).href, {
   namedExports: {
+    PHOENIX_AGENT_PLATFORM: "phoenix-agent",
+    deletePhoenixAgentKey: async () => {},
     isWalletStoreConfigured: () => true,
     createWalletRecord: async () => null,
     getWalletAccount: async () => null,

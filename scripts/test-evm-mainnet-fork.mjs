@@ -19,6 +19,8 @@
  *   FORK_FLAUNCH_COIN      Base: a current-generation Flaunch coin for flaunch-buy/sell
  *   FORK_NADFUN_TOKEN      Monad: a Nad.fun token for nadfun-buy/sell
  *   FORK_MON_SWAP          Monad: MON to swap for USDC and AUSD (default 500 each)
+ *   FORK_AUSD              Monad: AUSD to give the fork Treasury for Perpl (default 50)
+ *   FORK_AUSD_WHALE        Monad: who to take that AUSD from (default the Perpl exchange)
  *   RPC_TIMEOUT_MS         how long one request may take (default 10000); a slow fork, e.g. Monad, needs 60000
  *
  * What it covers per network:
@@ -61,7 +63,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY ||= "test";
 const fs = await import("node:fs");
 const path = await import("node:path");
 const { mock } = await import("node:test");
-const { parseEther, formatEther, formatUnits, parseUnits, getAddress, erc20Abi, parseAbi, createWalletClient, http } = await import("viem");
+const { parseEther, formatEther, formatUnits, parseUnits, getAddress, erc20Abi, parseAbi, encodeFunctionData, createWalletClient, http } = await import("viem");
 const { generatePrivateKey, privateKeyToAccount } = await import("viem/accounts");
 
 // ---- stand-ins: wallets (userId -> a throwaway key) ----
@@ -149,6 +151,22 @@ const account = async (pool) => {
   return { collateral: r[0], debt: r[1], available: r[2] };
 };
 
+/** Fork only: moves `amount` of `token` to the Treasury from `holder`, impersonated (anvil). */
+async function fundFrom(token, amount, holder) {
+  holder = getAddress(holder);
+  const has = await publicClient.readContract({ address: getAddress(token), abi: erc20Abi, functionName: "balanceOf", args: [holder] });
+  if (has < amount) throw new Error(`${holder} holds only ${await show(token, has)}; set FORK_AUSD_WHALE to a bigger holder`);
+  await rpc("anvil_impersonateAccount", [holder]);
+  try {
+    await rpc("anvil_setBalance", [holder, hex(10n ** 19n)]);
+    const data = encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [treasury, amount] });
+    await send(rpc("eth_sendTransaction", [{ from: holder, to: getAddress(token), data, gas: hex(200_000) }]));
+  } finally {
+    await rpc("anvil_stopImpersonatingAccount", [holder]);
+  }
+  await settle();
+}
+
 /** Deploys a Spaces contract from its forge build output. */
 function artifact(name) {
   const spaces = path.resolve(process.env.SPACES_DIR || "../Spaces");
@@ -179,8 +197,9 @@ async function step(s) {
     results.push({ name, ok: null });
     return;
   }
-  if (s.skipIf && (await s.skipIf())) {
-    console.log(`  - ${name}: skipped (nothing to do: no debt)`);
+  const why = s.skipIf && (await s.skipIf());
+  if (why) {
+    console.log(`  - ${name}: skipped (${typeof why === "string" ? why : "nothing to do"})`);
     results.push({ name, ok: null });
     return;
   }
@@ -243,7 +262,7 @@ function baseSteps() {
     { name: "aave-repay", line: "aave-repay USDC all", check: async () => { const a = await account(d.pool); expect(a.debt === 0n, "no debt left"); return `debt $0, USDC ${await show(USDC, await held(USDC))}`; } },
     { name: "aave-collateral", line: "aave-collateral WETH off", check: async () => { const a = await account(d.pool); expect(a.collateral === 0n, "WETH no longer collateral"); return "collateral $0 (still supplied)"; } },
     { name: "aave-withdraw", line: "aave-withdraw WETH all", before: () => held(WETH), check: async (b) => { const w = await held(WETH); expect(w >= b + parseEther("2"), "2 WETH and interest back"); return `WETH ${formatEther(w)}`; } },
-    { name: "lido-buy-wsteth", line: "lido-buy-wsteth 0.5 maxgap=3%", check: async () => { const w = await held(WSTETH); expect(w > 0n, "wstETH bought"); return `wstETH ${formatEther(w)}`; } },
+    { name: "lido-buy-wsteth", line: "lido-buy-wsteth 0.5", check: async () => { const w = await held(WSTETH); expect(w > 0n, "wstETH bought"); return `wstETH ${formatEther(w)}`; } },
     { name: "lido-sell-wsteth", line: "lido-sell-wsteth all", before: native, check: async (b) => { expect((await held(WSTETH)) === 0n && (await native()) > b, "wstETH sold for ETH"); return `wstETH 0, ETH ${formatEther(await native())}`; } },
     coin
       ? { name: "flaunch-buy", line: `flaunch-buy ${coin} 0.01 5%`, check: async () => { const h = await held(coin); expect(h > 0n, "coin bought"); return `coin ${await show(coin, h)}`; } }
@@ -277,8 +296,9 @@ function monadSteps() {
     // interest, and the bot refuses a borrow against it up front.
     { name: "aave-supply", line: async () => { supplied = (await held(USDC)) / 2n; return `aave-supply USDC ${await show(USDC, supplied)}`; }, before: () => held(USDC), check: async (b) => { const a = await account(d.pool); expect((await held(USDC)) <= b - supplied, "USDC supplied"); return `USDC ${await show(USDC, await held(USDC))} left; collateral $${formatUnits(a.collateral, 8)}${a.available === 0n ? " (USDC isn't collateral on this market)" : ""}`; } },
     { name: "aave-borrow", line: async () => `aave-borrow USDC ${await show(USDC, supplied / 10n)}`, refuse: async () => (await account(d.pool)).available === 0n, refusal: /nothing on Aave v3 to borrow against/, before: () => held(USDC), check: async (b) => { const a = await account(d.pool); expect((await held(USDC)) > b && a.debt > 0n, "USDC borrowed"); return `USDC ${await show(USDC, await held(USDC))}, debt $${formatUnits(a.debt, 8)}`; } },
-    { name: "aave-repay", line: "aave-repay USDC all", skipIf: async () => (await account(d.pool)).debt === 0n, check: async () => { const a = await account(d.pool); expect(a.debt === 0n, "no debt left"); return "debt $0"; } },
-    { name: "aave-withdraw", line: "aave-withdraw USDC all", before: () => held(USDC), check: async (b) => { expect((await held(USDC)) >= b + supplied, "USDC and interest back"); return `USDC ${await show(USDC, await held(USDC))}`; } },
+    { name: "aave-repay", line: "aave-repay USDC all", skipIf: async () => (await account(d.pool)).debt === 0n && "nothing to do: no debt", check: async () => { const a = await account(d.pool); expect(a.debt === 0n, "no debt left"); return "debt $0"; } },
+    // Aave rounds the aToken balance down, so "all" can come back a unit or two short of what went in.
+    { name: "aave-withdraw", line: "aave-withdraw USDC all", before: () => held(USDC), check: async (b) => { const got = (await held(USDC)) - b; expect(got + 2n >= supplied, `USDC back: ${await show(USDC, got)} of ${await show(USDC, supplied)} supplied`); return `USDC ${await show(USDC, await held(USDC))} (${await show(USDC, got)} back)`; } },
     { name: "shmon-stake", line: "shmon-stake 100", check: async () => { const s = await held(SHMON); expect(s > 0n, "shMON received"); return `shMON ${formatEther(s)}`; } },
     { name: "shmon-unstake-instant", line: async () => `shmon-unstake-instant ${formatEther((await held(SHMON)) / 2n)} 3%`, before: native, check: async (b) => { expect((await native()) > b, "MON back now"); return `MON ${formatEther(await native())}, shMON ${formatEther(await held(SHMON))}`; } },
     { name: "shmon-request-unstake", line: "shmon-request-unstake all", check: async () => { expect((await held(SHMON)) === 0n, "shMON burned, unstake queued"); return "shMON 0 (queued; completeUnstake comes epochs later)"; } },
@@ -290,15 +310,21 @@ function monadSteps() {
       : { name: "nadfun-sell", skip: "set FORK_NADFUN_TOKEN" },
     // MON/AUSD on Uniswap can be too thin: the bot refusing it (price impact) is right.
     { name: "uniswap-swap (AUSD)", line: `uniswap-swap MON ${AUSD} ${swap} 3%`, refuse: async () => true, refusal: /too thin/, before: () => held(AUSD), check: async (b) => expect((await held(AUSD)) > b, `AUSD ${await show(AUSD, await held(AUSD))}`) },
-    // Perpl needs at least 10 AUSD: on the fork, give the Treasury 50 (anvil_dealERC20, Foundry 1.x).
-    { name: "fund AUSD (fork only)", setup: async () => { const want = parseUnits(process.env.FORK_AUSD || "50", await decimalsOf(AUSD)); const have = await held(AUSD); if (have < want) await rpc("anvil_dealERC20", [AUSD, treasury, hex(want)]); return `AUSD ${await show(AUSD, await held(AUSD))} in the Treasury`; } },
-    { name: "perpl-deposit", line: async () => `perpl-deposit ${await show(AUSD, await held(AUSD))}`, check: async () => { expect((await held(AUSD)) === 0n, "AUSD deposited"); return "AUSD 0 in the Treasury (in its Perpl account)"; } },
-    { name: "perpl-open", line: async () => { const b = await btc(); return `perpl-open BTC long ${(10 ** -b.m.lotDecimals).toFixed(b.m.lotDecimals)} ${b.price(1.02)}`; }, check: async () => { const b = await btc(); const pos = await perpl.deskVenue.read(pctx, checksum(P), "getPosition", [b.m.perpId, await accountId(P)]); expect(pos[0].lotLNS > 0n, "a BTC long is open"); return `BTC long ${formatUnits(pos[0].lotLNS, b.m.lotDecimals)} (mark ${b.mark})`; } },
-    { name: "perpl-close", line: async () => { const b = await btc(); return `perpl-close BTC long all ${b.price(0.98)}`; }, check: async () => { const b = await btc(); const pos = await perpl.deskVenue.read(pctx, checksum(P), "getPosition", [b.m.perpId, await accountId(P)]); expect(pos[0].lotLNS === 0n, "the long is closed"); return "no BTC position"; } },
-    { name: "perpl-withdraw", line: async () => { const s = await perpl.deskVenue.exchangeState({ ...pctx, treasury }, checksum(P)); return `perpl-withdraw ${formatUnits(s.balance, s.decimals)}`; }, check: async () => { const a = await held(AUSD); expect(a > 0n, "AUSD back in the Treasury"); return `AUSD ${await show(AUSD, a)}`; } },
+    // Perpl needs at least 10 AUSD: on the fork, give the Treasury 50. anvil_dealERC20 can't find AUSD's
+    // balance slot, so it comes from a holder instead: the Perpl exchange itself (it holds every trader's
+    // AUSD) or FORK_AUSD_WHALE, impersonated.
+    { name: "fund AUSD (fork only)", setup: async () => { const want = parseUnits(process.env.FORK_AUSD || "50", await decimalsOf(AUSD)); const need = want - (await held(AUSD)); if (need > 0n) await fundFrom(AUSD, need, process.env.FORK_AUSD_WHALE || P.exchange); return `AUSD ${await show(AUSD, await held(AUSD))} in the Treasury`; } },
+    // Perpl only accepts whitelisted accounts while whitelisting is on, and doesn't whitelist contracts:
+    // the bot refusing the Treasury up front is right, and the trading steps then have no account.
+    { name: "perpl-deposit", refuse: async () => !(await perplState()).whitelisted, refusal: /isn't on Perpl's whitelist/, line: async () => `perpl-deposit ${await show(AUSD, await held(AUSD))}`, check: async () => { expect((await held(AUSD)) === 0n, "AUSD deposited"); return "AUSD 0 in the Treasury (in its Perpl account)"; } },
+    { name: "perpl-open", skipIf: noPerplAccount, line: async () => { const b = await btc(); return `perpl-open BTC long ${(10 ** -b.m.lotDecimals).toFixed(b.m.lotDecimals)} ${b.price(1.02)}`; }, check: async () => { const b = await btc(); const pos = await perpl.deskVenue.read(pctx, checksum(P), "getPosition", [b.m.perpId, await accountId(P)]); expect(pos[0].lotLNS > 0n, "a BTC long is open"); return `BTC long ${formatUnits(pos[0].lotLNS, b.m.lotDecimals)} (mark ${b.mark})`; } },
+    { name: "perpl-close", skipIf: noPerplAccount, line: async () => { const b = await btc(); return `perpl-close BTC long all ${b.price(0.98)}`; }, check: async () => { const b = await btc(); const pos = await perpl.deskVenue.read(pctx, checksum(P), "getPosition", [b.m.perpId, await accountId(P)]); expect(pos[0].lotLNS === 0n, "the long is closed"); return "no BTC position"; } },
+    { name: "perpl-withdraw", skipIf: noPerplAccount, line: async () => { const s = await perpl.deskVenue.exchangeState({ ...pctx, treasury }, checksum(P)); return `perpl-withdraw ${formatUnits(s.balance, s.decimals)}`; }, check: async () => { const a = await held(AUSD); expect(a > 0n, "AUSD back in the Treasury"); return `AUSD ${await show(AUSD, a)}`; } },
   ];
 }
 const checksum = (d) => Object.fromEntries(Object.entries(d).map(([k, v]) => [k, typeof v === "string" && /^0x[0-9a-fA-F]{40}$/.test(v) ? getAddress(v) : v]));
+const perplState = async () => perpl.deskVenue.exchangeState({ publicClient, network: net, treasury }, checksum(perpl.protocol.deployments["monad-mainnet"]));
+const noPerplAccount = async () => (await perplState()).accountId === 0n && "the Treasury has no Perpl account (not whitelisted)";
 const accountId = async (P) => (await perpl.deskVenue.exchangeState({ publicClient, network: net, treasury }, checksum(P))).accountId;
 
 async function hyperevmSteps() {
