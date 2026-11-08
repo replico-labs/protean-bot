@@ -63,7 +63,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY ||= "test";
 const fs = await import("node:fs");
 const path = await import("node:path");
 const { mock } = await import("node:test");
-const { parseEther, formatEther, formatUnits, parseUnits, getAddress, erc20Abi, parseAbi, encodeFunctionData, createWalletClient, http } = await import("viem");
+const { parseEther, formatEther, formatUnits, parseUnits, getAddress, erc20Abi, parseAbi, encodeFunctionData, decodeErrorResult, createWalletClient, http } = await import("viem");
 const { generatePrivateKey, privateKeyToAccount } = await import("viem/accounts");
 
 // ---- stand-ins: wallets (userId -> a throwaway key) ----
@@ -142,6 +142,7 @@ const idIn = (text) => /Proposal #(\d+)/.exec(text ?? "")?.[1];
 const trim = (s, n = 900) => (s && s.length > n ? `${s.slice(0, n)}…` : s);
 
 let treasury;
+let governance;
 const native = async () => publicClient.getBalance({ address: treasury });
 const held = async (token) => publicClient.readContract({ address: getAddress(token), abi: erc20Abi, functionName: "balanceOf", args: [treasury] });
 const decimalsOf = async (token) => Number(await publicClient.readContract({ address: getAddress(token), abi: erc20Abi, functionName: "decimals" }));
@@ -232,7 +233,7 @@ async function step(s) {
     await rpc("evm_mine");
     await settle();
     const e = await run("A", `execute ${id}`);
-    if (!/executed/.test(e.text)) throw new Error(`execute #${id} failed:\n      ${trim(e.text)}`);
+    if (!/executed/.test(e.text)) throw new Error(`execute #${id} failed:\n      ${trim(e.text)}${await innerRevert(id)}`);
     await settle();
     const detail = s.check ? await s.check(before) : "";
     console.log(`  ✓ ${name} (#${id})\n      ${trim(summary, 400)}${detail ? `\n      ${detail}` : ""}`);
@@ -242,6 +243,37 @@ async function step(s) {
     results.push({ name, ok: false });
   }
 }
+/**
+ * The DAO wraps whatever its calls revert with in ExecutionFailed(): trace the execution (anvil's
+ * debug_traceCall) and report the deepest call that reverted, decoded with the integrations' ABIs.
+ */
+async function innerRevert(id) {
+  try {
+    const gov = governance;
+    const data = encodeFunctionData({ abi: parseAbi(["function executeTransaction(uint256)"]), functionName: "executeTransaction", args: [BigInt(id)] });
+    const trace = await rpc("debug_traceCall", [{ from: accounts.get("A").address, to: gov, data }, "latest", { tracer: "callTracer" }]);
+    let deepest = null;
+    const walk = (f, depth) => {
+      if (f.error && (!deepest || depth >= deepest.depth)) deepest = { ...f, depth };
+      for (const c of f.calls ?? []) walk(c, depth + 1);
+    };
+    walk(trace, 0);
+    if (!deepest) return "";
+    const out = deepest.output ?? "0x";
+    let why = out === "0x" ? deepest.error : `error data ${out.slice(0, 10)}`;
+    for (const abi of [...Object.values(loadIntegrationAbi("perpl")), erc20Abi, parseAbi(["error Error(string)", "error Panic(uint256)"])]) {
+      try {
+        const { errorName, args } = decodeErrorResult({ abi: Array.isArray(abi) ? abi : [], data: out });
+        why = `${errorName}(${(args ?? []).map(String).join(", ")})`;
+        break;
+      } catch {}
+    }
+    return `\n      inside: ${deepest.to} reverted: ${why}`;
+  } catch (err) {
+    return `\n      (couldn't trace the execution: ${err.shortMessage ?? err.message})`;
+  }
+}
+
 const expect = (ok, what) => {
   if (!ok) throw new Error(`check failed: ${what}`);
   return what;
@@ -288,8 +320,18 @@ function monadSteps() {
     const m = await perpl.deskVenue.market(pctx, checksum(P), "BTC");
     const info = await perpl.deskVenue.read(pctx, checksum(P), "getPerpetualInfo", [m.perpId]);
     const mark = Number(formatUnits(info.markPNS, m.priceDecimals));
-    return { m, mark, price: (x) => (mark * x).toFixed(Math.min(m.priceDecimals, 1)) };
+    return { m, mark, info, price: (x) => (mark * x).toFixed(Math.min(m.priceDecimals, 1)) };
   };
+  // Perpl settles a trade only against a reference price under refPriceMaxAgeSec old (60s). Its keepers
+  // refresh prices on mainnet, but nothing does on a fork, so once a fork is a minute old no order can
+  // settle (TakerOrderSettlementFailed). Skip the trades then; the 30s margin covers the vote.
+  const stalePrice = async () => {
+    const { info } = await btc();
+    const now = (await publicClient.getBlock()).timestamp;
+    const age = now - (info.oracleTimestampSec < info.markTimestamp ? info.oracleTimestampSec : info.markTimestamp);
+    return age + 30n > info.refPriceMaxAgeSec && `fork only: Perpl's BTC price is ${age}s old and it settles only against prices under ${info.refPriceMaxAgeSec}s; its keepers refresh them on mainnet, nothing does on a fork`;
+  };
+  const noTrade = async () => (await noPerplAccount()) || (await stalePrice());
   return [
     { name: "uniswap-swap", line: `uniswap-swap MON ${USDC} ${swap} 3%`, before: () => held(USDC), check: async (b) => expect((await held(USDC)) > b, `USDC ${await show(USDC, await held(USDC))} (was ${await show(USDC, b)})`) },
     // Supplied USDC may not count as collateral on Monad's market (loan-to-value 0): then it only earns
@@ -317,8 +359,8 @@ function monadSteps() {
     // Perpl only accepts whitelisted accounts while whitelisting is on, and doesn't whitelist contracts:
     // the bot refusing the Treasury up front is right, and the trading steps then have no account.
     { name: "perpl-deposit", refuse: async () => !(await perplState()).whitelisted, refusal: /isn't on Perpl's whitelist/, line: async () => `perpl-deposit ${await show(AUSD, await held(AUSD))}`, check: async () => { expect((await held(AUSD)) === 0n, "AUSD deposited"); return "AUSD 0 in the Treasury (in its Perpl account)"; } },
-    { name: "perpl-open", skipIf: noPerplAccount, line: async () => { const b = await btc(); return `perpl-open BTC long ${(10 ** -b.m.lotDecimals).toFixed(b.m.lotDecimals)} ${b.price(1.02)}`; }, check: async () => { const b = await btc(); const pos = await perpl.deskVenue.read(pctx, checksum(P), "getPosition", [b.m.perpId, await accountId(P)]); expect(pos[0].lotLNS > 0n, "a BTC long is open"); return `BTC long ${formatUnits(pos[0].lotLNS, b.m.lotDecimals)} (mark ${b.mark})`; } },
-    { name: "perpl-close", skipIf: noPerplAccount, line: async () => { const b = await btc(); return `perpl-close BTC long all ${b.price(0.98)}`; }, check: async () => { const b = await btc(); const pos = await perpl.deskVenue.read(pctx, checksum(P), "getPosition", [b.m.perpId, await accountId(P)]); expect(pos[0].lotLNS === 0n, "the long is closed"); return "no BTC position"; } },
+    { name: "perpl-open", skipIf: noTrade, line: async () => { const b = await btc(); return `perpl-open BTC long ${(10 ** -b.m.lotDecimals).toFixed(b.m.lotDecimals)} ${b.price(1.02)}`; }, check: async () => { const b = await btc(); const pos = await perpl.deskVenue.read(pctx, checksum(P), "getPosition", [b.m.perpId, await accountId(P)]); expect(pos[0].lotLNS > 0n, "a BTC long is open"); return `BTC long ${formatUnits(pos[0].lotLNS, b.m.lotDecimals)} (mark ${b.mark})`; } },
+    { name: "perpl-close", skipIf: noTrade, line: async () => { const b = await btc(); return `perpl-close BTC long all ${b.price(0.98)}`; }, check: async () => { const b = await btc(); const pos = await perpl.deskVenue.read(pctx, checksum(P), "getPosition", [b.m.perpId, await accountId(P)]); expect(pos[0].lotLNS === 0n, "the long is closed"); return "no BTC position"; } },
     { name: "perpl-withdraw", skipIf: noPerplAccount, line: async () => { const s = await perpl.deskVenue.exchangeState({ ...pctx, treasury }, checksum(P)); return `perpl-withdraw ${formatUnits(s.balance, s.decimals)}`; }, check: async () => { const a = await held(AUSD); expect(a > 0n, "AUSD back in the Treasury"); return `AUSD ${await show(AUSD, a)}`; } },
   ];
 }
@@ -368,6 +410,7 @@ async function main() {
   const signers = ["A", "B", "C"].map((u) => accounts.get(u).address);
   const dao = await getAdapter("board").createDAO(`Fork ${which}`, signers);
   treasury = getAddress(dao.treasury);
+  governance = getAddress(dao.governance);
   registerChat(CHAT, dao.governance, "board", "slack", "A", NETWORK);
   const funds = { monad: "100000", base: "50", hyperevm: "1000" }[which];
   await rpc("anvil_setBalance", [treasury, hex(parseEther(funds))]);

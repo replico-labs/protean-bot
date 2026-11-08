@@ -63,7 +63,7 @@ async function whyNoQuote(ctx, d, token, amountIn, isBuy, err) {
   const generic = `Nad.fun has no market for ${token} (${err.shortMessage || err.message}).`;
   try {
     const c = await ctx.publicClient.readContract({ address: d.curve, abi: ABIS.curve, functionName: "curves", args: [token] });
-    if (c[2] === 0n && c[3] === 0n) return `${token} isn't a Nad.fun token: Nad.fun's bonding curve has no record of it. Use the address from the token's page on nad.fun.`;
+    if (c[2] === 0n && c[3] === 0n) return `${token} isn't on Nad.fun's original bonding curve. Tokens launched on Nad.fun V2 (its newer contracts) aren't supported by the bot yet; check the address on nad.fun.`;
     if (isBuy) {
       const [, required] = await ctx.publicClient.readContract({ address: d.lens, abi: ABIS.lens, functionName: "availableBuyTokens", args: [token] });
       if (amountIn > required) return `Only ${formatEther(required)} MON can still be spent on ${token}'s Nad.fun curve before it graduates to the DEX: buy with at most that much, or wait until it has graduated.`;
